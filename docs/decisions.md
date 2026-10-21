@@ -48,5 +48,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **headscale JSON omits false fields** (`online` is absent when offline) — test with `defined`, not equality.
 - **Ansible 2.21 rejects `{{ }}` inside `when:` / `that:`.** Build the value in `vars`/`loop` and test it bare.
 - **`-e key=value` splits on spaces.** Workflows pass user input as a JSON vars file (`-e @vars.json`).
+- **The dead-man must check "running", not only "unhealthy".** After the 2026-10-16 unattended reboot, STUN and
+  `tailscale up` failed for 4.5 days (headscale not serving) with no alert: `docker ps --filter health=unhealthy`
+  does not list exited containers. `edge-deadman` now compares `compose config --services` with
+  `compose ps --status running`. Why headscale did not restart: run node-admin → `diagnose-boot`.
+- **`Automatic-Reboot-Time` follows the host clock (UTC).** A Pacific reboot window needs a systemd timer with a
+  time zone in `OnCalendar` (`edge-reboot.timer`), which also tracks DST.
 - **Bootstrap must be re-runnable.** Root's keys are removed partway; the play probes the deploy user first and
   connects as root only if that fails.

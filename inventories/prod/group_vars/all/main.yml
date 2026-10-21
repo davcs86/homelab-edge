@@ -69,6 +69,7 @@ heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
 
 # ---------- Backups ----------
 backup_schedule: "*-*-* 03:17:00 UTC"
+reboot_schedule: "*-*-* 04:00:00 America/Los_Angeles"   # only when /var/run/reboot-required exists
 backup_local_retention_days: 7
 backup_remote_user: edge-backup                         # account on the backup host, forced to rrsync
 backup_remote_path: headscale                           # relative to that account's rrsync root

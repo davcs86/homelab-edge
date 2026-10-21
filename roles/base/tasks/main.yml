@@ -63,8 +63,45 @@
         "tailscale"; "pgbackrest";
       };
       Unattended-Upgrade::Remove-Unused-Dependencies "true";
-      Unattended-Upgrade::Automatic-Reboot "true";
-      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+      # Reboots come from edge-reboot.timer: Automatic-Reboot-Time follows the host clock (UTC), not Pacific DST.
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+- name: Reboot only when an update requires it, at a fixed Pacific time
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: edge-reboot.service
+      content: |
+        [Unit]
+        Description=Reboot to finish security updates
+        ConditionPathExists=/var/run/reboot-required
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/systemctl reboot
+    - name: edge-reboot.timer
+      content: |
+        [Unit]
+        Description=Reboot window for security updates
+
+        [Timer]
+        OnCalendar={{ reboot_schedule }}
+        Persistent=false
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  register: _reboot_units
+
+- name: Enable the reboot window
+  ansible.builtin.systemd_service:
+    name: edge-reboot.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ _reboot_units is changed }}"
 
 - name: Enable periodic apt runs
   ansible.builtin.copy:

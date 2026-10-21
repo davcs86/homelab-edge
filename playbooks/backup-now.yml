@@ -1,24 +1,16 @@
 ---
-# Runs the nightly job on demand (backup, push, restore drill) and prints its journal.
+# Runs the nightly job on demand (backup, push, restore drill) and prints its journal, also when it fails.
 - name: Backup and restore drill now
   hosts: edge
   become: true
   gather_facts: false
   tasks:
-    - name: Run edge-backup.service
-      ansible.builtin.systemd_service:
-        name: edge-backup.service
-        state: started
-      register: _run
-    - name: Wait for the oneshot to finish  # noqa: command-instead-of-module
-      ansible.builtin.command: systemctl show -p ActiveState --value edge-backup.service
-      register: _state
-      until: _state.stdout in ['inactive', 'failed']
-      retries: 60
-      delay: 5
-      changed_when: false
+    - name: Run edge-backup.service (blocks until the oneshot finishes)  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl start edge-backup.service
+      changed_when: true
+      failed_when: false
     - name: Journal of this run
-      ansible.builtin.command: journalctl -u edge-backup.service --since "-10min" --no-pager -o cat
+      ansible.builtin.command: journalctl -u edge-backup.service --since "-15min" --no-pager -o cat
       register: _journal
       changed_when: false
     - name: Show

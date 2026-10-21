@@ -38,6 +38,27 @@
       ExecStart=/usr/local/sbin/edge-notify "edge: %i failed" "%i failed on %H; journalctl -u %i"
   notify: Reload systemd
 
+- name: Dead-man check script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/edge-deadman
+    mode: "0750"
+    content: |
+      #!/usr/bin/env bash
+      # Pings healthchecks.io only if every compose service is running and none is unhealthy;
+      # an exited container must stop the ping too, not just an unhealthy one.
+      set -euo pipefail
+      . /etc/edge-notify.env
+      compose=(docker compose -f {{ edge_root }}/compose.yml)
+      expected="$("${compose[@]}" config --services | sort)"
+      running="$("${compose[@]}" ps --status running --services | sort)"
+      missing="$(comm -23 <(echo "$expected") <(echo "$running") | paste -sd' ')"
+      unhealthy="$(docker ps -q --filter label=com.docker.compose.project=edge --filter health=unhealthy)"
+      if [ -n "$missing$unhealthy" ]; then
+        echo "not running: ${missing:-none}; unhealthy: ${unhealthy:-none}" >&2
+        exit 1
+      fi
+      curl -fsS --max-time 10 --retry 3 "$HC_PING_URL" >/dev/null
+
 # healthchecks.io alerts (by email, independent of ntfy and the tailnet) if these pings stop.
 - name: External dead-man ping
   ansible.builtin.copy:
@@ -53,9 +74,7 @@
 
         [Service]
         Type=oneshot
-        EnvironmentFile=/etc/edge-notify.env
-        # Fails (and so does not ping) if any core container is unhealthy.
-        ExecStart=/bin/sh -c 'test -z "$(docker ps --filter health=unhealthy -q)" && curl -fsS --max-time 10 --retry 3 "$HC_PING_URL" >/dev/null'
+        ExecStart=/usr/local/sbin/edge-deadman
     - name: edge-deadman.timer
       content: |
         [Unit]
