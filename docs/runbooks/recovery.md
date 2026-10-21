@@ -9,6 +9,15 @@ On the edge: `docker compose -f /opt/edge/compose.yml stop headscale`, copy `db.
 reconnect without re-registering. The nightly job already restores every archive into a network-less scratch
 headscale and compares nodes and noise key with production; a failure alerts via ntfy.
 
+## Stack missing after a reboot
+
+**node-admin → `diagnose-boot`** (read-only) writes to the run's Summary: reboots, expected vs running services, each
+container's state/exit code/restart count, the Docker journal of the last three boots, OOM kills, unattended-upgrades
+and dead-man history, and headscale's start/error lines. If the runner cannot join the tailnet, use break glass below.
+
+Security updates that need a reboot apply at 04:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
+only when `/var/run/reboot-required` exists.
+
 ## Break glass
 
 If headscale is down, SSH over the tailnet is too. Use the DigitalOcean web console (Droplet → Access → Recovery/Droplet

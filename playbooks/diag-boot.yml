@@ -1,0 +1,56 @@
+---
+# Read-only, never fails: why the stack did (not) come back after the last reboots. Run from node-admin → diagnose-boot.
+- name: Boot and container diagnosis
+  hosts: edge
+  become: true
+  gather_facts: false
+  vars:
+    _compose: docker compose -f {{ edge_root }}/compose.yml
+  tasks:
+    - name: Collect evidence
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "## reboots and shutdowns"; last -x -F reboot shutdown | head -n 12
+        echo "## boots"; journalctl --list-boots --no-pager | tail -n 6
+        echo "## reboot-required"; cat /var/run/reboot-required.pkgs 2>/dev/null || echo none
+        echo "## services expected vs running"
+        echo "expected: $({{ _compose }} config --services | sort | paste -sd' ')"
+        echo "running:  $({{ _compose }} ps --status running --services | sort | paste -sd' ')"
+        echo "## containers"
+        for c in $({{ _compose }} ps -a -q); do
+          docker inspect "$c" | jq -r '.[0] | [.Name, "status=\(.State.Status)", "exit=\(.State.ExitCode)",
+            "restarts=\(.RestartCount)", "created=\(.Created)", "started=\(.State.StartedAt)",
+            "finished=\(.State.FinishedAt)", "oom=\(.State.OOMKilled)", "health=\(.State.Health.Status // "-")",
+            "error=\(.State.Error)"] | join(" ")'
+        done
+        for b in -2 -1 0; do
+          echo "## docker journal, boot $b (first 3 min after start, plus headscale/error lines)"
+          journalctl -b "$b" -u docker -u containerd --no-pager -o short-iso 2>&1 | head -n 60
+          journalctl -b "$b" -u docker --no-pager -o short-iso 2>&1 | grep -iE 'headscale|error|fail|restart' | tail -n 40
+        done
+        echo "## kernel OOM, previous and current boot"
+        journalctl -k -b -1 --no-pager 2>&1 | grep -iE 'out of memory|oom' | tail -n 10
+        journalctl -k -b 0 --no-pager 2>&1 | grep -iE 'out of memory|oom' | tail -n 10
+        echo "## unattended-upgrades"; tail -n 30 /var/log/unattended-upgrades/unattended-upgrades.log 2>&1
+        echo "## dead-man, last runs"; journalctl -u edge-deadman.service --no-pager -o short-iso -n 15 2>&1
+        echo "## headscale log: first lines of each start, and errors"
+        {{ _compose }} logs --no-color --timestamps headscale 2>&1 | grep -iE 'starting|listening|error|fatal|panic|level=(err|fatal)' | tail -n 60
+        echo "## memory and disk"; free -m; df -h / /var/lib/docker
+      args:
+        executable: /bin/bash
+      register: _diag
+      changed_when: false
+      failed_when: false
+
+    - name: Evidence
+      ansible.builtin.debug:
+        msg: "{{ _diag.stdout_lines + _diag.stderr_lines }}"
+
+    - name: Write the evidence for the workflow run page
+      ansible.builtin.copy:
+        dest: "{{ summary_file }}"
+        content: "### Boot diagnosis\n\n```\n{{ _diag.stdout }}\n{{ _diag.stderr }}\n```\n"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      when: summary_file is defined

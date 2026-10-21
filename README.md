@@ -87,7 +87,8 @@ the VPS waits for approval on the `production` environment.
 
    - deSEC: create a token that can only write those three TXT RRsets, only from the droplet's egress addresses
      (see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)). Store it as environment secret `DESEC_TOKEN`.
-   - healthchecks.io: one check, period 5 min, grace 10 min, email to you; ping URL → secret `HC_PING_URL`.
+   - healthchecks.io: one check, period 5 min, grace 10 min, email to you; ping URL → secret `HC_PING_URL`
+     ([`docs/runbooks/alerts.md`](docs/runbooks/alerts.md)).
    - Choose and store (≥ 16 chars, also in your password manager): `ADMIN_CONSOLE_PASSWORD`, `NTFY_DAVID_PASSWORD`.
 5. **Actions → init-secrets**. Generates ntfy publisher credentials and the pgBackRest mTLS PKI, encrypts everything
    into `secrets/edge.sops.yaml`, commits it.
@@ -108,7 +109,8 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 |---|---|
 | Add, tag or revoke a device; CI pre-auth keys | [`docs/runbooks/tailnet-devices.md`](docs/runbooks/tailnet-devices.md) |
 | Rotate the deSEC ACME token | [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md) |
-| Restore headscale; break glass | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
+| Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
+| Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |
 | Design decisions and traps already hit | [`docs/decisions.md`](docs/decisions.md) |
