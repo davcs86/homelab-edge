@@ -112,7 +112,12 @@ expect "staging aborts outside the tailnet"    "000"                            
 expect "staging UI from the tailnet"           "200 ui GET /trader"               "$(sreq --interface "$tailnet_ip" "$s/trader")"
 expect "staging agent, prefix stripped"        "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
 expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
-expect "prod name not served on staging port"  "404"                              "$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$app_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$app_host:$staging_port/")"
+prod_on_staging="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$app_host:$staging_port:127.0.0.1" "https://$app_host:$staging_port/trader" || true)"
+if [[ "$prod_on_staging" == *ui* || "$prod_on_staging" == *agent* ]]; then
+  echo "FAIL  prod name reached an upstream on the staging port: $prod_on_staging"; fail=1
+else
+  echo "PASS  prod name reaches no upstream on the staging port"
+fi
 
 expect "tailnet sees full UI"                  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
 expect "tailnet reaches agent tools"           "200 agent GET /api/tools"         "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"

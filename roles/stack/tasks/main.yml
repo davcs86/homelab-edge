@@ -137,7 +137,9 @@
 - name: Publicly trusted certificates for every site, with ACME diagnostics on failure
   vars:
     # One SNI per certificate Caddy manages; status.* and staging are served by the *.{{ magicdns_base_domain }} wildcard.
-    _cert_check: "{{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ status_hostname }} {{ staging_ui_hostname }}:{{ staging_edge_port }}"
+    _cert_check: >-
+      {{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ status_hostname }}
+      {{ staging_ui_hostname }}:{{ staging_edge_port }}
   block:
     - name: Probe the certificates
       ansible.builtin.script:
