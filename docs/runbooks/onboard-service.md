@@ -42,4 +42,4 @@ them into a list variable is a separate change.
 
 Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on the tailnet-only
 `staging_edge_port` (8443) under the existing `*.ts` certificate, so it needs no new CNAME or public record.
-The name must differ from every node hostname, because MagicDNS answers node names itself.
+The name must differ from every node hostname, because MagicDNS answers node names itself. `group:members` may reach 8443.

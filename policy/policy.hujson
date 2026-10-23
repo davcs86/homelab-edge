@@ -23,8 +23,8 @@
     // Admin devices: full reach, including SSH, Postgres, LLM and Proxmox.
     {"src": ["group:admins"], "dst": ["*"], "ip": ["*"]},
 
-    // Everyday devices: only the edge's HTTPS (split-horizon xstockstrat UI, Gatus, ntfy).
-    {"src": ["group:members"], "dst": ["tag:edge"], "ip": ["tcp:443"]},
+    // Everyday devices: only the edge's HTTPS (split-horizon xstockstrat UI, Gatus, ntfy) and the staging listener.
+    {"src": ["group:members"], "dst": ["tag:edge"], "ip": ["tcp:443", "tcp:8443"]},
 
     // Edge -> app: only the UI and agent ports (public /agent + OAuth routes, tailnet UI, Gatus probes).
     {"src": ["tag:edge"], "dst": ["tag:xstockstrat"], "ip": ["tcp:3000", "tcp:9000"]},
@@ -76,7 +76,7 @@
     {"src": "tag:xstockstrat-staging", "accept": ["tag:db:5432", "tag:db:6432", "tag:edge:8443"], "deny": ["tag:db:22", "tag:db:8432", "tag:edge:443", "tag:edge:22", "tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat:22", "tag:llm:11434"]},
     {"src": "tag:db",     "accept": ["tag:edge:8432", "tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:xstockstrat:3000", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:22"]},
     {"src": "tag:pve",    "accept": ["tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:db:5432", "tag:xstockstrat-staging:3000"]},
-    {"src": "david@",     "accept": ["tag:edge:443"], "deny": ["tag:db:5432", "tag:llm:11434", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:edge:22", "tag:edge:8443"]},
+    {"src": "david@",     "accept": ["tag:edge:443", "tag:edge:8443"], "deny": ["tag:db:5432", "tag:llm:11434", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:edge:22"]},
     {"src": "david_admin@", "accept": ["tag:db:5432", "tag:llm:11434", "tag:edge:22", "tag:pve:8006"]},
   ],
 }

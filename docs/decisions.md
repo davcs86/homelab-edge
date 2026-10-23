@@ -61,7 +61,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   nothing in this repo verifies them.
 - **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
   by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
-  `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443.
+  `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
 - **A route name cannot equal a node's MagicDNS name.** `xstockstrat-staging.ts.<domain>` resolves to the staging VM;
   an extra record for it would contend with the node record. The edge-facing name is `xstockstrat-staging-ui`.
 - **Hostnames follow tags, and duplicates register as `name-1`.** `app_tailnet_host` and `staging_tailnet_host` are the
