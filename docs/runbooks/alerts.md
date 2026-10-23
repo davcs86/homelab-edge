@@ -5,7 +5,7 @@ Two independent paths. Set up both: the second one rides on the edge it is watch
 | Path | Fires on | Reaches you via | Survives the edge being down |
 |---|---|---|---|
 | healthchecks.io | edge stops pinging for > grace: host down, or any compose service not running / unhealthy | email | yes |
-| ntfy | Gatus probes (headscale, public routes, app, Proxmox), silent heartbeats (Proxmox, nightly backup), any failed edge unit | ntfy app on the phone | no (served by the edge, tailnet-only) |
+| ntfy | Gatus probes (headscale, public routes, app, Proxmox), silent heartbeats (Proxmox, DB host, nightly backup), any failed edge unit | ntfy app on the phone | no (served by the edge, tailnet-only) |
 
 ## healthchecks.io (edge dead-man)
 

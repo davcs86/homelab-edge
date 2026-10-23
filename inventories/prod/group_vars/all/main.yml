@@ -37,8 +37,12 @@ edge_tailnet_hostname: edge
 tailnet_v4_prefix: 100.64.0.0/10
 tailnet_v6_prefix: fd7a:115c:a1e0::/48
 ephemeral_inactivity_timeout: 5m
-# Home nodes as they will be named in MagicDNS (<hostname>.<magicdns_base_domain>).
-app_tailnet_host: "app.{{ magicdns_base_domain }}"
+# Home nodes as they will be named in MagicDNS (<hostname>.<magicdns_base_domain>). Hostname = workload tag name (tag:xstockstrat -> xstockstrat).
+app_tailnet_host: "xstockstrat.{{ magicdns_base_domain }}"
+staging_tailnet_host: "xstockstrat-staging.{{ magicdns_base_domain }}"
+# Edge-facing name of the staging route; must differ from every node's MagicDNS name.
+staging_ui_hostname: "xstockstrat-staging-ui.{{ magicdns_base_domain }}"
+staging_edge_port: 8443                  # tailnet-only listener; not in the DO firewall
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
 backup_tailnet_host: "backup.{{ magicdns_base_domain }}"
 
@@ -66,6 +70,7 @@ gatus_port: 8081
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
+heartbeat_db_interval: 11m          # DB host pushes every 5 min
 
 # ---------- Backups ----------
 backup_schedule: "*-*-* 03:17:00 UTC"

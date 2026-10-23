@@ -81,7 +81,7 @@
     mode: "0644"
     content: "{{ _records | sort(attribute='name') | sort(attribute='type') | to_nice_json(sort_keys=true) }}\n"
   vars:
-    _names: ["{{ public_app_hostname }}", "{{ status_hostname }}", "{{ ntfy_hostname }}"]
+    _names: ["{{ public_app_hostname }}", "{{ status_hostname }}", "{{ ntfy_hostname }}", "{{ staging_ui_hostname }}"]
     _records: >-
       {{ _names | map('community.general.dict_kv', 'name') | map('combine', {'type': 'A', 'value': edge_tailnet_ipv4}) | list
          + _names | map('community.general.dict_kv', 'name') | map('combine', {'type': 'AAAA', 'value': edge_tailnet_ipv6}) | list }}
