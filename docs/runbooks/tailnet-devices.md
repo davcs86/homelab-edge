@@ -38,8 +38,8 @@ From an admin device on the tailnet, with the deploy key and SOPS key the workfl
 
 ```sh
 ansible-playbook playbooks/node-admin.yml -e '{"action":"list-devices"}'
-ansible-playbook playbooks/node-admin.yml -e '{"action":"approve-device","registration":"<URL or ID>","user":"david","tags":"app"}'
-ansible-playbook playbooks/node-admin.yml -e '{"action":"set-tags","device":"<name|id>","tags":"app,db"}'
+ansible-playbook playbooks/node-admin.yml -e '{"action":"approve-device","registration":"<URL or ID>","user":"david","tags":"xstockstrat"}'
+ansible-playbook playbooks/node-admin.yml -e '{"action":"set-tags","device":"<name|id>","tags":"xstockstrat,db"}'
 ansible-playbook playbooks/node-admin.yml -e '{"action":"remove-device","device":"<name|id>"}'   # or force-reauth
 ansible-playbook playbooks/node-admin.yml -e '{"action":"mint-ci-key","ci_key_hours":24}'
 ```

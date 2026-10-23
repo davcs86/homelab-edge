@@ -20,7 +20,7 @@ flowchart LR
 
   subgraph tailnet["tailnet (WireGuard, default-deny grants)"]
     app["xstockstrat.ts… :3000 / :9000<br/>tag:xstockstrat"]
-    db["db.ts… :5432<br/>tag:db"]
+    db["db.ts… :5432 / :6432 PgBouncer<br/>tag:db"]
     pve["pve<br/>tag:pve"]
     backuphost["backup.ts…<br/>tag:backup"]
   end
@@ -41,6 +41,7 @@ flowchart LR
 Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
 (`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint
 and the OAuth login routes; tailnet clients get the whole app through the same name (split-horizon DNS).
+The staging app is served only on the tailnet at `:8443` (not in the cloud firewall).
 
 ## Repository map
 

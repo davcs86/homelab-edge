@@ -28,6 +28,8 @@
 
     // Edge -> app: only the UI and agent ports (public /agent + OAuth routes, tailnet UI, Gatus probes).
     {"src": ["tag:edge"], "dst": ["tag:xstockstrat"], "ip": ["tcp:3000", "tcp:9000"]},
+    // Edge -> staging app: UI and agent ports for the tailnet-only staging route.
+    {"src": ["tag:edge"], "dst": ["tag:xstockstrat-staging"], "ip": ["tcp:3000", "tcp:9000"]},
     // Edge -> Proxmox: Gatus TCP probe of the web UI port only.
     {"src": ["tag:edge"], "dst": ["tag:pve"], "ip": ["tcp:8006"]},
     // Edge -> backup host: rsync over SSH, forced to rrsync on the far side.
@@ -35,19 +37,18 @@
 
     // App -> edge: the UI calls its own public hostname (split-horizon) for /accounts probes.
     {"src": ["tag:xstockstrat"], "dst": ["tag:edge"], "ip": ["tcp:443"]},
-    // Postgres is reachable only by tag:xstockstrat (and admins above).
-    // 5432 for direct-connection services; 6432 is PgBouncer for pooled services.
+    // Postgres (5432) and PgBouncer (6432): the tailnet cannot tell prod from staging databases, so isolation
+    // is in Postgres and PgBouncer (docs/runbooks/onboard-service.md).
     {"src": ["tag:xstockstrat"], "dst": ["tag:db"], "ip": ["tcp:5432", "tcp:6432"]},
-    // Staging shares the DB server. The tailnet cannot tell prod from staging databases, so isolation is enforced in
-    // Postgres (own role, REVOKE CONNECT FROM PUBLIC, pg_hba per database/role/source) and PgBouncer. See docs/runbooks/onboard-service.md.
     {"src": ["tag:xstockstrat-staging"], "dst": ["tag:db"], "ip": ["tcp:5432", "tcp:6432"]},
-    {"src": ["tag:xstockstrat-staging"], "dst": ["tag:edge"], "ip": ["tcp:443"]},
+    // Staging reaches only the tailnet-only :8443 listener, never prod's 443 site.
+    {"src": ["tag:xstockstrat-staging"], "dst": ["tag:edge"], "ip": ["tcp:8443"]},
     // LLM is reachable only by tag:xstockstrat, tag:agent (approved) and admins.
     {"src": ["tag:xstockstrat", "tag:agent"], "dst": ["tag:llm"], "ip": ["tcp:11434"]},
 
     // pgBackRest offsite repo, mutual TLS both ways: the DB pushes WAL to the edge, and the edge
     // (the repository host, which runs `backup`) pulls from the DB host's pgBackRest server. Not Postgres 5432.
-    {"src": ["tag:db"], "dst": ["tag:edge"], "ip": ["tcp:8432", "tcp:443"]}, // 443: DB health pushes to Gatus via Caddy
+    {"src": ["tag:db"], "dst": ["tag:edge"], "ip": ["tcp:8432", "tcp:443"]}, // 443: heartbeat push to Gatus
     {"src": ["tag:edge"], "dst": ["tag:db"], "ip": ["tcp:8432"]},
 
     // Proxmox -> Gatus heartbeat endpoint (dead-man) via Caddy.
@@ -66,16 +67,16 @@
 
   // Executed by `headscale policy check`; a failing test rejects the policy.
   "tests": [
-    {"src": "tag:edge",   "accept": ["tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:db:8432"], "deny": ["tag:xstockstrat:22", "tag:db:5432", "tag:db:22", "tag:llm:11434"]},
-    {"src": "tag:ci",     "accept": ["tag:xstockstrat:22"], "deny": ["tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:edge:22", "tag:db:5432"]},
-    {"src": "tag:deploy", "accept": ["tag:edge:22"], "deny": ["tag:xstockstrat:22", "tag:edge:443", "tag:db:5432"]},
-    {"src": "tag:agent",  "accept": ["tag:llm:11434", "tag:xstockstrat:9000"], "deny": ["tag:db:5432", "tag:db:6432", "tag:db:22", "tag:db:8432", "tag:xstockstrat:3000", "tag:xstockstrat:22"]},
-    {"src": "tag:llm",    "deny": ["tag:db:5432", "tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:edge:443", "tag:edge:22"]},
-    {"src": "tag:xstockstrat",    "accept": ["tag:db:5432", "tag:db:6432", "tag:llm:11434"], "deny": ["tag:db:22", "tag:edge:22", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22"]},
-    {"src": "tag:xstockstrat-staging", "accept": ["tag:db:5432", "tag:db:6432", "tag:edge:443"], "deny": ["tag:db:22", "tag:db:8432", "tag:edge:22", "tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat:22", "tag:llm:11434"]},
-    {"src": "tag:db",     "accept": ["tag:edge:8432", "tag:edge:443"], "deny": ["tag:edge:22", "tag:xstockstrat:3000"]},
-    {"src": "tag:pve",    "accept": ["tag:edge:443"], "deny": ["tag:edge:22", "tag:db:5432"]},
-    {"src": "david@",     "accept": ["tag:edge:443"], "deny": ["tag:db:5432", "tag:llm:11434", "tag:xstockstrat:22", "tag:edge:22"]},
+    {"src": "tag:edge",   "accept": ["tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:3000", "tag:db:8432"], "deny": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22", "tag:db:5432", "tag:db:22", "tag:llm:11434"]},
+    {"src": "tag:ci",     "accept": ["tag:xstockstrat:22"], "deny": ["tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat-staging:22", "tag:edge:22", "tag:db:5432"]},
+    {"src": "tag:deploy", "accept": ["tag:edge:22"], "deny": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22", "tag:edge:443", "tag:edge:8443", "tag:db:5432"]},
+    {"src": "tag:agent",  "accept": ["tag:llm:11434", "tag:xstockstrat:9000"], "deny": ["tag:db:5432", "tag:db:6432", "tag:db:22", "tag:db:8432", "tag:xstockstrat:3000", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22", "tag:edge:8443"]},
+    {"src": "tag:llm",    "deny": ["tag:db:5432", "tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:3000", "tag:edge:443", "tag:edge:8443", "tag:edge:22"]},
+    {"src": "tag:xstockstrat",    "accept": ["tag:db:5432", "tag:db:6432", "tag:llm:11434"], "deny": ["tag:db:22", "tag:edge:22", "tag:edge:8443", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22"]},
+    {"src": "tag:xstockstrat-staging", "accept": ["tag:db:5432", "tag:db:6432", "tag:edge:8443"], "deny": ["tag:db:22", "tag:db:8432", "tag:edge:443", "tag:edge:22", "tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat:22", "tag:llm:11434"]},
+    {"src": "tag:db",     "accept": ["tag:edge:8432", "tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:xstockstrat:3000", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:22"]},
+    {"src": "tag:pve",    "accept": ["tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:db:5432", "tag:xstockstrat-staging:3000"]},
+    {"src": "david@",     "accept": ["tag:edge:443"], "deny": ["tag:db:5432", "tag:llm:11434", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:edge:22", "tag:edge:8443"]},
     {"src": "david_admin@", "accept": ["tag:db:5432", "tag:llm:11434", "tag:edge:22", "tag:pve:8006"]},
   ],
 }

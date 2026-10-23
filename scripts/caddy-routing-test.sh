@@ -19,12 +19,12 @@ trap cleanup EXIT
 
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template \
   -a "src=roles/stack/templates/Caddyfile.j2 dest=$work/Caddyfile" \
-  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 >/dev/null)
+  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 -e staging_tailnet_host=127.0.0.1 >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_ui_hostname }}' 'staging_port={{ staging_edge_port }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -99,6 +99,20 @@ expect "login body over cap"                   "413"                            
 expect "headscale proxied"                     "200 headscale GET /health"        "$(req "$hs_host" "https://$hs_host/health")"
 expect "headscale API blocked publicly"        "000"                              "$(req "$hs_host" "https://$hs_host/api/v1/node")"
 expect "tailnet-only wildcard aborts publicly" "000"                              "$(req "$status_host" "https://$status_host/")"
+
+# Staging listener: mock upstreams are shared, so only routing and the tailnet gate are asserted.
+sreq() { # <curl args...>
+  local code
+  code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$staging_host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
+  printf '%s' "$code"
+  printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
+}
+s="https://$staging_host:$staging_port"
+expect "staging aborts outside the tailnet"    "000"                              "$(sreq "$s/")"
+expect "staging UI from the tailnet"           "200 ui GET /trader"               "$(sreq --interface "$tailnet_ip" "$s/trader")"
+expect "staging agent, prefix stripped"        "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
+expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
+expect "prod name not served on staging port"  "404"                              "$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$app_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$app_host:$staging_port/")"
 
 expect "tailnet sees full UI"                  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
 expect "tailnet reaches agent tools"           "200 agent GET /api/tools"         "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"

@@ -65,7 +65,7 @@
 }
 
 (app_ui) {
-	reverse_proxy {{ app_tailnet_host }}:{{ app_ui_port }} {
+	reverse_proxy {args[0]}:{{ app_ui_port }} {
 		transport http {
 			resolvers 100.100.100.100
 		}
@@ -75,7 +75,7 @@
 # The agent's routes are root-relative; DO App Platform stripped /agent too.
 (agent) {
 	uri strip_prefix /agent
-	reverse_proxy {{ app_tailnet_host }}:{{ app_agent_port }} {
+	reverse_proxy {args[0]}:{{ app_agent_port }} {
 		flush_interval -1
 		transport http {
 			resolvers 100.100.100.100
@@ -110,10 +110,10 @@
 	handle @tailnet {
 		@agent_any path /agent /agent/*
 		handle @agent_any {
-			import agent
+			import agent {{ app_tailnet_host }}
 		}
 		handle {
-			import app_ui
+			import app_ui {{ app_tailnet_host }}
 		}
 	}
 
@@ -184,12 +184,12 @@
 			request_body {
 				max_size {{ body_limits.mcp }}
 			}
-			import agent
+			import agent {{ app_tailnet_host }}
 		}
 
 		@agent_meta path /agent/.well-known/oauth-protected-resource /agent/.well-known/oauth-authorization-server
 		handle @agent_meta {
-			import agent
+			import agent {{ app_tailnet_host }}
 		}
 
 		@agent_register path /agent/oauth/register
@@ -197,7 +197,7 @@
 			request_body {
 				max_size {{ body_limits.register }}
 			}
-			import agent
+			import agent {{ app_tailnet_host }}
 		}
 
 		@agent_oauth path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
@@ -205,12 +205,12 @@
 			request_body {
 				max_size {{ body_limits.default }}
 			}
-			import agent
+			import agent {{ app_tailnet_host }}
 		}
 
 		@root_meta path /.well-known/oauth-protected-resource/agent /.well-known/oauth-authorization-server/agent
 		handle @root_meta {
-			import app_ui
+			import app_ui {{ app_tailnet_host }}
 		}
 
 		@login_page {
@@ -218,7 +218,7 @@
 			path /auth/oauth-login
 		}
 		handle @login_page {
-			import app_ui
+			import app_ui {{ app_tailnet_host }}
 		}
 
 		@login_api {
@@ -229,7 +229,7 @@
 			request_body {
 				max_size {{ body_limits.login }}
 			}
-			import app_ui
+			import app_ui {{ app_tailnet_host }}
 		}
 
 		@assets {
@@ -237,7 +237,7 @@
 			path /_next/static/* /sw.js /manifest.webmanifest /icon-192.png /icon-512.png /icon-512-maskable.png /icon.svg
 		}
 		handle @assets {
-			import app_ui
+			import app_ui {{ app_tailnet_host }}
 		}
 
 		handle {
@@ -260,6 +260,28 @@
 	handle @ntfy {
 		reverse_proxy 127.0.0.1:2586 {
 			flush_interval -1
+		}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
+
+# Reachable only on the tailnet (cloud firewall closes the port); same *.ts certificate as above.
+*.{{ magicdns_base_domain }}:{{ staging_edge_port }} {
+	import acme ts.{{ acme_zone }}
+	import access_log staging
+	import tailnet_only
+
+	@staging host {{ staging_ui_hostname }}
+	handle @staging {
+		@agent_any path /agent /agent/*
+		handle @agent_any {
+			import agent {{ staging_tailnet_host }}
+		}
+		handle {
+			import app_ui {{ staging_tailnet_host }}
 		}
 	}
 

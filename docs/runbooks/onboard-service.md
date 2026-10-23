@@ -13,6 +13,8 @@ tag and reaches nothing until a grant says so (default deny). Prod and staging o
 
 Migrating from the old `tag:app`: no node may still carry `tag:app` when the policy that drops it is deployed. Check
 `node-admin → list-devices`; if one does, re-tag it to `tag:xstockstrat` first.
+The edge's Caddy and Gatus upstreams resolve `xstockstrat.<ts domain>` (and `xstockstrat-staging` for staging): the VM
+must be registered under that hostname before the deploy.
 
 ## 2. Shared Postgres (database-level isolation)
 
@@ -37,3 +39,7 @@ The DB server is shared, so the tailnet cannot separate databases. Per workload,
 Today the edge hardcodes `public_app_hostname` in the Caddyfile, the ACME CNAME delegation, `tls-check`, the Gatus
 config and the tailscale role's split-horizon records. Exposing another workload means editing each of those; generalising
 them into a list variable is a separate change.
+
+Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on the tailnet-only
+`staging_edge_port` (8443) under the existing `*.ts` certificate, so it needs no new CNAME or public record.
+The name must differ from every node hostname, because MagicDNS answers node names itself.

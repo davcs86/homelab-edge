@@ -24,7 +24,7 @@ on:
         description: "set-tags / force-reauth / remove-device: device name or ID (see list-devices)"
         required: false
       tags:
-        description: "set-tags, or optional on approve-device for servers: e.g. app or db,backup (tag: prefix optional)"
+        description: "set-tags, or optional on approve-device for servers: e.g. xstockstrat or db,backup (tag: prefix optional)"
         required: false
 
 permissions:
