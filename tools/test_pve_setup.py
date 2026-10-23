@@ -1,6 +1,7 @@
 """Offline tests for pve-setup.py: dry-run output only; no Proxmox host, no root, nothing is executed."""
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -65,8 +66,9 @@ class DryRun(unittest.TestCase):
             self.assertEqual(pve.ask_sha256(), "a" * 64)
 
     def test_fetch_checksum_mismatch_fails(self):
-        with mock.patch("urllib.request.urlretrieve"), mock.patch.object(pve, "sha256_of", return_value="b" * 64):
-            self.assertFalse(pve.run_step(pve.Fetch("https://x.test/i", "/nonexistent/i", "a" * 64)))
+        with tempfile.TemporaryDirectory() as d, mock.patch("urllib.request.urlretrieve"), \
+                mock.patch.object(pve, "sha256_of", return_value="b" * 64):
+            self.assertFalse(pve.run_step(pve.Fetch("https://x.test/i", f"{d}/sub/i", "a" * 64)))
 
 
 if __name__ == "__main__":
