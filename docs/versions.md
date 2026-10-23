@@ -20,6 +20,8 @@ All pins were at least two weeks old on 2026-10-14; container images are pinned 
 | collections | general 13.4.0, docker 5.3.0, posix 2.2.2, sops 2.4.0, crypto 3.4.0 | newest ≥ 2 weeks |
 | sops | 3.13.3 | SSH-key age recipients need ≥ 3.10 |
 | age (on edge) | Ubuntu archive 1.2.1 | supports ssh-ed25519 recipients |
+| typer (`tools/pve-setup.py`) | 0.27.3 | released 2026-10-06, newest ≥ 2 weeks; transitive pins in `tools/pve-setup.requirements.txt` |
+| tailscale in `templates/app-deploy/deploy.yml` | 1.98.10 | same pin and checksum as the edge; update both together |
 | actions/checkout, setup-python | v7.0.1, v7.0.0 by commit | newest ≥ 2 weeks |
 
 Ubuntu-archive packages (fail2ban, chrony, sqlite3, age, …) are pinned by the release and receive security updates

@@ -66,3 +66,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   an extra record for it would contend with the node record. The edge-facing name is `xstockstrat-staging-ui`.
 - **Hostnames follow tags, and duplicates register as `name-1`.** `app_tailnet_host` and `staging_tailnet_host` are the
   Caddy and Gatus upstreams, so the node must carry that hostname before the deploy.
+- **App deploys use hosted runners over the tailnet, not a self-hosted runner.** No standing runner or deploy rights on the
+  VM, nothing to patch, and the key is ephemeral. The cost is that a dead edge blocks deploys (admins deploy by hand,
+  `recovery.md`). The transport is one script (`app-deploy.sh`), so switching later is a `runs-on` change.
+- **The app deploy key is a forced command, not a shell.** Docker-group access is root-equivalent, so the key can only
+  `put`, `deploy`, `rollback` and `status` one app directory, and the script is installed by hand on the VM.

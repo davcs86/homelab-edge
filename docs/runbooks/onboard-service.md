@@ -16,6 +16,9 @@ Migrating from the old `tag:app`: no node may still carry `tag:app` when the pol
 The edge's Caddy and Gatus upstreams resolve `xstockstrat.<ts domain>` (and `xstockstrat-staging` for staging): the VM
 must be registered under that hostname before the deploy.
 
+Deploying it from GitHub Actions: `deploy-compose-app.md`. CI reaches a workload only through a `tag:ci` grant on its
+tag; add it (and flip the `tag:ci` test for that tag from `deny` to `accept`) in the same PR as the tag.
+
 ## 2. Shared Postgres (database-level isolation)
 
 The DB server is shared, so the tailnet cannot separate databases. Per workload, on the DB host:
