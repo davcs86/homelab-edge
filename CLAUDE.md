@@ -31,6 +31,7 @@ Read only the row that matches the task.
 | Restore headscale; edge unreachable (break glass); stack down after reboot | `docs/runbooks/recovery.md` |
 | Alert setup (healthchecks.io email, ntfy on the phone) | `docs/runbooks/alerts.md` |
 | Backup host, Proxmox heartbeat, app VM, DB host | `docs/runbooks/home-side.md` |
+| Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
 | Bumping or adding a pin | `docs/versions.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |

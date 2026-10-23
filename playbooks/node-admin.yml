@@ -30,7 +30,7 @@
         - ok: "{{ action not in _needs_device or device | default('') | length > 0 }}"
           msg: "{{ action }} needs 'device': a name or ID from list-devices"
         - ok: "{{ action != 'set-tags' or _tags | length > 0 }}"
-          msg: "set-tags needs 'tags', e.g. app or app,db"
+          msg: "set-tags needs 'tags', e.g. xstockstrat or xstockstrat,db"
         - ok: "{{ _tags | reject('match', '^tag:[a-z0-9-]+$') | list | length == 0 }}"
           msg: "tags may use only lowercase letters, digits and '-': got {{ _tags | join(', ') }}"
       loop_control:

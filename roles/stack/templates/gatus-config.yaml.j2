@@ -111,6 +111,16 @@ external-endpoints:
         failure-threshold: 1
         send-on-resolved: true
 
+  - name: db-heartbeat
+    group: home
+    token: ${HEARTBEAT_DB_TOKEN}
+    heartbeat:
+      interval: {{ heartbeat_db_interval }}
+    alerts:
+      - type: ntfy
+        failure-threshold: 1
+        send-on-resolved: true
+
   - name: nightly-backup
     group: edge
     token: ${HEARTBEAT_BACKUP_TOKEN}

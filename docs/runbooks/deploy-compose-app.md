@@ -32,10 +32,10 @@ credentials, and the digest in `.env` is the exact image that was built.
 
 ## 2. Tailnet side (this repo)
 
-- The VM's tailnet hostname follows its tag (`docs/runbooks/onboard-service.md`).
+- The VM's tailnet hostname follows its tag, and a new workload needs its own tag and grants (`docs/runbooks/onboard-service.md`).
 - `policy/policy.hujson` needs `{"src": ["tag:ci"], "dst": ["tag:<workload>"], "ip": ["tcp:22"]}` plus a test that `tag:ci` reaches `<workload>:22` and nothing else.
-  Prod already has it (`tag:app` today, `tag:xstockstrat` once #20 merges). Staging does not: #20's `tag:ci` test **denies**
-  `tag:xstockstrat-staging:22`, so a staging deploy needs a PR that adds the grant and moves that entry from `deny` to `accept`.
+  Prod already has it (`tag:xstockstrat`). Staging does not: the `tag:ci` test **denies** `tag:xstockstrat-staging:22`,
+  so a staging deploy needs a PR that adds the grant and moves that entry from `deny` to `accept`.
 - A reusable, ephemeral key that outlives one job: on the edge, `sudo docker compose -f /opt/edge/compose.yml exec -T headscale headscale preauthkeys create --tags tag:ci --reusable --ephemeral --expiration 2160h` (90 days). The `node-admin` workflow's 24 h key is for this repo's own CI. Put the key in the GitHub secret `TS_AUTHKEY` and its expiry date in the variable `TS_AUTHKEY_EXPIRES`; do not commit it.
 - One shared `tag:ci` key means every app repo holding it can join as `tag:ci`. The SSH key is per app and forced to one gate, so the key alone reaches nothing, but rotate it if any repo is compromised.
 

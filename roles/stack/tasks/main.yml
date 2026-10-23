@@ -85,6 +85,7 @@
       NTFY_TOKEN={{ edge_secrets.ntfy_alerts_token }}
       HEARTBEAT_PVE_TOKEN={{ edge_secrets.gatus_heartbeat_pve_token }}
       HEARTBEAT_BACKUP_TOKEN={{ edge_secrets.gatus_heartbeat_backup_token }}
+      HEARTBEAT_DB_TOKEN={{ edge_secrets.gatus_heartbeat_db_token }}
     mode: "0600"
   no_log: true
   notify: Restart gatus
@@ -135,8 +136,10 @@
 
 - name: Publicly trusted certificates for every site, with ACME diagnostics on failure
   vars:
-    # One SNI per certificate Caddy manages; status.* is served by the *.{{ magicdns_base_domain }} wildcard.
-    _cert_check: "{{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ status_hostname }}"
+    # One SNI per certificate Caddy manages; status.* and staging are served by the *.{{ magicdns_base_domain }} wildcard.
+    _cert_check: >-
+      {{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ status_hostname }}
+      {{ staging_ui_hostname }}:{{ staging_edge_port }}
   block:
     - name: Probe the certificates
       ansible.builtin.script:

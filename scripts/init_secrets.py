@@ -78,6 +78,7 @@ def main() -> None:
         "ntfy_alerts_token": ntfy_token(),
         "gatus_heartbeat_pve_token": secrets.token_urlsafe(32),
         "gatus_heartbeat_backup_token": secrets.token_urlsafe(32),
+        "gatus_heartbeat_db_token": secrets.token_urlsafe(32),
         **pki(edge_host, client_cn),
     }
     plaintext = yaml.safe_dump(doc, sort_keys=True).encode()
