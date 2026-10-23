@@ -30,7 +30,7 @@ on the run's **Summary** page.
 - From an admin device (over the tailnet):
   `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml exec -T headscale headscale preauthkeys create --tags tag:ci --ephemeral --expiration 1h'`
 
-`tag:ci` can reach only `tag:app:22`.
+`tag:ci` can reach only `tag:xstockstrat:22`.
 
 ## Same actions without GitHub
 
