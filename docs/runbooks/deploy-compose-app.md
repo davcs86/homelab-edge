@@ -12,6 +12,14 @@ push / dispatch → build job: docker build → push to GHCR → image digest
 The deploy key can run only `put`, `deploy`, `rollback` and `status` for one app directory. The VM never keeps registry
 credentials, and the digest in `.env` is the exact image that was built.
 
+## 0. Open items before the first deploy
+
+- [ ] Staging SSH grant for `tag:ci` (section 2, first bullet): not in the policy yet.
+- [ ] Reusable `tag:ci` key stored as `TS_AUTHKEY` and `TS_AUTHKEY_EXPIRES` in the app repo (section 2, second bullet).
+- [ ] Each target VM prepared (section 1) and the app repo configured (sections 3 and 4).
+
+`deploy.yml` has not run yet; expect to fix small things on the first staging run, and strike the items above as they are done.
+
 ## 1. One-time VM prep (as an admin, over the tailnet)
 
 1. Docker Engine and the compose plugin installed (same pins as the edge, see `docs/versions.md`).
@@ -25,7 +33,9 @@ credentials, and the digest in `.env` is the exact image that was built.
 ## 2. Tailnet side (this repo)
 
 - The VM's tailnet hostname follows its tag (`docs/runbooks/onboard-service.md`).
-- `policy/policy.hujson` needs `{"src": ["tag:ci"], "dst": ["tag:<workload>"], "ip": ["tcp:22"]}` plus a test that `tag:ci` reaches `<workload>:22` and nothing else. `tag:xstockstrat` already has it; every other workload, staging included, needs its own grant in a PR.
+- `policy/policy.hujson` needs `{"src": ["tag:ci"], "dst": ["tag:<workload>"], "ip": ["tcp:22"]}` plus a test that `tag:ci` reaches `<workload>:22` and nothing else.
+  Prod already has it (`tag:app` today, `tag:xstockstrat` once #20 merges). Staging does not: #20's `tag:ci` test **denies**
+  `tag:xstockstrat-staging:22`, so a staging deploy needs a PR that adds the grant and moves that entry from `deny` to `accept`.
 - A reusable, ephemeral key that outlives one job: on the edge, `sudo docker compose -f /opt/edge/compose.yml exec -T headscale headscale preauthkeys create --tags tag:ci --reusable --ephemeral --expiration 2160h` (90 days). The `node-admin` workflow's 24 h key is for this repo's own CI. Put the key in the GitHub secret `TS_AUTHKEY` and its expiry date in the variable `TS_AUTHKEY_EXPIRES`; do not commit it.
 - One shared `tag:ci` key means every app repo holding it can join as `tag:ci`. The SSH key is per app and forced to one gate, so the key alone reaches nothing, but rotate it if any repo is compromised.
 
