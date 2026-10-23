@@ -37,8 +37,8 @@ edge_tailnet_hostname: edge
 tailnet_v4_prefix: 100.64.0.0/10
 tailnet_v6_prefix: fd7a:115c:a1e0::/48
 ephemeral_inactivity_timeout: 5m
-# Home nodes as they will be named in MagicDNS (<hostname>.<magicdns_base_domain>).
-app_tailnet_host: "app.{{ magicdns_base_domain }}"
+# Home nodes as they will be named in MagicDNS (<hostname>.<magicdns_base_domain>). Hostname = workload tag name (tag:xstockstrat -> xstockstrat).
+app_tailnet_host: "xstockstrat.{{ magicdns_base_domain }}"
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
 backup_tailnet_host: "backup.{{ magicdns_base_domain }}"
 

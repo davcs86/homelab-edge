@@ -19,7 +19,7 @@ flowchart LR
   end
 
   subgraph tailnet["tailnet (WireGuard, default-deny grants)"]
-    app["app.ts… :3000 / :9000<br/>tag:xstockstrat"]
+    app["xstockstrat.ts… :3000 / :9000<br/>tag:xstockstrat"]
     db["db.ts… :5432<br/>tag:db"]
     pve["pve<br/>tag:pve"]
     backuphost["backup.ts…<br/>tag:backup"]

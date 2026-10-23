@@ -8,7 +8,7 @@ tag and reaches nothing until a grant says so (default deny). Prod and staging o
 1. `policy/policy.hujson`: add the tag to `tagOwners` and only the grants it needs (src = the new tag).
 2. Add a `tests` entry: every `accept` it needs and `deny` for the ports of every *other* workload.
 3. PR → CI policy tests must pass → merge → run `deploy`.
-4. Hostname is `<workload>` (staging: `<workload>-staging`). Hostnames are unique; a duplicate registers as `name-1`.
+4. Hostname equals the tag name without `tag:` (`xstockstrat`, `xstockstrat-staging`). Hostnames are unique; a duplicate registers as `name-1`.
 5. Join it with a pre-auth key carrying only that tag (`tailnet-devices.md`).
 
 Migrating from the old `tag:app`: no node may still carry `tag:app` when the policy that drops it is deployed. Check

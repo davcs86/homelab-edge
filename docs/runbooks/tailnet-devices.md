@@ -10,7 +10,7 @@ on the run's **Summary** page.
    `hskey-authreq-…`.
 2. **node-admin → `approve-device`**: paste that URL (or just the ID) into `registration`, pick `user`
    (`david` = edge only, `david_admin` = everything).
-3. Servers: also fill `tags` (e.g. `app`; the `tag:` prefix is optional) in the same run, or later with **`set-tags`**.
+3. Servers: also fill `tags` (e.g. `xstockstrat`; the `tag:` prefix is optional) in the same run, or later with **`set-tags`**.
    Tagged nodes become owned by headscale's `tagged-devices`. For unattended servers prefer a single-use tagged key
    (`preauthkeys create --tags tag:x --expiration 1h`).
 
