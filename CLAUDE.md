@@ -34,6 +34,8 @@ Read only the row that matches the task.
 | Bumping or adding a pin | `docs/versions.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
+| Deploy a Compose app (xstockstrat or other) to the homelab | `docs/runbooks/deploy-compose-app.md`, `templates/app-deploy/` |
+| Set up the local Proxmox host by hand | `docs/runbooks/proxmox-setup.md`, `tools/pve-setup.py` |
 | Changing public routes or limits | `roles/stack/templates/Caddyfile.j2`; test with `scripts/caddy-routing-test.sh` |
 | What each secret file holds | `secrets/README.md` |
 

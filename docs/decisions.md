@@ -56,3 +56,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   time zone in `OnCalendar` (`edge-reboot.timer`), which also tracks DST.
 - **Bootstrap must be re-runnable.** Root's keys are removed partway; the play probes the deploy user first and
   connects as root only if that fails.
+- **App deploys use hosted runners over the tailnet, not a self-hosted runner.** No standing runner or deploy rights on the
+  VM, nothing to patch, and the key is ephemeral. The cost is that a dead edge blocks deploys (admins deploy by hand,
+  `recovery.md`). The transport is one script (`app-deploy.sh`), so switching later is a `runs-on` change.
+- **The app deploy key is a forced command, not a shell.** Docker-group access is root-equivalent, so the key can only
+  `put`, `deploy`, `rollback` and `status` one app directory, and the script is installed by hand on the VM.
