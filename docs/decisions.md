@@ -62,13 +62,13 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
   by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
   `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
-- **Workflows commit to `main` with a GitHub App token that bypasses the pull-request rule.** The rule blocked `init-secrets`, and
-  `GITHUB_TOKEN` cannot be a bypass actor. The owner chose an App over branch-and-PR. What it costs: whoever can approve a `production`
-  run and get workflow code onto `main` can change any file on `main`, secrets files included. Mitigations, all checked by
-  `scripts/workflow-push-test.py` or required by `docs/runbooks/github-push-app.md`: the key lives only in the `production` environment
-  restricted to `main`, the token is minted only when a run actually has something to commit and carries `contents: write` for this
-  repository only, and the checkout no longer persists `GITHUB_TOKEN`. Not chosen: pushing a branch and opening the PR by hand
-  (no standing credential, one click per run).
+- **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
+  and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
+  acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,
+  secrets files included. Mitigations, checked by `scripts/workflow-push-test.py` or required by `docs/runbooks/github-push-token.md`: the
+  token is a secret of the `production` environment restricted to `main`, scoped to this repository with Contents write only, used only
+  when a run has something to commit, and the default `GITHUB_TOKEN` is read-only and no longer kept by the checkout. Not chosen: an App
+  (short-lived per-run tokens, not tied to a person, but more to set up) and a branch plus a hand-opened PR (no standing credential).
 - **A new generated secret is added by `init-secrets` `fill_missing`, never by hand or by regenerating the file.** Regenerating rotates every
   credential, including the pgBackRest PKI the DB host holds. The mode adds only absent plain credentials, decrypts in memory with the deploy
   key, and refuses when an operator value or a PKI key is missing. Without it, a release that reads a new key fails the deploy mid-play.

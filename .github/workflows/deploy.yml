@@ -19,7 +19,7 @@ on:
         default: false
 
 permissions:
-  contents: write   # commits generated.yml, known_hosts and the rotated deploy key
+  contents: read
 
 concurrency:
   group: deploy-edge
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          persist-credentials: false   # the push below uses the App token, not GITHUB_TOKEN
+          persist-credentials: false   # the push below uses PUSH_TOKEN, not GITHUB_TOKEN
 
       - uses: ./.github/actions/setup
         with:
@@ -132,21 +132,13 @@ jobs:
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "chore(deploy): record ${{ inputs.mode }} state [run ${{ github.run_id }}]"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      - name: Push token is not configured
-        if: always() && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID == ''
-        run: |
-          echo "::error::main only accepts PRs: set PUSH_APP_CLIENT_ID and PUSH_APP_PRIVATE_KEY (docs/runbooks/github-push-app.md)"
-          exit 1
-      - name: Push token (GitHub App on the ruleset's bypass list)
-        id: push-token
-        if: always() && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID != ''
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          client-id: ${{ vars.PUSH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PUSH_APP_PRIVATE_KEY }}
-          permission-contents: write
       - name: Push to ${{ github.ref_name }}
-        if: always() && steps.stage.outputs.changed == 'true' && steps.push-token.outcome == 'success'
+        if: always() && steps.stage.outputs.changed == 'true'
         env:
-          PUSH_TOKEN: ${{ steps.push-token.outputs.token }}
-        run: git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
+          PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+        run: |
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "::error::main only accepts PRs: set the PUSH_TOKEN secret (docs/runbooks/github-push-token.md)"
+            exit 1
+          fi
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

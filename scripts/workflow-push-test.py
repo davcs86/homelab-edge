@@ -12,8 +12,6 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 WF = ROOT / ".github/workflows"
 PUSHERS = {"deploy": "deploy", "init-secrets": "init", "node-admin": "run"}  # workflow file -> job
-VERSIONS = (ROOT / "docs/versions.md").read_text()
-TOKEN_ACTION = re.compile(r"^actions/create-github-app-token@([0-9a-f]{40})$")
 
 
 def load(name):
@@ -28,59 +26,74 @@ def step_by_id(name, sid):
     return next(s for s in steps(name) if s.get("id") == sid)
 
 
+def push_step(name):
+    return next(s for s in steps(name) if "git push" in s.get("run", ""))
+
+
 class Wiring(unittest.TestCase):
-    def test_no_workflow_pushes_with_the_default_token(self):
+    def test_the_only_push_uses_the_push_token_after_staging(self):
         for name in PUSHERS:
             text = (WF / f"{name}.yml").read_text()
             self.assertNotIn("git push origin", text, name)
             self.assertEqual(len(re.findall(r"git push ", text)), 1, name)
-            for s in steps(name):
-                if "git push" in s.get("run", ""):
-                    self.assertEqual(s["env"]["PUSH_TOKEN"], "${{ steps.push-token.outputs.token }}", name)
-                    self.assertIn("steps.push-token.outcome == 'success'", s["if"], name)
+            p = push_step(name)
+            self.assertEqual(p["env"], {"PUSH_TOKEN": "${{ secrets.PUSH_TOKEN }}"}, name)
+            self.assertIn("steps.stage.outputs.changed == 'true'", p["if"], name)
+            self.assertIn("github-push-token.md", p["run"], name)
 
-    def test_checkout_does_not_persist_the_default_token(self):
+    def test_the_default_token_cannot_push_and_checkout_does_not_keep_it(self):
         for name in PUSHERS:
+            self.assertEqual(load(name)["permissions"], {"contents": "read"}, name)
             checkout = next(s for s in steps(name) if str(s.get("uses", "")).startswith("actions/checkout@"))
             self.assertIs(checkout["with"]["persist-credentials"], False, name)
 
-    def test_the_token_is_minted_only_when_something_changed_and_with_contents_write_only(self):
-        for name in PUSHERS:
-            t = step_by_id(name, "push-token")
-            self.assertRegex(t["uses"].split("  ")[0], TOKEN_ACTION)
-            self.assertIn("steps.stage.outputs.changed == 'true'", t["if"], name)
-            perms = {k for k in t["with"] if k.startswith("permission-")}
-            self.assertEqual(perms, {"permission-contents"}, name)
-            self.assertEqual(t["with"]["permission-contents"], "write", name)
-            self.assertEqual(t["with"]["client-id"], "${{ vars.PUSH_APP_CLIENT_ID }}", name)
-            self.assertNotIn("repositories", t["with"])  # defaults to this repository only
+    def test_no_app_token_action_remains(self):
+        for f in WF.glob("*.yml"):
+            self.assertNotIn("create-github-app-token", f.read_text(), f.name)
+            self.assertNotIn("PUSH_APP", f.read_text(), f.name)
 
-    def test_the_pin_is_recorded_in_the_version_table(self):
-        sha = TOKEN_ACTION.match(step_by_id("deploy", "push-token")["uses"]).group(1)
-        self.assertIn(sha, VERSIONS)
-        for name in PUSHERS:
-            self.assertEqual(step_by_id(name, "push-token")["uses"], step_by_id("deploy", "push-token")["uses"])
-
-    def test_the_private_key_exists_only_in_jobs_that_run_in_the_production_environment(self):
+    def test_the_token_exists_only_in_jobs_that_run_in_the_production_environment(self):
         holders = []
         for f in WF.glob("*.yml"):
             for jname, job in yaml.safe_load(f.read_text())["jobs"].items():
-                if "PUSH_APP_PRIVATE_KEY" in yaml.dump(job):
+                if "secrets.PUSH_TOKEN" in yaml.dump(job):
                     holders.append(f.stem)
                     self.assertEqual(job.get("environment"), "production", f"{f.stem}/{jname}")
         self.assertEqual(sorted(holders), sorted(PUSHERS))
 
-    def test_a_missing_app_is_an_explicit_error_not_a_confusing_one(self):
-        for name in PUSHERS:
-            msg = next(s for s in steps(name) if s.get("name") == "Push token is not configured")
-            self.assertIn("vars.PUSH_APP_CLIENT_ID == ''", msg["if"])
-            self.assertIn("github-push-app.md", msg["run"])
-
     def test_deploy_still_records_state_after_a_failed_run(self):
         self.assertEqual(step_by_id("deploy", "stage")["if"], "always()")
-        self.assertIn("always()", step_by_id("deploy", "push-token")["if"])
-        push = next(s for s in steps("deploy") if "git push" in s.get("run", ""))
-        self.assertIn("always()", push["if"])
+        self.assertIn("always()", push_step("deploy")["if"])
+
+
+class PushStep(unittest.TestCase):
+    """Runs the push script with a fake git first in PATH, to see exactly what it would push and where."""
+
+    def run_push(self, name, token):
+        script = push_step(name)["run"]
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, "git")
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_GIT_LOG"\n')
+            fake.chmod(0o755)
+            log = Path(d, "log")
+            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_GIT_LOG": str(log), "PUSH_TOKEN": token,
+                   "GITHUB_REPOSITORY": "owner/repo", "GITHUB_REF_NAME": "main"}
+            r = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True, check=False)
+            return r, (log.read_text().split() if log.exists() else None)
+
+    def test_pushes_head_to_the_current_branch_with_the_token_in_the_url_only(self):
+        for name in PUSHERS:
+            r, argv = self.run_push(name, "TOKEN123")
+            self.assertEqual(r.returncode, 0, (name, r.stderr))
+            self.assertEqual(argv, ["push", "https://x-access-token:TOKEN123@github.com/owner/repo.git", "HEAD:main"], name)
+            self.assertNotIn("TOKEN123", r.stdout + r.stderr)
+
+    def test_an_empty_token_is_an_explicit_error_and_nothing_is_pushed(self):
+        for name in PUSHERS:
+            r, argv = self.run_push(name, "")
+            self.assertEqual(r.returncode, 1, name)
+            self.assertIn("::error::main only accepts PRs", r.stdout)
+            self.assertIsNone(argv, name)
 
 
 class StageStep(unittest.TestCase):
