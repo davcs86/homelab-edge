@@ -78,3 +78,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The Proxmox host joins as `pve` with Tailscale DNS off.** The edge probes `pve.ts.<domain>:8006` and names its heartbeat for
   `pve`; MagicDNS would rewrite `/etc/resolv.conf`, which apt and the guests depend on. With DNS off the heartbeat cannot resolve
   `status.ts.<domain>`, so its curl config pins the edge's tailnet IP.
+- **The SSH hardening is judged by `sshd -T`, not by the file it wrote.** sshd takes the first value it sees and includes
+  `sshd_config.d/*.conf` in name order, so an earlier-sorted drop-in can silently win. `sshd -T` prints `without-password`
+  for `prohibit-password`, so both spellings count. A failed `sshd -t` removes the drop-in again, because the next start
+  would otherwise fail.
+- **`authorized_keys` is appended to in place.** On Proxmox it is a symlink into `/etc/pve`; the toolkit's file writer
+  replaces files, which would turn the symlink into a regular file and leave the cluster copy stale.
+- **Password SSH is disabled behind a typed proof and an automatic revert.** A lockout on a remote-only host costs a trip to
+  the box, so `ssh-harden` arms a transient `systemd-run` timer (no `at` dependency) that removes the drop-in after
+  10 minutes unless `ssh-harden-keep` stops it.

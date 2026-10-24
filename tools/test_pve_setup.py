@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tarfile
+from datetime import timedelta
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ spec = importlib.util.spec_from_file_location("pve_setup", Path(__file__).with_n
 pve = importlib.util.module_from_spec(spec)
 sys.modules["pve_setup"] = pve
 spec.loader.exec_module(pve)
+REAL_PINNED_KERNEL = pve.pinned_kernel
 runner = CliRunner()
 
 RES = [
@@ -455,6 +457,308 @@ class Undo(unittest.TestCase):
         with Env(ts=TS_UP) as env:
             env.run(["tailscale-leave"], "n\npve\ny\n")
         self.assertEqual(env.cmds(), ["tailscale logout"])
+
+
+KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKApHPR1HHqSoai6FXgCUwxfeeDChmSuhagQGqcsILm laptop"
+KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOuroREm2DF2lSNSCIX5dUsHdhR2Yk3pPWJ79E45zZR other"
+SSHD_T = "sshd -T -f /etc/ssh/sshd_config"
+HARD = "passwordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\n"
+SOFT = "passwordauthentication yes\nkbdinteractiveauthentication no\npermitrootlogin without-password\n"
+NET = {"tailscale ip -4": "100.64.0.9\n", "hostname -I": "192.168.1.10 100.64.0.9 fd00::1\n", "systemctl cat ssh.service": "[Unit]\n"}
+
+
+def fake_fp(line):
+    return "256 SHA256:FP-" + line.split()[-1] if pve.key_ident(line) else None
+
+
+class Keys(Isolated):
+    def setUp(self):
+        super().setUp()
+        self.fp = mock.patch.object(pve, "key_fingerprint", fake_fp)
+        self.fp.start()
+
+    def tearDown(self):
+        self.fp.stop()
+
+    def test_ident_accepts_plain_keys_only(self):
+        self.assertEqual(pve.key_ident(KEY)[0], "ssh-ed25519")
+        self.assertIsNone(pve.key_ident("hello world"))
+        self.assertIsNone(pve.key_ident('command="x" ' + KEY))
+        self.assertIsNone(pve.key_ident("# " + KEY))
+
+    def test_paste_dedupes_and_skips_junk(self):
+        with Env() as env:
+            r = env.run(["ssh-harden"], f"3\n{KEY}\n{KEY}\nnot a key\n{KEY2}\n\n", dry=True)
+        self.assertIn("new     256 SHA256:FP-laptop", r.output)
+        self.assertEqual(r.output.count("SHA256:FP-laptop"), 1)
+        self.assertIn("skipping a line that is not a plain public key", r.output)
+        self.assertIn("append 2 line(s) to /root/.ssh/authorized_keys in place (a symlink is kept)", r.output)
+
+    def test_only_https_urls_and_a_size_cap(self):
+        with self.assertRaises(ValueError):
+            pve.fetch_key_text("http://github.com/x.keys")
+        big = mock.MagicMock()
+        big.__enter__.return_value.read.return_value = b"x" * 70000
+        with mock.patch.object(pve.urllib.request, "urlopen", return_value=big), self.assertRaises(ValueError):
+            pve.fetch_key_text("https://github.com/x.keys")
+
+    def test_fetch_error_stops_cleanly(self):
+        with Env() as env, mock.patch.object(pve, "fetch_key_text", side_effect=ValueError("only https:// URLs are fetched")):
+            r = env.run(["ssh-harden"], "1\nhttp://x\n", dry=True)
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("cannot read the keys", r.output)
+
+    def test_append_keeps_a_symlink_and_adds_a_missing_newline(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "cluster").write_text("old")
+        (d / "ak").symlink_to(d / "cluster")
+        pve.append_lines(str(d / "ak"), ["new"])
+        self.assertTrue((d / "ak").is_symlink())
+        self.assertEqual((d / "cluster").read_text().splitlines(), ["old", "new"])
+        pve.append_lines(str(d / "fresh/.ssh/ak"), ["k"])
+        self.assertEqual(oct((d / "fresh/.ssh/ak").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(oct((d / "fresh/.ssh").stat().st_mode & 0o777), "0o700")
+
+
+class SshHarden(Isolated):
+    TEXTS = {pve.AUTHORIZED_KEYS: KEY + "\n"}
+
+    def env(self, eff=SOFT, texts=None, soft=None):
+        return Env(texts={**self.TEXTS, **(texts or {})}, soft={SSHD_T: eff, **NET, **(soft or {})})
+
+    def test_effective_parse_accepts_both_spellings(self):
+        for spelling in ("without-password", "prohibit-password"):
+            eff = {"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": spelling}
+            self.assertTrue(pve.ssh_is_hardened(eff))
+        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "yes", "kbdinteractiveauthentication": "no", "permitrootlogin": "without-password"}))
+        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": "yes"}))
+        self.assertFalse(pve.ssh_is_hardened(None))
+
+    def test_plan_shows_proof_commands_dropin_revert_and_checks(self):
+        with self.env() as env:
+            r = env.run(["ssh-harden"], "\n\n", dry=True)
+        self.assertEqual(r.exit_code, 0, r.output)
+        for text in ("ssh root@192.168.1.10", "ssh root@100.64.0.9", "write /etc/ssh/sshd_config.d/10-hardening.conf",
+                     "PermitRootLogin prohibit-password", "validate with sshd -t", "systemd-run --unit pve-setup-ssh-revert --on-active=10m",
+                     "systemctl reload ssh", "check the effective settings with sshd -T"):
+            self.assertIn(text, r.output)
+
+    def test_step_order_arms_the_revert_before_the_reload(self):
+        with self.env() as env:
+            env.run(["ssh-harden"], "\nproven\ny\ny\n")
+        kinds = [type(s).__name__ for s in env.steps]
+        self.assertEqual(kinds, ["Write", "Do", "Cmd", "Cmd", "Do"])
+        self.assertIn("systemd-run", env.cmds()[0])
+        self.assertEqual(env.cmds()[1], "systemctl reload ssh")
+        self.assertIsNotNone(env.steps[0].undo)
+
+    def test_declining_the_revert_leaves_it_out(self):
+        with self.env() as env:
+            env.run(["ssh-harden"], "\nproven\nn\ny\n")
+        self.assertEqual(env.cmds(), ["systemctl reload ssh"])
+
+    def test_an_armed_revert_is_not_armed_twice(self):
+        with self.env(soft={"systemctl is-active pve-setup-ssh-revert.timer": "active\n"}) as env:
+            env.run(["ssh-harden"], "\nproven\ny\n")
+        self.assertEqual(env.cmds(), ["systemctl reload ssh"])
+
+    def test_wrong_proof_changes_nothing(self):
+        with self.env() as env:
+            r = env.run(["ssh-harden"], "\nnope\n")
+        self.assertEqual(env.steps, [])
+        self.assertIn("Cancelled", r.output)
+
+    def test_already_hardened_is_a_no_op(self):
+        with self.env(eff=HARD, texts={pve.SSH_DROPIN: pve.SSH_DROPIN_TEXT}) as env:
+            r = env.run(["ssh-harden"], "\nproven\n")
+        self.assertIn("already disabled", r.output)
+        self.assertEqual(env.steps, [])
+
+    def test_refuses_without_a_key_or_without_the_tailnet(self):
+        with self.env(texts={pve.AUTHORIZED_KEYS: ""}) as env, mock.patch.object(pve, "collect_keys", return_value=[]):
+            r = env.run(["ssh-harden"], "")
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("refusing to disable passwords", r.output)
+        with self.env(soft={"tailscale ip -4": None}) as env:
+            r = env.run(["ssh-harden"], "\n")
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("not on the tailnet", r.output)
+
+    def test_new_key_is_appended_before_the_proof(self):
+        with self.env(texts={pve.AUTHORIZED_KEYS: ""}) as env, mock.patch.object(pve, "key_fingerprint", fake_fp):
+            env.run(["ssh-harden"], f"3\n{KEY}\n\ny\nproven\nn\ny\n")
+        self.assertIsInstance(env.steps[0], pve.Append)
+        self.assertEqual(env.steps[0].lines, [KEY])
+
+    def test_failed_verification_offers_to_remove_the_dropin(self):
+        undo = pve.Do("remove the drop-in and reload sshd", lambda: True)
+        ran = []
+        done = [pve.Write(pve.SSH_DROPIN, "x", undo=undo), pve.Do("validate", lambda: True)]
+        with mock.patch.object(pve, "run_step", lambda s: ran.append(s) or True), mock.patch.object(pve.typer, "confirm", return_value=True):
+            pve.offer_rollback(done, pve.Do("verify", lambda: False))
+        self.assertEqual(ran, [undo])
+
+    def test_validate_removes_the_dropin_when_sshd_rejects_it(self):
+        d = Path(tempfile.mkdtemp())
+        with mock.patch.object(pve, "SSH_DROPIN", str(d / "10-hardening.conf")):
+            (d / "10-hardening.conf").write_text("x")
+            with mock.patch.object(pve.subprocess, "run", return_value=mock.Mock(returncode=255)):
+                self.assertFalse(pve.validate_or_remove())
+            self.assertFalse((d / "10-hardening.conf").exists())
+            (d / "10-hardening.conf").write_text("x")
+            with mock.patch.object(pve.subprocess, "run", return_value=mock.Mock(returncode=0)):
+                self.assertTrue(pve.validate_or_remove())
+            self.assertTrue((d / "10-hardening.conf").exists())
+
+    def test_verify_names_the_earlier_dropin_that_wins(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "00-cloud.conf").write_text("PasswordAuthentication yes\n")
+        (d / "99-late.conf").write_text("")
+        with mock.patch.object(pve, "SSH_DROPIN", str(d / "10-hardening.conf")), mock.patch.object(pve, "sshd_effective", lambda: {"passwordauthentication": "yes"}), \
+                mock.patch.object(pve, "fail") as f:
+            self.assertFalse(pve.verify_effective())
+        self.assertIn("00-cloud.conf", f.call_args[0][0])
+        self.assertNotIn("99-late.conf", f.call_args[0][0])
+
+    def test_keep_cancels_the_revert(self):
+        with self.env(soft={"systemctl is-active pve-setup-ssh-revert.timer": "active\n"}) as env:
+            env.run(["ssh-harden-keep"], "proven\ny\n")
+        self.assertEqual(env.cmds(), ["systemctl stop pve-setup-ssh-revert.timer"])
+        with self.env() as env:
+            r = env.run(["ssh-harden-keep"], "")
+        self.assertIn("No automatic revert is armed", r.output)
+
+    def test_remove_undoes_the_dropin(self):
+        with self.env(texts={pve.SSH_DROPIN: pve.SSH_DROPIN_TEXT}, soft={"systemctl is-active pve-setup-ssh-revert.timer": "active\n"}) as env:
+            env.run(["ssh-harden-remove"], "ssh\ny\n")
+        self.assertEqual([s.path for s in env.steps if isinstance(s, pve.Remove)], [pve.SSH_DROPIN])
+        self.assertEqual(env.cmds(), ["systemctl reload ssh", "systemctl stop pve-setup-ssh-revert.timer"])
+        with self.env() as env:
+            self.assertIn("not installed", env.run(["ssh-harden-remove"], "").output)
+
+    def test_service_name_falls_back_to_sshd(self):
+        with Env(soft={}):
+            self.assertEqual(pve.ssh_service(), "sshd")
+
+    def test_status_reports_ssh(self):
+        with self.env(eff=HARD) as env:
+            self.assertIn("SSH: password logins off", env.run(["status"]).output)
+        with self.env() as env:
+            self.assertIn("password logins NOT disabled", env.run(["status"]).output)
+        with Env() as env:
+            self.assertIn("unknown", env.run(["status"]).output)
+        with self.env(eff=HARD, soft={"systemctl is-active pve-setup-ssh-revert.timer": "active\n"}) as env:
+            self.assertIn("ssh-harden-keep", env.run(["status"]).output)
+
+
+SS = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 4096 *:8006 *:*\nLISTEN 0 4096 [::]:3128 [::]:*\n"
+TS_PVE = {**TS_UP, "hostname": "pve", "tags": ["tag:pve"]}
+BOOT = "proxmox-boot-tool kernel list"
+
+
+class Gate(Isolated):
+    def setUp(self):
+        super().setUp()
+        d = Path(tempfile.mkdtemp())
+        pve.LOG = d / "pve-setup.log"
+        self.boot = "boot-1"
+        self.patches = [mock.patch.object(pve, "pinned_kernel", lambda: "6.17.2-1-pve"), mock.patch.object(pve, "running_kernel", lambda: "6.17.2-1-pve"),
+                        mock.patch.object(pve, "zfs_arc_max", lambda: pve.ARC_MAX_BYTES), mock.patch.object(pve, "boot_id", lambda: self.boot)]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        pve.LOG = Path(tempfile.mkdtemp()) / "pve-setup.log"
+
+    def env(self, **kw):
+        soft = {SSHD_T: HARD, "ss -ltnH": SS, **NET, **kw.pop("soft", {})}
+        return Env(texts={pve.AUTHORIZED_KEYS: KEY + "\n"}, soft=soft, ts=kw.pop("ts", TS_PVE))
+
+    def test_all_host_checks_pass_and_are_recorded(self):
+        with self.env() as env:
+            r = env.run(["remote-gate"])
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertEqual(r.output.count("PASS"), 7)
+        self.assertNotIn("FAIL", r.output)
+        self.assertIn("Passing boots recorded: 1", r.output)
+        self.assertIn("phone, Wi-Fi off", r.output)
+        self.assertEqual(json.loads(pve.gate_path().read_text())["passing_boots"][0]["boot_id"], "boot-1")
+        self.assertEqual(oct(pve.gate_path().stat().st_mode & 0o777), "0o600")
+
+    def test_a_second_boot_proves_a_clean_reboot(self):
+        with self.env() as env:
+            env.run(["remote-gate"])
+            env.run(["remote-gate"])
+            self.assertIn("Passing boots recorded: 1", env.run(["remote-gate"]).output)
+            self.boot = "boot-2"
+            r = env.run(["remote-gate"])
+        self.assertIn("Passing boots recorded: 2. Clean reboot with a passing gate afterwards: yes", r.output)
+
+    def test_each_failure_is_reported_and_exits_nonzero(self):
+        cases = {
+            "password SSH": dict(soft={SSHD_T: SOFT}),
+            "web UI listening": dict(soft={"ss -ltnH": "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"}),
+            "tailscale up as pve": dict(ts={**TS_PVE, "hostname": "pve-1"}),
+        }
+        for name, kw in cases.items():
+            with self.subTest(name), self.env(**kw) as env:
+                r = env.run(["remote-gate"])
+            self.assertEqual(r.exit_code, 1, r.output)
+            self.assertRegex(r.output, rf"FAIL  .*{name}")
+        for attr, value, label in (("running_kernel", lambda: "6.8.0", "running kernel"), ("zfs_arc_max", lambda: 0, "ARC cap"), ("pinned_kernel", lambda: None, "running kernel")):
+            with self.subTest(label), mock.patch.object(pve, attr, value), self.env() as env:
+                r = env.run(["remote-gate"])
+            self.assertRegex(r.output, rf"FAIL  .*{label}")
+
+    def test_failing_gate_records_nothing(self):
+        with self.env(soft={SSHD_T: SOFT}) as env:
+            env.run(["remote-gate"])
+        self.assertFalse(pve.gate_path().exists())
+
+    def test_dry_run_records_nothing(self):
+        with self.env() as env:
+            env.run(["remote-gate"], dry=True)
+        self.assertFalse(pve.gate_path().exists())
+
+    def test_soak_in_progress(self):
+        with self.env() as env:
+            r = env.run(["remote-gate"])
+        self.assertIn("0 h of the 48 h soak so far; run this again after it.", r.output)
+
+    def test_soak_completion(self):
+        old = (pve.datetime.now(pve.timezone.utc) - timedelta(hours=50)).isoformat(timespec="seconds")
+        pve.gate_path().write_text(json.dumps({"passing_boots": [{"boot_id": "boot-0", "at": old}], "first_pass_at": old}))
+        with self.env() as env:
+            r = env.run(["remote-gate"])
+        self.assertIn("The 48 h soak is complete and the gate passes now.", r.output)
+
+    def test_reboot_is_refused_while_the_gate_fails(self):
+        with self.env(soft={SSHD_T: SOFT}) as env:
+            r = env.run(["remote-gate", "--reboot"], "reboot\ny\n")
+        self.assertEqual(r.exit_code, 1)
+        self.assertEqual(env.steps, [])
+        self.assertIn("must pass before a reboot test", r.output)
+
+    def test_reboot_needs_the_typed_word(self):
+        with self.env() as env:
+            env.run(["remote-gate", "--reboot"], "nope\n")
+        self.assertEqual(env.steps, [])
+        with self.env() as env:
+            env.run(["remote-gate", "--reboot"], "reboot\ny\n")
+        self.assertEqual(env.cmds(), ["systemctl reboot"])
+
+    def test_pinned_kernel_parsing(self):
+        out = "Manually selected kernels:\nNone.\n\nAutomatically selected kernels:\n6.17.2-1-pve\n\nPinned kernel:\n6.17.2-1-pve\n"
+        none = "Manually selected kernels:\nNone.\n\nPinned kernel:\nNone.\n"
+        for text, want in ((out, "6.17.2-1-pve"), (none, None), ("", None)):
+            with mock.patch.object(pve, "soft", lambda argv, t=text: t or None):
+                self.assertEqual(REAL_PINNED_KERNEL(), want)
+
+    def test_listening_ports(self):
+        with mock.patch.object(pve, "soft", lambda argv: SS):
+            self.assertEqual(pve.listening_ports(), {22, 8006, 3128})
 
 
 class ConfigArchive(unittest.TestCase):

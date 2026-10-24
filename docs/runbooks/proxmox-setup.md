@@ -35,9 +35,21 @@ Re-running a task does the missing part and nothing else. `vm-template`, `vm-cre
 (IDs cannot collide, and a same-named guest needs a yes). A plan that fails part-way offers the exact commands that undo what
 it already did, and you decide; declining leaves things as they are and a re-run resumes.
 
+## Host hardening (guide section 7)
+
+Do this after `tailscale-join`, with the console still logged in.
+
+| Command | What it does |
+|---|---|
+| `ssh-harden` | 1. Adds your key to `/root/.ssh/authorized_keys` from a URL (https only, e.g. `https://github.com/<you>.keys`), a file or pasted lines: each line is validated with `ssh-keygen`, shown with its fingerprint, and appended in place only if missing (the file is a symlink into the cluster filesystem and is never replaced). 2. Prints the two logins to prove from new terminals on your laptop (LAN and tailnet address) and waits for you to type `proven`. 3. Writes `/etc/ssh/sshd_config.d/10-hardening.conf`, runs `sshd -t` (removing the file again if it fails), optionally arms a 10-minute automatic revert, reloads sshd, then checks `sshd -T`. |
+| `ssh-harden-keep` | Cancels the automatic revert once both logins are proven (type `proven`). |
+| `remote-gate` | The guide's remote-readiness gate, host side: password SSH off, a key installed, 22 and 8006 listening, tailscale up as `pve` with `tag:pve`, the running kernel is the pinned one, ZFS ARC cap 3 GiB. Records passing boots in `~/.pve-setup-gate.json` (a second passing boot proves the clean reboot; 48 h after the first pass the soak is complete) and prints what only you can check. `remote-gate --reboot` refuses unless every check passes, needs the word `reboot`, then reboots; run it again afterwards. |
+
+The first value in sshd wins, so an earlier-sorted drop-in (say `00-cloud.conf` with `PasswordAuthentication yes`) beats this one: the `sshd -T` check names such files when the result is wrong. Undo: `ssh-harden-remove`. Keys are never removed.
+
 ## Inspect
 
-`status` lists the host, Tailscale, the heartbeat, every guest, storage, backup jobs and toolkit users. It is read-only and marks
+`status` lists the host, Tailscale, the heartbeat, whether password SSH is off (and whether the revert is still armed), every guest, storage, backup jobs and toolkit users. It is read-only and marks
 what the toolkit created with `*`.
 
 ## Undo
@@ -53,6 +65,7 @@ Undo touches only marked things, and each one needs you to type the target's ID 
 | `storage-remove` | drops the definition; the data is not touched, but guests with disks there lose access until it is re-added |
 | `backup-job-remove` | drops the job; existing backups stay |
 | `api-token-revoke` | revokes one token or deletes the user |
+| `ssh-harden-remove` | removes the hardening drop-in and reloads sshd; cancels a pending revert |
 
 ## Config backup and restore
 
@@ -73,6 +86,8 @@ apt list), after one confirmation. Cluster config, network and fstab are never a
 - Token for `heartbeat`: `gatus_heartbeat_pve_token` from `secrets/edge.sops.yaml`; the edge's tailnet IP from `ssh david_admin@edge tailscale ip -4`.
 - Cloud image: pick the image and its published SHA-256 yourself; the script refuses to import without a matching checksum.
   Use an image with `qemu-guest-agent` and `cloud-init`.
+- For `ssh-harden`: your public key (or its GitHub `.keys` URL), a second machine for the two login proofs, and the console. `ssh-keygen` must be installed (it is on Proxmox).
+- For `remote-gate`: the kernel pin (`proxmox-boot-tool kernel pin <version>`) and the ZFS ARC cap from the guide's section 5 are checked but not set by this toolkit.
 - Guests join the tailnet themselves; give each the hostname its tag requires (`docs/runbooks/onboard-service.md`).
 
 ## Tests
