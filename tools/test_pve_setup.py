@@ -27,7 +27,7 @@ RES = [
 JOB = {"id": "pve-setup-nightly", "schedule": "03:30", "storage": "bk", "mode": "snapshot", "all": 1,
        "prune-backups": "keep-weekly=4,keep-daily=7", "enabled": 1}
 TS_UP = {"package": "1.98.10", "held": True, "backend": "Running", "hostname": "pve", "tags": ["tag:pve"],
-         "control": "https://hs.example.test", "dns": True}
+         "control": "https://hs.example.test", "dns": False}
 LIST = "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian bookworm main\n"
 
 
@@ -86,10 +86,10 @@ class Env:
 
 
 class Heartbeat(unittest.TestCase):
-    ANSWERS = "status.ts.example.test\n\n60\nTOKEN-VALUE\n"
+    ANSWERS = "status.ts.example.test\n\n60\nTOKEN-VALUE\n100.64.0.1\n"
 
     def desired(self):
-        return pve.heartbeat_files("status.ts.example.test", "home_proxmox-heartbeat", 60, "TOKEN-VALUE")
+        return pve.heartbeat_files("status.ts.example.test", "home_proxmox-heartbeat", 60, "TOKEN-VALUE", "100.64.0.1")
 
     def test_fresh_install_plans_everything_and_hides_the_token(self):
         with Env() as env:
@@ -98,6 +98,18 @@ class Heartbeat(unittest.TestCase):
         self.assertNotIn("TOKEN-VALUE", r.output)
         self.assertIn("-K /etc/edge-heartbeat.curl https://status.ts.example.test/api/v1/endpoints/home_proxmox-heartbeat/external", r.output)
         self.assertIn("mode 0600", r.output)
+
+    def test_curl_config_pins_the_edge_address_so_dns_can_stay_off(self):
+        content = self.desired()[pve.HEARTBEAT_FILES[0]][0]
+        self.assertIn('resolve = "status.ts.example.test:443:100.64.0.1"', content)
+        self.assertIn('header = "Authorization: Bearer TOKEN-VALUE"', content)
+        self.assertNotIn("resolve", pve.heartbeat_files("h", "e", 60, "T")[pve.HEARTBEAT_FILES[0]][0])
+
+    def test_edge_address_must_be_a_tailnet_address(self):
+        with Env() as env:
+            r = env.run(["heartbeat"], "status.ts.example.test\n\n60\nT\n8.8.8.8\nnope\n100.64.0.1\n", dry=True)
+        self.assertEqual(r.output.count("a tailnet address in 100.64.0.0/10"), 2)
+        self.assertNotIn("8.8.8.8\n", r.output.split("== ")[-1])
 
     def test_unchanged_install_does_nothing(self):
         texts = {p: c for p, (c, _, _) in self.desired().items()}
@@ -118,40 +130,103 @@ class Heartbeat(unittest.TestCase):
         self.assertNotIn("TOKEN-VALUE", r.output)
 
 
-class Tailscale(unittest.TestCase):
+class Tailscale(Isolated):
+    OS = mock.patch.object(pve.Path, "read_text", return_value='VERSION_CODENAME="trixie"\n')
+    REPO = {pve.TAILSCALE_LIST: LIST.replace("bookworm", "trixie")}
+
+    def install(self, ts, text="\n", soft=None):
+        with Env(ts=ts, texts=self.REPO, soft=soft) as env, mock.patch.object(pve.os.path, "exists", return_value=True), self.OS:
+            return env.run(["tailscale-install"], text, dry=True)
+
+    def test_pin_matches_the_edge_version_file(self):
+        versions = (Path(__file__).parent.parent / "inventories/prod/group_vars/all/versions.yml").read_text()
+        pinned = next(l.split('"')[1] for l in versions.splitlines() if l.startswith("tailscale_package_version:"))
+        self.assertEqual(pve.TAILSCALE_VERSION, pinned)
+
+    def test_install_defaults_to_the_edge_pin(self):
+        r = self.install(None, "\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("tailscale=1.98.10", r.output)
+        self.assertIn("check that tailscale 1.98.10 exists in apt", r.output)
+        self.assertIn("systemctl enable --now tailscaled", r.output)
+
     def test_install_is_a_no_op_at_the_pinned_version(self):
-        with Env(ts=TS_UP, texts={pve.TAILSCALE_LIST: LIST}) as env, mock.patch.object(pve.os.path, "exists", return_value=True), \
-                mock.patch.object(pve.Path, "read_text", return_value='VERSION_CODENAME="bookworm"\n'):
-            r = env.run(["tailscale-install"], "1.98.10\n", dry=True)
+        r = self.install(TS_UP, "\n", soft={"systemctl is-active tailscaled": "active\n"})
         self.assertIn("Nothing to do", r.output, r.output)
 
     def test_install_upgrades_with_held_package_flags(self):
-        with Env(ts={**TS_UP, "package": "1.90.0"}, texts={pve.TAILSCALE_LIST: LIST}) as env, \
-                mock.patch.object(pve.os.path, "exists", return_value=True), \
-                mock.patch.object(pve.Path, "read_text", return_value='VERSION_CODENAME="bookworm"\n'):
-            r = env.run(["tailscale-install"], "1.98.10\n", dry=True)
+        r = self.install({**TS_UP, "package": "1.90.0"}, "\n", soft={"systemctl is-active tailscaled": "active\n"})
         self.assertIn("--allow-change-held-packages --allow-downgrades tailscale=1.98.10", r.output, r.output)
         self.assertNotIn("apt-get update", r.output)
 
-    def test_join_hides_the_key(self):
-        with Env() as env:
-            r = env.run(["tailscale-join"], "https://hs.example.test\nxstock\ny\nSECRET-KEY-VALUE\n", dry=True)
+    def test_another_version_warns(self):
+        self.assertIn("the edge pins 1.98.10", self.install(None, "1.100.0\n").output)
+
+    def test_availability_check_stops_on_a_missing_version(self):
+        with mock.patch.object(pve, "soft", lambda argv: " tailscale | 1.98.9 | https://x trixie/main amd64 Packages\n"):
+            self.assertFalse(pve.apt_has_version("1.98.10"))
+        with mock.patch.object(pve, "soft", lambda argv: " tailscale | 1.98.10 | https://x trixie/main amd64 Packages\n"):
+            self.assertTrue(pve.apt_has_version("1.98.10"))
+
+    def join(self, text, ts=None, env=None, dry=True):
+        with Env(ts=ts) as e:
+            return runner.invoke(pve.app, (["--dry-run"] if dry else []) + ["tailscale-join"], input=text, env=env)
+
+    def test_join_uses_the_guide_defaults_and_hides_the_key(self):
+        r = self.join("https://hs.example.test\n\n\nSECRET-KEY-VALUE\n")
         self.assertEqual(r.exit_code, 0, r.output)
         self.assertNotIn("SECRET-KEY-VALUE", r.output)
-        self.assertIn("--auth-key file:/run/pve-setup-authkey", r.output)
+        self.assertIn("--hostname pve --accept-dns=false --accept-routes=false --auth-key file:/run/pve-setup-authkey", r.output)
         self.assertNotIn("--reset", r.output)
+        self.assertIn("tailscale ping --c 3 --timeout 10s edge", r.output)
+        self.assertIn("tailscale ip -4", r.output)
+        self.assertIn("registered as 'pve', not 'pve-1'", r.output)
+
+    def test_other_name_warns(self):
+        r = self.join("https://hs.example.test\nworkbench\n\nKEY\n")
+        self.assertIn("expect the name 'pve'", r.output)
+        self.assertIn("--hostname workbench", r.output)
+
+    def test_dns_can_be_overridden(self):
+        r = self.join("https://hs.example.test\n\ny\nKEY\n")
+        self.assertIn("--accept-dns=true", r.output)
+
+    def test_empty_key_means_login_url(self):
+        r = self.join("https://hs.example.test\n\n\n\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("approve-device", r.output)
+        self.assertNotIn("--auth-key", r.output)
+        self.assertNotIn("/run/pve-setup-authkey", r.output)
+        self.assertIn("--timeout 15m", r.output)
 
     def test_join_already_joined_asks_for_no_key(self):
-        with Env(ts=TS_UP) as env:
-            r = env.run(["tailscale-join"], "https://hs.example.test\npve\ny\n", dry=True)
+        r = self.join("https://hs.example.test\n\n\n", ts=TS_UP)
         self.assertEqual(r.exit_code, 0, r.output)
         self.assertIn("Already joined", r.output)
         self.assertIn("Nothing to do", r.output)
 
     def test_join_with_other_settings_reauthenticates(self):
-        with Env(ts=TS_UP) as env:
-            r = env.run(["tailscale-join"], "https://hs.example.test\nnew-name\ny\nKEY\n", dry=True)
+        r = self.join("https://hs.example.test\nnew-name\n\nKEY\n", ts=TS_UP)
         self.assertIn("--reset --force-reauth", r.output)
+
+    def test_reauth_over_a_tailnet_ssh_session_needs_a_yes(self):
+        env = {"SSH_CONNECTION": "100.64.0.5 50000 100.64.0.9 22"}
+        with Env(ts=TS_UP) as e:
+            r = runner.invoke(pve.app, ["tailscale-join"], input="https://hs.example.test\nnew-name\n\nn\n", env=env)
+        self.assertIn("can cut it", r.output)
+        self.assertIn("Cancelled", r.output)
+        self.assertEqual(e.steps, [])
+
+    def test_lan_ssh_session_is_not_warned(self):
+        env = {"SSH_CONNECTION": "192.168.1.5 50000 192.168.1.10 22"}
+        r = self.join("https://hs.example.test\nnew-name\n\nKEY\n", ts=TS_UP, env=env)
+        self.assertNotIn("can cut it", r.output)
+
+    def test_stale_node_is_caught_after_joining(self):
+        with mock.patch.object(pve, "tailscale_state", lambda: {"hostname": "pve-1"}):
+            self.assertFalse(pve.node_registered_as("pve"))
+        with mock.patch.object(pve, "tailscale_state", lambda: {"hostname": "pve"}):
+            self.assertTrue(pve.node_registered_as("pve"))
 
     def test_join_requires_tailscale_outside_dry_run(self):
         with Env(ts=None) as env:

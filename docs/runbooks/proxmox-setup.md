@@ -21,9 +21,9 @@ Download `tools/pve-setup.py` and `tools/pve-setup.requirements.txt`. The comman
 
 | Command | What it does |
 |---|---|
-| `tailscale-install` | repo + pinned package + `apt-mark hold`; skips what is already there, and can move a held package to another version |
-| `tailscale-join` | `tailscale up` with a pre-auth key (hidden input, 0600 file, deleted after); already-joined hosts are left alone, a changed hostname/server/DNS setting re-authenticates with `--reset --force-reauth` |
-| `heartbeat` | systemd timer pushing to Gatus; rewrites only the files that differ (the token file is compared but never printed) |
+| `tailscale-install` | repo + the edge's pinned package (default 1.98.10, checked to exist in apt first) + `apt-mark hold` + `systemctl enable --now tailscaled`; skips what is already there, and can move a held package to another version |
+| `tailscale-join` | `tailscale up` as node `pve` with `--accept-dns=false --accept-routes=false` (a different name is warned about; DNS stays off unless you say yes). The pre-auth key goes through a hidden prompt and a 0600 file; an empty key prints a login URL to approve with `node-admin -> approve-device`. Afterwards it checks the node registered as `pve` (not `pve-1`), prints the tailnet IP, pings the edge and lists the admin-side checks. Already-joined hosts are left alone; a changed setting re-authenticates with `--reset --force-reauth` and asks first when your SSH session runs over the tailnet |
+| `heartbeat` | systemd timer pushing to Gatus; the edge's tailnet IP is pinned in the curl config (`resolve =`) so it works with Tailscale DNS off; rewrites only the files that differ (the token file is compared but never printed) |
 | `vm-template` | checksum-verified cloud image → cloud-init template (PVE 8.1+) |
 | `vm-create` | full clone: cores, memory, disk, IP |
 | `lxc-create` | unprivileged container; Docker nesting is an explicit question |
@@ -69,8 +69,8 @@ apt list), after one confirmation. Cluster config, network and fstab are never a
 
 ## Before you start
 
-- Key for `tailscale-join`: `preauthkeys create --tags tag:pve --expiration 1h` on the edge (`docs/runbooks/tailnet-devices.md`).
-- Token for `heartbeat`: `gatus_heartbeat_pve_token` from `secrets/edge.sops.yaml`; if DNS management stays off, `status.ts.<domain>` will not resolve and the timer fails.
+- Key for `tailscale-join`: `preauthkeys create --tags tag:pve --expiration 1h` on the edge (`docs/runbooks/tailnet-devices.md`), or skip it and approve the login URL. If an old `pve` or `pve01` node exists, remove it first (`node-admin -> list-devices`, `remove-device`), or the new one registers as `pve-1`.
+- Token for `heartbeat`: `gatus_heartbeat_pve_token` from `secrets/edge.sops.yaml`; the edge's tailnet IP from `ssh david_admin@edge tailscale ip -4`.
 - Cloud image: pick the image and its published SHA-256 yourself; the script refuses to import without a matching checksum.
   Use an image with `qemu-guest-agent` and `cloud-init`.
 - Guests join the tailnet themselves; give each the hostname its tag requires (`docs/runbooks/onboard-service.md`).

@@ -75,3 +75,6 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   prefix, users the comment `created by pve-setup`; status shows them and undo removes only them, behind a typed
   confirmation. Config restore applies only the files the toolkit itself wrote: cluster config, network and fstab
   are verified and planned but never applied (a wrong `/etc/pve` or `interfaces` file takes effect at once).
+- **The Proxmox host joins as `pve` with Tailscale DNS off.** The edge probes `pve.ts.<domain>:8006` and names its heartbeat for
+  `pve`; MagicDNS would rewrite `/etc/resolv.conf`, which apt and the guests depend on. With DNS off the heartbeat cannot resolve
+  `status.ts.<domain>`, so its curl config pins the edge's tailnet IP.

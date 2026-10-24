@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -38,6 +39,8 @@ TAG = "pve-setup"
 JOB_PREFIX = "pve-setup-"
 USER_COMMENT = "created by pve-setup"
 
+NODE_NAME = "pve"  # Gatus probes tcp://pve.ts.<domain>:8006; the heartbeat endpoint is named for it
+TAILSCALE_VERSION = "1.98.10"  # keep in step with tailscale_package_version in inventories/prod/group_vars/all/versions.yml
 HEARTBEAT_FILES = ("/etc/edge-heartbeat.curl", "/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer")
 TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list"
 TAILSCALE_KEYRING = "/usr/share/keyrings/tailscale-archive-keyring.gpg"
@@ -428,13 +431,23 @@ def warn_same_name(name: str, kind: str) -> bool:
 
 
 # ---------- tailnet ----------
+def apt_has_version(version: str) -> bool:
+    out = soft(["apt-cache", "madison", "tailscale"]) or ""
+    if f"| {version} |" in out:
+        return True
+    fail(f"tailscale {version} is not in the apt repository; stop and ask which version the edge supports before installing another")
+    return False
+
+
 def tailscale_install() -> None:
-    """Add Tailscale's apt repo, install a pinned version, and hold it."""
+    """Add Tailscale's apt repo, install a pinned version, hold it and start tailscaled."""
     st = tailscale_state()
     if st:
         typer.echo(f"tailscale {st['package'] or '?'} is installed{' and held' if st['held'] else ''}.")
     codename = dict(l.split("=", 1) for l in Path("/etc/os-release").read_text().splitlines() if "=" in l)["VERSION_CODENAME"].strip('"')
-    version = typer.prompt("Tailscale package version to pin (must be one your headscale supports)")
+    version = typer.prompt("Tailscale package version (the edge's pin; headscale rejects clients outside its range)", default=TAILSCALE_VERSION)
+    if version != TAILSCALE_VERSION:
+        warn(f"the edge pins {TAILSCALE_VERSION} (versions.yml); only continue if you changed that pin")
     base = f"https://pkgs.tailscale.com/stable/debian/{codename}"
     listing = f"deb [signed-by={TAILSCALE_KEYRING}] https://pkgs.tailscale.com/stable/debian {codename} main\n"
     steps: list[Step] = []
@@ -442,21 +455,51 @@ def tailscale_install() -> None:
     if not repo_ok:
         steps += [Cmd(["curl", "-fsSL", "-o", TAILSCALE_KEYRING, f"{base}.noarmor.gpg"]), Write(TAILSCALE_LIST, listing),
                   Cmd(["apt-get", "update"])]
-    if not st or st["package"] != version:
-        steps.append(Cmd(["apt-get", "install", "-y", "--allow-change-held-packages", "--allow-downgrades", f"tailscale={version}"]))
-    if not st or not st["held"] or st["package"] != version:
+    installing = not st or st["package"] != version
+    if installing:
+        steps += [Do(f"check that tailscale {version} exists in apt (stops here if not)", lambda: apt_has_version(version)),
+                  Cmd(["apt-get", "install", "-y", "--allow-change-held-packages", "--allow-downgrades", f"tailscale={version}"])]
+    if not st or not st["held"] or installing:
         steps.append(Cmd(["apt-mark", "hold", "tailscale"]))
+    if installing or (soft(["systemctl", "is-active", "tailscaled"]) or "").strip() != "active":
+        steps.append(Cmd(["systemctl", "enable", "--now", "tailscaled"]))
     execute(Plan("Install Tailscale", steps))
 
 
+def ssh_over_tailnet() -> bool:
+    try:
+        return ipaddress.ip_address(os.environ.get("SSH_CONNECTION", "").split()[0]) in ipaddress.ip_network("100.64.0.0/10")
+    except (IndexError, ValueError):
+        return False
+
+
+def node_registered_as(host: str) -> bool:
+    st = tailscale_state() or {}
+    got = st.get("hostname")
+    if got == host:
+        typer.echo(f"Registered as '{got}'.")
+        return True
+    fail(f"registered as '{got}', not '{host}': a stale node named '{host}' exists. Remove it (node-admin -> list-devices, then remove-device), "
+         "run `tailscale logout` here and join again")
+    return False
+
+
+JOIN_CHECKLIST = """Next, from an admin device:
+  - node-admin -> list-devices: the node is online, tagged tag:pve, no key expiry
+  - https://status.ts.<domain>: the proxmox probe turns green within a few minutes
+  - ssh root@<tailscale ip> works (after SSH hardening)"""
+
+
 def tailscale_join() -> None:
-    """Join the tailnet with a pre-auth key (read with hidden input, passed by file)."""
+    """Join the tailnet as the node the edge expects (name pve, DNS and routes off)."""
     st = tailscale_state()
     if st is None and not STATE["dry_run"]:
         raise typer.Exit(fail("tailscale is not installed; run tailscale-install first"))
     login = typer.prompt("Control server URL, e.g. https://hs.<domain>")
-    host = ask_name("Node hostname (hostnames must be unique on the tailnet)", node().lower())
-    dns = typer.confirm("Let Tailscale manage DNS? (needed to resolve MagicDNS names; rewrites /etc/resolv.conf)", default=True)
+    host = ask_name("Node name on the tailnet", NODE_NAME)
+    if host != NODE_NAME:
+        warn(f"the edge's Gatus probe (tcp://{NODE_NAME}.ts.<domain>:8006) and heartbeat expect the name '{NODE_NAME}'")
+    dns = typer.confirm("Let Tailscale manage DNS? Leave off: it rewrites /etc/resolv.conf, and apt and the guests depend on plain LAN DNS", default=False)
     running = bool(st and st["backend"] == "Running")
     if running and st["hostname"] == host and st["control"] == login.rstrip("/") and st["dns"] == dns:  # type: ignore[index]
         typer.echo(f"Already joined as '{host}' to {login} (tags: {', '.join(st['tags']) or 'none'}).")  # type: ignore[index]
@@ -464,17 +507,41 @@ def tailscale_join() -> None:
         return
     if running:
         warn(f"already joined as '{st['hostname']}' to {st['control']}; continuing re-authenticates it with the settings above")  # type: ignore[index]
-    key = typer.prompt("Pre-auth key carrying the node's tag", hide_input=True)
+        if ssh_over_tailnet() and not STATE["dry_run"] and not typer.confirm(
+                "This SSH session runs over the tailnet and re-authenticating can cut it. Continue?", default=False):
+            typer.echo("Cancelled. Run this at the console or over the LAN.")
+            return
+    key = typer.prompt("Pre-auth key carrying the node's tag (leave empty to log in with a URL instead)", hide_input=True, default="",
+                       show_default=False)
     keyfile = "/run/pve-setup-authkey"
-    extra = ["--reset", "--force-reauth"] if running else []
-    argv = ["tailscale", "up", *extra, "--login-server", login, "--auth-key", f"file:{keyfile}", "--hostname", host,
-            f"--accept-dns={str(dns).lower()}"]
-    execute(Plan("Join the tailnet", [
-        Write(keyfile, key + "\n", 0o600, secret=True), Cmd(argv, shlex.join(argv)), Cmd(["tailscale", "status"]),
-    ], cleanup=[keyfile]))
+    flags = [*(["--reset", "--force-reauth"] if running else []), "--login-server", login, "--hostname", host,
+             f"--accept-dns={str(dns).lower()}", "--accept-routes=false"]
+    steps: list[Step] = []
+    if key:
+        steps.append(Write(keyfile, key + "\n", 0o600, secret=True))
+        argv = ["tailscale", "up", *flags, "--auth-key", f"file:{keyfile}"]
+    else:
+        argv = ["tailscale", "up", *flags, "--timeout", "15m"]
+        typer.echo("tailscale up will print a login URL; approve it with node-admin -> approve-device (user david_admin, tags pve).")
+    steps += [Cmd(argv, shlex.join(argv)), Do(f"check that the node registered as '{host}', not '{host}-1'", lambda: node_registered_as(host)),
+              Cmd(["tailscale", "ip", "-4"]), Cmd(["tailscale", "ping", "--c", "3", "--timeout", "10s", "edge"]), Cmd(["tailscale", "status"])]
+    if execute(Plan("Join the tailnet", steps, cleanup=[keyfile])) and not STATE["dry_run"]:
+        typer.echo(JOIN_CHECKLIST)
 
 
-def heartbeat_files(host: str, endpoint: str, seconds: int, token: str) -> dict[str, tuple[str, int, bool]]:
+def ask_edge_ip() -> str:
+    while True:
+        v = typer.prompt("Edge tailnet IPv4, from `ssh david_admin@edge tailscale ip -4` (needed while Tailscale DNS is off; empty = use DNS)",
+                         default="", show_default=False).strip()
+        try:
+            if not v or ipaddress.ip_address(v) in ipaddress.ip_network("100.64.0.0/10"):
+                return v
+        except ValueError:
+            pass
+        typer.echo("  a tailnet address in 100.64.0.0/10")
+
+
+def heartbeat_files(host: str, endpoint: str, seconds: int, token: str, edge_ip: str = "") -> dict[str, tuple[str, int, bool]]:
     url = f"https://{host}/api/v1/endpoints/{endpoint}/external?success=true"
     unit = f"""[Unit]
 Description=Push a heartbeat to Gatus
@@ -496,7 +563,8 @@ AccuracySec=5s
 [Install]
 WantedBy=timers.target
 """
-    return {HEARTBEAT_FILES[0]: (f'header = "Authorization: Bearer {token}"\n', 0o600, True),
+    curl = f'header = "Authorization: Bearer {token}"\n' + (f'resolve = "{host}:443:{edge_ip}"\n' if edge_ip else "")
+    return {HEARTBEAT_FILES[0]: (curl, 0o600, True),
             HEARTBEAT_FILES[1]: (unit, 0o644, False), HEARTBEAT_FILES[2]: (timer, 0o644, False)}
 
 
@@ -506,9 +574,10 @@ def heartbeat() -> None:
     endpoint = typer.prompt("Gatus external endpoint key (<group>_<name>)", default="home_proxmox-heartbeat")
     seconds = ask_int("Push every N seconds", 10, 3600, 60)
     token = typer.prompt("Heartbeat token", hide_input=True)
-    if not STATE["dry_run"] and subprocess.run(["getent", "hosts", host], capture_output=True, check=False).returncode != 0:
-        warn(f"{host} does not resolve here; the timer will fail until DNS works")
-    wanted = heartbeat_files(host, endpoint, seconds, token)
+    edge_ip = ask_edge_ip()
+    if not edge_ip and not STATE["dry_run"] and subprocess.run(["getent", "hosts", host], capture_output=True, check=False).returncode != 0:
+        warn(f"{host} does not resolve here and no edge IP was given; the timer will fail")
+    wanted = heartbeat_files(host, endpoint, seconds, token, edge_ip)
     differing = [p for p, (content, _, _) in wanted.items() if read_text(p) != content]
     state = heartbeat_state()
     steps: list[Step] = [Write(p, wanted[p][0], wanted[p][1], wanted[p][2]) for p in differing]
