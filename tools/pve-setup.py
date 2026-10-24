@@ -1516,8 +1516,8 @@ def major_bumps(rows: list[dict]) -> list[dict]:
 
 
 UPDATE_NOTE = """If a new kernel was installed:
-  1. proxmox-boot-tool kernel pin <new version> --next-boot, then reboot (it boots once; a hang plus a power cycle falls back to the pinned kernel)
-  2. pin it for good only after a clean boot: proxmox-boot-tool kernel pin <new version>
+  1. proxmox-boot-tool kernel pin <new version> --next-boot, proxmox-boot-tool refresh, then reboot (it boots once; a hang plus a power cycle falls back to the pinned kernel)
+  2. pin it for good only after a clean boot: proxmox-boot-tool kernel pin <new version>, then proxmox-boot-tool refresh
 Tailscale stays held until the edge's headscale pin moves. Do not attempt the next Proxmox major version remotely."""
 
 
@@ -1621,6 +1621,94 @@ def host_config_check_menu() -> None:
 def host_config_check() -> None:
     """Check section 8 end to end: snapshots, pool reserve, firewall, 2FA, heartbeat, config backup (read-only)."""
     if not host_config_check_impl():
+        raise typer.Exit(1)
+
+
+# ---------- service check (read-only diagnostics) ----------
+# kind "service" must be active; optional timers and oneshots are judged only when installed.
+SERVICE_UNITS: list[tuple[str, str, bool]] = [
+    ("pve-cluster.service", "service", True), ("pvedaemon.service", "service", True), ("pveproxy.service", "service", True),
+    ("pvestatd.service", "service", True), ("pve-firewall.service", "service", True), ("ssh.service", "service", True),
+    ("tailscaled.service", "service", True), ("pve-heartbeat.timer", "timer", False), ("pve-heartbeat.service", "oneshot", False),
+    ("pve-config-backup.timer", "timer", False), ("pve-config-backup.service", "oneshot", False)]
+SHOW_PROPS = "LoadState,ActiveState,SubState,Result,NRestarts,ExecMainStatus,ActiveEnterTimestamp"
+RESTART_WARN = 3
+REDACTIONS = [
+    (re.compile(r"(?i)\b(bearer\s+|authorization:\s*\w+\s+)[A-Za-z0-9._~+/=-]{6,}"), r"\1<redacted>"),
+    (re.compile(r"(?i)\b(hskey-\S+|tskey-\S+|AGE-SECRET-KEY-\S+|PVEAPIToken=\S+)"), "<redacted>"),
+    (re.compile(r"(?i)((?:auth-?key|token|secret|password|passwd|apikey|api-key)[\"']?\s*[=:]\s*[\"']?)[^\s\"',;]+"), r"\1<redacted>"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S), "<redacted private key>")]
+
+
+def redact(text: str) -> str:
+    for pat, repl in REDACTIONS:
+        text = pat.sub(repl, text)
+    return text
+
+
+def parse_show(text: str | None) -> dict[str, str]:
+    return dict(l.split("=", 1) for l in (text or "").splitlines() if "=" in l)
+
+
+def judge_unit(kind: str, required: bool, props: dict[str, str]) -> tuple[str, str]:
+    """Return (PASS|WARN|FAIL|INFO, detail) for one unit from its `systemctl show` properties."""
+    if not props or props.get("LoadState", "not-found") == "not-found":
+        return ("FAIL", "not installed") if required else ("INFO", "not installed")
+    active, sub, result = props.get("ActiveState", ""), props.get("SubState", ""), props.get("Result", "")
+    restarts = int(props["NRestarts"]) if props.get("NRestarts", "").isdigit() else 0
+    since = props.get("ActiveEnterTimestamp", "")
+    if kind == "oneshot":
+        if active == "failed" or result not in ("success", ""):
+            return "FAIL", f"last run {result or active} (exit {props.get('ExecMainStatus', '?')})"
+        return "PASS", "last run succeeded" if result == "success" else "has not run yet"
+    if active != "active":
+        return "FAIL", f"{active}/{sub}" + (f", result {result}" if result and result != "success" else "")
+    if kind == "service" and restarts >= RESTART_WARN:
+        return "WARN", f"{sub}, restarted {restarts} times since the last start"
+    return "PASS", f"{sub}" + (f" since {since}" if since else "")
+
+
+def unit_journal(unit: str, lines: int) -> list[str]:
+    out = soft(["journalctl", "-u", unit, "-p", "err", "--since", "24 hours ago", "-n", str(lines), "--no-pager", "-o", "short-iso", "-q"]) or ""
+    return [redact(l)[:200] for l in out.splitlines() if l.strip()]
+
+
+def service_results() -> list[tuple[str, str, str]]:
+    units = [(f"{ssh_service()}.service" if u == "ssh.service" else u, kind, req) for u, kind, req in SERVICE_UNITS]
+    probes = [(u, kind, req, soft(["systemctl", "show", f"--property={SHOW_PROPS}", u])) for u, kind, req in units]
+    if all(out is None for *_, out in probes):
+        raise typer.Exit(fail("systemctl cannot query systemd here; run this on the Proxmox host"))
+    rows = [(u, *(judge_unit(kind, req, parse_show(out)) if out is not None else ("FAIL", "systemctl show failed"))) for u, kind, req, out in probes]
+    failed = [l.split()[0] for l in (soft(["systemctl", "--failed", "--no-legend", "--plain", "--no-pager"]) or "").splitlines() if l.split()]
+    known = {u for u, _, _ in units}
+    rows += [(u, "FAIL", "failed (systemctl --failed)") for u in failed if u not in known]
+    for label, armed, keep in (("ssh hardening revert", revert_armed(), "ssh-harden-keep"), ("firewall revert", fw_revert_armed(), "firewall-keep")):
+        if armed:
+            rows.append((label, "WARN", f"an automatic revert is armed; run {keep} once the tests pass"))
+    return rows
+
+
+def service_check_impl(lines: int, show_all: bool) -> bool:
+    rows = service_results()
+    typer.secho("\n== Service check", bold=True)
+    for unit, level, detail in rows:
+        typer.echo(f"  {level:<4}  {unit}  ({detail})")
+        if lines > 0 and (show_all or level in ("WARN", "FAIL")) and unit.endswith((".service", ".timer")):
+            for l in unit_journal(unit, lines):
+                typer.echo(f"        | {l}")
+    bad = sum(1 for _, level, _ in rows if level == "FAIL")
+    typer.echo(f"\n{bad} failing, {sum(1 for _, level, _ in rows if level == 'WARN')} warning(s). Journal lines are errors from the last 24 h with secrets masked; hostnames and addresses are kept.")
+    return bad == 0
+
+
+def service_check_menu() -> None:
+    service_check_impl(5, False)
+
+
+def service_check(lines: int = typer.Option(5, help="Journal error lines per unit that is not PASS (0 = none)"),
+                  all_units: bool = typer.Option(False, "--all", help="Show journal errors for every unit, not just WARN and FAIL")) -> None:
+    """Read-only: state, restarts and recent errors of the services this host depends on (Proxmox, sshd, Tailscale, heartbeat, backups)."""
+    if not service_check_impl(lines, all_units):
         raise typer.Exit(1)
 
 
@@ -2202,7 +2290,8 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
     ("Host hardening", [("ssh-harden", "Install your SSH key and disable password SSH", ssh_harden),
                         ("ssh-harden-keep", "Cancel the automatic SSH revert", ssh_harden_keep),
                         ("remote-gate", "Run the remote-readiness checks", remote_gate_menu)]),
-    ("Inspect", [("status", "Show what exists and what this toolkit created", status)]),
+    ("Inspect", [("status", "Show what exists and what this toolkit created", status),
+                 ("service-check", "State and recent errors of the services this host depends on", service_check_menu)]),
     ("Undo (only things this toolkit created)", [
         ("tailscale-leave", "Leave the tailnet / uninstall Tailscale", tailscale_leave), ("heartbeat-remove", "Remove the heartbeat", heartbeat_remove),
         ("vm-destroy", "Destroy a VM, template or container", vm_destroy), ("storage-remove", "Remove a storage definition", storage_remove),
@@ -2217,12 +2306,13 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
 ]
 for _section, _items in SECTIONS:
     for _name, _label, _fn in _items:
-        if _name not in ("status", "config-restore", "remote-gate", "config-backup", "host-config-check"):
+        if _name not in ("status", "config-restore", "remote-gate", "config-backup", "host-config-check", "service-check"):
             app.command(_name, help=_fn.__doc__)(_fn)
 app.command("status")(status_command)
 app.command("config-restore")(config_restore)
 app.command("config-backup")(config_backup)
 app.command("host-config-check")(host_config_check)
+app.command("service-check")(service_check)
 app.command("remote-gate")(remote_gate)
 
 

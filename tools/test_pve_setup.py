@@ -1153,6 +1153,9 @@ class Update(Isolated):
         self.assertIn("3 package(s) would change", r.output)
         self.assertNotIn("\\n", r.output)
 
+    def test_kernel_pin_steps_include_the_refresh_the_proxmox_docs_require(self):
+        self.assertEqual(pve.UPDATE_NOTE.count("proxmox-boot-tool refresh"), 2)
+
     def test_a_failed_simulation_stops(self):
         with Env(soft=ZFS_SOFT) as env:
             r = env.run(["update"], "", dry=True)
@@ -1411,6 +1414,156 @@ class BackupTimer(Isolated):
         self.assertIn("ZFS: pool rpool", r.output)
         self.assertIn("weekly timer enabled", r.output)
 
+
+
+def show(load="loaded", active="active", sub="running", result="success", restarts="0", status="0", since="Sat 2026-10-24 01:00:00 PDT"):
+    return (f"LoadState={load}\nActiveState={active}\nSubState={sub}\nResult={result}\nNRestarts={restarts}\nExecMainStatus={status}\n"
+            f"ActiveEnterTimestamp={since}\n")
+
+
+SHOW_CMD = f"systemctl show --property={pve.SHOW_PROPS} "
+HEALTHY = {SHOW_CMD + u: show(sub="running" if k == "service" else "waiting" if k == "timer" else "dead", active="active" if k != "oneshot" else "inactive")
+           for u, k, _ in pve.SERVICE_UNITS}
+HEALTHY.update({SHOW_CMD + u: show(load="not-found", active="inactive", sub="dead", result="") for u in
+                ("pve-heartbeat.timer", "pve-heartbeat.service", "pve-config-backup.timer", "pve-config-backup.service")})
+
+
+class Redaction(unittest.TestCase):
+    def test_secrets_are_masked_and_everything_else_survives(self):
+        cases = {
+            "curl: (22) HTTP 401 Authorization: Bearer abc123.DEF-456_x": ("abc123", "HTTP 401"),
+            "header = Authorization: Basic dXNlcjpwYXNz": ("dXNlcjpwYXNz", "Authorization"),
+            "tailscale up --auth-key=tskey-auth-kABC123": ("tskey-auth", "tailscale up"),
+            "preauth hskey-authreq-1234567890abcdef used": ("hskey-authreq", "preauth"),
+            "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ": ("AGE-SECRET-KEY", ""),
+            'login failed password="hunter2", retry': ("hunter2", "login failed"),
+            "api token: s3cr3t-value rejected": ("s3cr3t-value", "rejected"),
+            "Authorization: PVEAPIToken=root@pam!x=aaaa-bbbb": ("aaaa-bbbb", "Authorization"),
+        }
+        for line, (secret, kept) in cases.items():
+            out = pve.redact(line)
+            self.assertNotIn(secret, out, line)
+            self.assertIn("<redacted>", out, line)
+            self.assertIn(kept, out, line)
+
+    def test_private_key_blocks_are_masked_across_lines(self):
+        out = pve.redact("before\n-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\nBBBB\n-----END OPENSSH PRIVATE KEY-----\nafter")
+        self.assertNotIn("AAAA", out)
+        self.assertTrue(out.startswith("before") and out.endswith("after"))
+
+    def test_ordinary_text_is_untouched(self):
+        for line in ("pve-cluster: unable to open database /var/lib/pve-cluster/config.db", "basic configuration loaded for 192.168.1.2 (pve.ts.example.test)",
+                     "tokens are not mentioned here"):
+            self.assertEqual(pve.redact(line), line)
+
+
+class JudgeUnit(unittest.TestCase):
+    def test_required_service(self):
+        self.assertEqual(pve.judge_unit("service", True, pve.parse_show(show()))[0], "PASS")
+        self.assertEqual(pve.judge_unit("service", True, pve.parse_show(show(active="failed", sub="failed", result="exit-code")))[0], "FAIL")
+        self.assertEqual(pve.judge_unit("service", True, pve.parse_show(show(active="activating", sub="auto-restart")))[0], "FAIL")
+        self.assertEqual(pve.judge_unit("service", True, {}), ("FAIL", "not installed"))
+        self.assertEqual(pve.judge_unit("service", True, pve.parse_show(show(load="not-found")))[0], "FAIL")
+
+    def test_restart_storm_is_a_warning_not_a_failure(self):
+        self.assertEqual(pve.judge_unit("service", True, pve.parse_show(show(restarts="2")))[0], "PASS")
+        level, detail = pve.judge_unit("service", True, pve.parse_show(show(restarts="3")))
+        self.assertEqual(level, "WARN")
+        self.assertIn("restarted 3 times", detail)
+
+    def test_optional_units_are_info_when_absent(self):
+        self.assertEqual(pve.judge_unit("timer", False, {}), ("INFO", "not installed"))
+        self.assertEqual(pve.judge_unit("oneshot", False, pve.parse_show(show(load="not-found")))[0], "INFO")
+
+    def test_installed_but_inactive_timer_fails(self):
+        self.assertEqual(pve.judge_unit("timer", False, pve.parse_show(show(active="inactive", sub="dead")))[0], "FAIL")
+
+    def test_oneshot_is_judged_by_its_last_result(self):
+        ok = pve.judge_unit("oneshot", False, pve.parse_show(show(active="inactive", sub="dead")))
+        self.assertEqual(ok[0], "PASS")
+        bad = pve.judge_unit("oneshot", False, pve.parse_show(show(active="failed", sub="failed", result="exit-code", status="22")))
+        self.assertEqual(bad[0], "FAIL")
+        self.assertIn("exit 22", bad[1])
+
+
+class ServiceCheck(Isolated):
+    def run_check(self, soft=None, args=()):
+        with Env(soft={**HEALTHY, "systemctl cat ssh.service": "x", **(soft or {})}) as env:
+            return env.run(["service-check", *args])
+
+    def test_a_healthy_host_exits_zero_and_prints_no_journal(self):
+        r = self.run_check()
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertEqual(r.output.count("FAIL"), 0, r.output)
+        self.assertIn("PASS  pve-cluster.service", r.output)
+        self.assertIn("INFO  pve-heartbeat.timer  (not installed)", r.output)
+        self.assertNotIn("|", r.output)
+
+    def test_a_dead_service_fails_and_shows_its_masked_journal(self):
+        journal = "journalctl -u tailscaled.service -p err --since 24 hours ago -n 5 --no-pager -o short-iso -q"
+        r = self.run_check({SHOW_CMD + "tailscaled.service": show(active="failed", sub="failed", result="exit-code"),
+                            journal: "2026-10-24T01:00:00-0700 pve tailscaled[1]: login with --auth-key=tskey-auth-kSECRET failed\n"})
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("FAIL  tailscaled.service  (failed/failed, result exit-code)", r.output)
+        self.assertIn("pve tailscaled[1]", r.output)
+        self.assertNotIn("tskey-auth-kSECRET", r.output)
+        self.assertIn("1 failing", r.output)
+
+    def test_journal_is_not_read_for_passing_units_unless_asked(self):
+        asked = []
+        real = pve.unit_journal
+        with mock.patch.object(pve, "unit_journal", lambda u, n: asked.append(u) or real(u, n)):
+            self.run_check()
+            self.assertEqual(asked, [])
+            self.run_check(args=["--all"])
+        self.assertIn("pve-cluster.service", asked)
+
+    def test_zero_lines_suppresses_the_journal(self):
+        r = self.run_check({SHOW_CMD + "pveproxy.service": show(active="failed", sub="failed", result="exit-code")}, args=["--lines", "0"])
+        self.assertEqual(r.exit_code, 1)
+        self.assertNotIn("|", r.output)
+
+    def test_warnings_do_not_fail_the_command(self):
+        r = self.run_check({SHOW_CMD + "pvestatd.service": show(restarts="5")})
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("WARN  pvestatd.service", r.output)
+
+    def test_other_failed_units_are_listed_once(self):
+        r = self.run_check({"systemctl --failed --no-legend --plain --no-pager": "foo.service loaded failed failed Foo\npveproxy.service loaded failed failed X\n"})
+        self.assertEqual(r.exit_code, 1)
+        self.assertEqual(r.output.count("foo.service"), 1)
+        self.assertIn("FAIL  foo.service  (failed (systemctl --failed))", r.output)
+
+    def test_armed_reverts_are_warned_about(self):
+        r = self.run_check({"systemctl is-active pve-setup-ssh-revert.timer": "active\n", "systemctl is-active pve-setup-fw-revert.timer": "active\n"})
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("run ssh-harden-keep", r.output)
+        self.assertIn("run firewall-keep", r.output)
+
+    def test_a_failed_heartbeat_run_is_a_failure(self):
+        r = self.run_check({SHOW_CMD + "pve-heartbeat.service": show(active="failed", sub="failed", result="exit-code", status="22"),
+                            SHOW_CMD + "pve-heartbeat.timer": show(sub="waiting")})
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("FAIL  pve-heartbeat.service  (last run exit-code (exit 22))", r.output)
+
+    def test_unusable_systemctl_is_an_error_not_a_wall_of_not_installed(self):
+        with Env() as env:
+            r = env.run(["service-check"])
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("systemctl cannot query systemd", r.output)
+        self.assertNotIn("not installed", r.output)
+
+    def test_one_unit_that_cannot_be_queried_fails_alone(self):
+        soft = {k: v for k, v in HEALTHY.items() if k != SHOW_CMD + "pvestatd.service"}
+        with Env(soft={**soft, "systemctl cat ssh.service": "x"}) as env:
+            r = env.run(["service-check"])
+        self.assertIn("FAIL  pvestatd.service  (systemctl show failed)", r.output)
+        self.assertIn("PASS  pveproxy.service", r.output)
+
+    def test_sshd_named_hosts_are_covered(self):
+        with Env(soft={**HEALTHY, SHOW_CMD + "sshd.service": show(active="failed", sub="failed", result="exit-code")}) as env:
+            r = env.run(["service-check"])
+        self.assertIn("FAIL  sshd.service", r.output)
 
 
 if __name__ == "__main__":
