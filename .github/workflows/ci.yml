@@ -33,6 +33,8 @@ jobs:
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
       - name: App-deploy template (pins, secret handling, source and report steps)
         run: python3 scripts/app-deploy-template-test.py
+      - name: Gatus config renders with the expected probes (prod and staging)
+        run: python3 scripts/gatus-config-test.py
       - name: No plaintext secrets in secrets/
         run: |
           for f in secrets/*.sops.yaml; do

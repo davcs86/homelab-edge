@@ -14,7 +14,10 @@ tag and reaches nothing until a grant says so (default deny). Prod and staging o
 Migrating from the old `tag:app`: no node may still carry `tag:app` when the policy that drops it is deployed. Check
 `node-admin → list-devices`; if one does, re-tag it to `tag:xstockstrat` first.
 The edge's Caddy and Gatus upstreams resolve `xstockstrat.<ts domain>` (and `xstockstrat-staging` for staging): the VM
-must be registered under that hostname before the deploy.
+must be registered under that hostname before the deploy. Gatus probes each by its tag name (`home_xstockstrat-ui`,
+`home_xstockstrat-agent`, `home_xstockstrat-staging-ui`, `home_xstockstrat-staging-agent`) and alerts through ntfy; a probe for a
+VM that does not exist yet alerts after 3 failed minutes, so register the node first. Renaming a probe starts a new history;
+the old key stays in Gatus's database and nowhere on the status page.
 
 Deploying it from GitHub Actions: `deploy-compose-app.md`. CI reaches a workload only through a `tag:ci` grant on its
 tag; add it (and flip the `tag:ci` test for that tag from `deny` to `accept`) in the same PR as the tag.
