@@ -64,13 +64,15 @@ Every change that can lock you out or lose data takes a snapshot of the root dat
 | `snapshot-prune` | keeps the newest N toolkit snapshots (typed `prune`). |
 | `zfs-reserve` | `autotrim=on`, a `<pool>/reserved` dataset with `refreservation` (default 40G, `mountpoint=none`) so a full pool never wedges the host, and a check that a monthly scrub is scheduled (8.2). `zfs-reserve-release` frees it to recover from a full pool. |
 | `firewall` | Writes `/etc/pve/firewall/cluster.fw`: default DROP in, tailnet (`100.64.0.0/10`) and your LAN allowed on the ports you give (default 22,8006), ICMP allowed (8.3). Snapshot first, the earlier rules saved under `/root/.pve-setup`, a transient `systemd-run` timer that restores them after 10 minutes, `pve-firewall compile` before the restart (the earlier rules come back if it fails), then a check for `enabled/running`. Test SSH and the web UI over the tailnet and the LAN in fresh sessions, then run `firewall-keep` (typed `proven`). A session that comes from neither network needs the typed word `lockout`. `firewall-remove` puts the earlier rules back. Guest traffic on the bridge is not filtered until a guest firewall is enabled. |
-| `update` | `apt-get update`, a simulated `full-upgrade` list, refusal of a Proxmox major-version jump, a typed `kernel` for kernel packages, a snapshot, then `full-upgrade` (8.7). Prints the `proxmox-boot-tool kernel pin --next-boot` steps. Tailscale stays held. |
+| `update` | `apt update`, a simulated `full-upgrade` list, refusal of a Proxmox major-version jump, a typed `kernel` for kernel packages, a snapshot, then `full-upgrade` (8.7). Prints the `proxmox-boot-tool kernel pin --next-boot` steps, each followed by `proxmox-boot-tool refresh` (the guide's 5.4 omits it; the Proxmox Host Bootloader page requires it after pinning or unpinning). Tailscale stays held. |
 | `host-config-check` | Read-only: ZFS root, snapshot present, autotrim, reserve held, scrub scheduled, firewall running with the expected rules, two-factor enrolled for `root@pam`, heartbeat timer active, a config backup at most 8 days old, no automatic revert left armed. Exit code 1 on any FAIL. |
 
 Two-factor for the web UI (8.4) is a manual step in the UI (Datacenter → Permissions → Two Factor, TOTP plus recovery keys, then log in once from a fresh browser).
 The check only reads whether `root@pam` has a factor.
 
 ## Inspect
+
+`service-check` is read-only: for `pve-cluster`, `pvedaemon`, `pveproxy`, `pvestatd`, `pve-firewall`, sshd and `tailscaled` it shows state and restart count (FAIL when not active, WARN at 3 or more restarts), judges the heartbeat and config-backup timers and their last run when installed, lists any other failed unit, and warns about an armed automatic revert. Units that are not PASS get their error lines from the last 24 h (`--lines N`, `--all` for every unit); tokens, keys, auth keys and `Authorization` values are masked, hostnames and addresses are kept. Exit code 1 on any FAIL. It stops with an error when `systemctl` cannot reach systemd.
 
 `status` lists the host, Tailscale, the heartbeat, whether password SSH is off (and whether the revert is still armed), the firewall, the ZFS pool and its toolkit snapshots, the config backup timer, every guest, storage, backup jobs and toolkit users. It is read-only and marks
 what the toolkit created with `*`.

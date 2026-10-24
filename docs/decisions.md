@@ -107,6 +107,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The Proxmox heartbeat reports health, not liveness.** It pushes `success=false&error=…` when `zpool status -x`, the NVMe SMART
   status or pool capacity (≥ 85%) fail, and an unreadable pool counts as a failure, so a check that stops working cannot look
   healthy. The token is in a 0600 curl `-K` file because argv is world-readable in `/proc`.
+- **Kernel pin changes are followed by `proxmox-boot-tool refresh`.** The Proxmox Host Bootloader page says the ESPs must be
+  synchronised after setting or clearing a pin on systems that use proxmox-boot-tool; the runbook's 5.4 steps leave it out, so
+  the toolkit's `update` note includes it.
 - **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
   when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
   `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).
