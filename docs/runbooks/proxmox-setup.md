@@ -23,7 +23,7 @@ Download `tools/pve-setup.py` and `tools/pve-setup.requirements.txt`. The comman
 |---|---|
 | `tailscale-install` | repo + the edge's pinned package (default 1.98.10, checked to exist in apt first) + `apt-mark hold` + `systemctl enable --now tailscaled`; skips what is already there, and can move a held package to another version |
 | `tailscale-join` | `tailscale up` as node `pve` with `--accept-dns=false --accept-routes=false` (a different name is warned about; DNS stays off unless you say yes). The pre-auth key goes through a hidden prompt and a 0600 file; an empty key prints a login URL to approve with `node-admin -> approve-device`. Afterwards it checks the node registered as `pve` (not `pve-1`), prints the tailnet IP, pings the edge and lists the admin-side checks. Already-joined hosts are left alone; a changed setting re-authenticates with `--reset --force-reauth` and asks first when your SSH session runs over the tailnet |
-| `heartbeat` | systemd timer pushing to Gatus; the edge's tailnet IP is pinned in the curl config (`resolve =`) so it works with Tailscale DNS off; rewrites only the files that differ (the token file is compared but never printed) |
+| `heartbeat` | `pve-heartbeat.timer` pushes `success=true` to Gatus only while the host is healthy: `zpool status -x` clean, `smartctl -H` of the NVMe passing, the pool under 85% full. A failing check pushes `success=false&error=<zpool smart pool-full pool-unreadable>`, so the alert names the cause. The edge's tailnet IP is pinned in the curl config (`resolve =`) so it works with Tailscale DNS off; the token lives only in a 0600 `-K` file, never in argv. Rewrites only the files that differ. An earlier `edge-heartbeat` timer is removed after the new one is planned. Needs `smartmontools` on the host. |
 | `vm-template` | checksum-verified cloud image → cloud-init template (PVE 8.1+) |
 | `vm-create` | full clone: cores, memory, disk, IP |
 | `lxc-create` | unprivileged container; Docker nesting is an explicit question |
@@ -54,9 +54,25 @@ Do this after `tailscale-join`, with the console still logged in.
 
 The first value in sshd wins, so an earlier-sorted drop-in (say `00-cloud.conf` with `PasswordAuthentication yes`) beats this one: the `sshd -T` check names such files when the result is wrong. Undo: `ssh-harden-remove`. Keys are never removed.
 
+## Host configuration (guide section 8)
+
+Every change that can lock you out or lose data takes a snapshot of the root dataset first.
+
+| Command | What it does |
+|---|---|
+| `snapshot` | `zfs snapshot <root dataset>@pve-setup-<label>-<time>` (8.1). A snapshot of the running root cannot be rolled back live: boot a rescue environment (KVM or console) and `zfs rollback`. |
+| `snapshot-prune` | keeps the newest N toolkit snapshots (typed `prune`). |
+| `zfs-reserve` | `autotrim=on`, a `<pool>/reserved` dataset with `refreservation` (default 40G, `mountpoint=none`) so a full pool never wedges the host, and a check that a monthly scrub is scheduled (8.2). `zfs-reserve-release` frees it to recover from a full pool. |
+| `firewall` | Writes `/etc/pve/firewall/cluster.fw`: default DROP in, tailnet (`100.64.0.0/10`) and your LAN allowed on the ports you give (default 22,8006), ICMP allowed (8.3). Snapshot first, the earlier rules saved under `/root/.pve-setup`, a transient `systemd-run` timer that restores them after 10 minutes, `pve-firewall compile` before the restart (the earlier rules come back if it fails), then a check for `enabled/running`. Test SSH and the web UI over the tailnet and the LAN in fresh sessions, then run `firewall-keep` (typed `proven`). A session that comes from neither network needs the typed word `lockout`. `firewall-remove` puts the earlier rules back. Guest traffic on the bridge is not filtered until a guest firewall is enabled. |
+| `update` | `apt-get update`, a simulated `full-upgrade` list, refusal of a Proxmox major-version jump, a typed `kernel` for kernel packages, a snapshot, then `full-upgrade` (8.7). Prints the `proxmox-boot-tool kernel pin --next-boot` steps. Tailscale stays held. |
+| `host-config-check` | Read-only: ZFS root, snapshot present, autotrim, reserve held, scrub scheduled, firewall running with the expected rules, two-factor enrolled for `root@pam`, heartbeat timer active, a config backup at most 8 days old, no automatic revert left armed. Exit code 1 on any FAIL. |
+
+Two-factor for the web UI (8.4) is a manual step in the UI (Datacenter → Permissions → Two Factor, TOTP plus recovery keys, then log in once from a fresh browser).
+The check only reads whether `root@pam` has a factor.
+
 ## Inspect
 
-`status` lists the host, Tailscale, the heartbeat, whether password SSH is off (and whether the revert is still armed), every guest, storage, backup jobs and toolkit users. It is read-only and marks
+`status` lists the host, Tailscale, the heartbeat, whether password SSH is off (and whether the revert is still armed), the firewall, the ZFS pool and its toolkit snapshots, the config backup timer, every guest, storage, backup jobs and toolkit users. It is read-only and marks
 what the toolkit created with `*`.
 
 ## Undo
@@ -73,18 +89,32 @@ Undo touches only marked things, and each one needs you to type the target's ID 
 | `backup-job-remove` | drops the job; existing backups stay |
 | `api-token-revoke` | revokes one token or deletes the user |
 | `ssh-harden-remove` | removes the hardening drop-in and reloads sshd; cancels a pending revert |
+| `firewall-remove` | puts back the firewall rules from before the toolkit's first change (typed `firewall`) |
+| `snapshot-prune` | destroys old `pve-setup-` snapshots, keeping the newest N |
+| `zfs-reserve-release` | sets the reserve's `refreservation=none` |
+| `config-backup-timer-remove` | removes the weekly backup timer; archives stay |
 
 ## Config backup and restore
 
 `config-backup` writes a `0600` `.tar.gz` of `/etc/pve` (storage, users, jobs, guest configs, firewall), network, hosts, fstab, apt
 sources, sshd drop-ins and the files the toolkit wrote, plus an inventory of guests, storage and jobs, then re-reads it and checks every
-checksum. It never includes guest disks: use `backup-job` for those. **Secrets are off by default** (`/etc/pve/priv`, `*.key`, the
-heartbeat token, Tailscale's node key); if you include them, keep the archive off the host and encrypted.
+checksum. It never includes guest disks: use `backup-job` for those. **Without an `age` recipient the archive holds host files only**:
+no `/etc/pve/priv`, no `*.key`, no heartbeat token, no Tailscale node key and no `config.db`. **With a recipient** (an `age1...` key or an ssh
+public key; the prompt takes several) the archive also holds those secrets and `/var/lib/pve-cluster/config.db`, a consistent SQLite online
+copy taken while `pve-cluster` runs, and the whole archive is written as `<name>.tar.gz.age`; a plaintext copy never touches the disk outside a
+0700 work directory that is removed afterwards. Without `age` installed (`apt install age`) an encrypted archive is refused. Keep the private key
+off the host: an archive next to its own key protects nothing.
+
+`config-backup-timer` installs a weekly encrypted run (`pve-config-backup.timer`, default `Sun 03:30`, newest 8 kept, in `~/pve-setup-backups`). It
+needs recipients, and the unattended run (`config-backup --auto`) refuses to write a plaintext archive when the recipients file
+(`/etc/pve-setup-backup.recipients`) is empty. Archives stay on this host, so they protect against bad edits, not against losing the host: copy them off.
+`host-config-check` fails when the newest one is older than 8 days.
 
 `config-restore ARCHIVE` verifies the archive (checksums, no absolute or `..` paths, no links, size cap) and prints a plan: which files
 are unchanged, differ or are missing, which guests existed then and are missing now, and warnings for the risky ones. With `--stage DIR`
 it extracts the differing files into a new `0700` directory and prints an `install -D -m …` line per file; **those commands are for you
-to review and run**. The only thing it applies itself is `--apply-owned`: the files this toolkit wrote (heartbeat units, the Tailscale
+to review and run**. An encrypted archive needs `--identity <age private key file>`. `config.db` is reported as "rebuild only": it is never
+compared or applied, and the rebuild procedure (stop `pve-cluster`, replace the file, start it) is yours to run at the console. The only thing it applies itself is `--apply-owned`: the files this toolkit wrote (heartbeat units, the Tailscale
 apt list), after one confirmation. Cluster config, network and fstab are never applied automatically.
 
 ## Before you start
@@ -94,10 +124,13 @@ apt list), after one confirmation. Cluster config, network and fstab are never a
 - Cloud image: pick the image and its published SHA-256 yourself; the script refuses to import without a matching checksum.
   Use an image with `qemu-guest-agent` and `cloud-init`.
 - For `ssh-harden`: your public key (from 1Password, `ssh-add -L`, or a GitHub `.keys` URL), a second key that is independent of 1Password, a second machine for the two login proofs, and the console. `ssh-keygen` must be installed (it is on Proxmox).
+- For `heartbeat`: `apt install smartmontools`. For an encrypted `config-backup`: `apt install age`, and an age public key whose private half is kept off the host.
+- For `firewall`: your LAN subnet and an SSH session from the tailnet or that subnet, plus the console.
 - For `remote-gate`: the kernel pin (`proxmox-boot-tool kernel pin <version>`) and the ZFS ARC cap from the guide's section 5 are checked but not set by this toolkit.
 - Guests join the tailnet themselves; give each the hostname its tag requires (`docs/runbooks/onboard-service.md`).
 
 ## Tests
 
-`python3 -m unittest tools/test_pve_setup.py` (needs the pinned requirements): every probe and command is faked, so no host or root.
-It cannot prove the Proxmox commands themselves; preview with `--dry-run` on the host before the first real run.
+`python3 -m unittest tools/test_pve_setup.py` (needs the pinned requirements): every probe and command is faked, so no host or root. The encrypted-backup
+tests call the real `age`, `age-keygen` and `sqlite3` and the heartbeat script runs under `bash` with fake `zpool`, `smartctl` and `curl`; CI installs `age`
+and sets `PVE_SETUP_REQUIRE_AGE=1` so a missing `age` fails instead of skipping. It cannot prove the Proxmox commands themselves; preview with `--dry-run` on the host before the first real run.

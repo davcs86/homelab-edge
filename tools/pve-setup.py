@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -47,17 +48,27 @@ SSHD_CONFIG = "/etc/ssh/sshd_config"
 SSH_DROPIN = "/etc/ssh/sshd_config.d/10-hardening.conf"
 SSH_DROPIN_TEXT = "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowAgentForwarding no\n"
 SSH_REVERT_UNIT = "pve-setup-ssh-revert"
-HEARTBEAT_FILES = ("/etc/edge-heartbeat.curl", "/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer")
+HB_CURL, HB_ENV, HB_SCRIPT = "/etc/pve-heartbeat.curl", "/etc/pve-heartbeat.env", "/usr/local/sbin/pve-heartbeat"
+HB_UNIT, HB_TIMER = "/etc/systemd/system/pve-heartbeat.service", "/etc/systemd/system/pve-heartbeat.timer"
+HEARTBEAT_FILES = (HB_CURL, HB_ENV, HB_SCRIPT, HB_UNIT, HB_TIMER)
+OLD_HEARTBEAT_FILES = ("/etc/edge-heartbeat.curl", "/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer")
+SNAP_PREFIX = "pve-setup-"
+RESERVE_DATASET_NAME = "reserved"
 TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list"
 TAILSCALE_KEYRING = "/usr/share/keyrings/tailscale-archive-keyring.gpg"
 
+BACKUP_RECIPIENTS = "/etc/pve-setup-backup.recipients"
+BACKUP_UNIT, BACKUP_TIMER = "/etc/systemd/system/pve-config-backup.service", "/etc/systemd/system/pve-config-backup.timer"
 # Config backup: (path, is pmxcfs). Files the toolkit writes itself are "owned"; keys and tokens are "secret".
-OWNED_FILES = ["/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer", TAILSCALE_LIST]
+OWNED_FILES = [HB_UNIT, HB_TIMER, HB_SCRIPT, HB_ENV, TAILSCALE_LIST, BACKUP_UNIT, BACKUP_TIMER, BACKUP_RECIPIENTS]
 HOST_FILES = ["/etc/hostname", "/etc/hosts", "/etc/fstab", "/etc/network/interfaces", "/etc/apt/sources.list"]
 HOST_DIRS = [("/etc/network/interfaces.d", False), ("/etc/apt/sources.list.d", False), ("/etc/ssh/sshd_config.d", False),
-             ("/etc/pve", True)]
-SECRET_FILES = ["/etc/edge-heartbeat.curl"]
-SECRET_DIRS = [("/var/lib/tailscale", False)]
+             ("/etc/modprobe.d", False), ("/etc/pve", True)]
+SECRET_FILES = [HB_CURL]
+SECRET_DIRS: list[tuple[str, bool]] = []  # the guide: never back up /var/lib/tailscale; a rebuilt host re-registers
+CLUSTER_DB = "/var/lib/pve-cluster/config.db"
+BACKUP_INSTALL_DIR = "/usr/local/lib/pve-setup"
+BACKUP_KEEP = 8
 MAX_FILE = 10 * 2**20
 MAX_ARCHIVE = 200 * 2**20
 
@@ -77,6 +88,7 @@ class Write:
     mode: int = 0o644
     secret: bool = False
     undo: Optional["Step"] = None
+    in_place: bool = False  # pmxcfs (/etc/pve) cannot chmod or rename-create safely
 
 
 @dataclass
@@ -160,6 +172,11 @@ def sha256_of(path: str) -> str:
 
 
 def write_file(step: Write) -> None:
+    if step.in_place:
+        Path(step.path).parent.mkdir(parents=True, exist_ok=True)
+        with open(step.path, "w") as f:
+            f.write(step.content)
+        return
     Path(step.path).parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(Path(step.path).parent), prefix=".pve-setup-")
     try:
@@ -354,8 +371,10 @@ def tailscale_state() -> dict | None:
 
 def heartbeat_state() -> dict:
     return {"files": {p: os.path.exists(p) for p in HEARTBEAT_FILES},
-            "enabled": (soft(["systemctl", "is-enabled", "edge-heartbeat.timer"]) or "").strip(),
-            "active": (soft(["systemctl", "is-active", "edge-heartbeat.timer"]) or "").strip()}
+            "enabled": (soft(["systemctl", "is-enabled", "pve-heartbeat.timer"]) or "").strip(),
+            "active": (soft(["systemctl", "is-active", "pve-heartbeat.timer"]) or "").strip(),
+            "legacy": [p for p in OLD_HEARTBEAT_FILES if os.path.exists(p)],
+            "legacy_active": (soft(["systemctl", "is-active", "edge-heartbeat.timer"]) or "").strip() == "active"}
 
 
 def backup_jobs() -> list[dict]:
@@ -572,54 +591,87 @@ def ask_edge_ip() -> str:
         typer.echo("  a tailnet address in 100.64.0.0/10")
 
 
-def heartbeat_files(host: str, endpoint: str, seconds: int, token: str, edge_ip: str = "") -> dict[str, tuple[str, int, bool]]:
-    url = f"https://{host}/api/v1/endpoints/{endpoint}/external?success=true"
-    unit = f"""[Unit]
-Description=Push a heartbeat to Gatus
-After=network-online.target tailscaled.service
+HEARTBEAT_SCRIPT_TEXT = """#!/usr/bin/env bash
+# Pushes Proxmox health to Gatus; written by pve-setup.
+set -u
+. /etc/pve-heartbeat.env
+ok=true
+why=""
+zpool status -x 2>/dev/null | grep -q 'all pools are healthy' || { ok=false; why="zpool"; }
+smartctl -H "$NVME" 2>/dev/null | grep -q PASSED || { ok=false; why="$why smart"; }
+cap=$(zpool list -H -o capacity "$POOL" 2>/dev/null | tr -dc 0-9)
+if [ -z "$cap" ]; then ok=false; why="$why pool-unreadable"; elif [ "$cap" -ge 85 ]; then ok=false; why="$why pool-full"; fi
+args=(--url-query "success=$ok")
+[ "$ok" = true ] || args+=(--url-query "error=${why# }")
+exec curl -fsS --max-time 15 -X POST -K /etc/pve-heartbeat.curl "${args[@]}" "https://$STATUS_HOST/api/v1/endpoints/$ENDPOINT/external" >/dev/null
+"""
+
+
+def heartbeat_files(host: str, endpoint: str, seconds: int, token: str, edge_ip: str = "", pool: str = "rpool",
+                    nvme: str = "/dev/nvme0") -> dict[str, tuple[str, int, bool]]:
+    unit = """[Unit]
+Description=Push Proxmox health to Gatus
+After=tailscaled.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/curl -fsS --max-time 10 -X POST -K /etc/edge-heartbeat.curl {url}
+ExecStart=/usr/local/sbin/pve-heartbeat
 """
     timer = f"""[Unit]
-Description=Gatus heartbeat every {seconds}s
+Description=Proxmox heartbeat every {seconds}s
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec={seconds}s
+OnBootSec={seconds}
+OnUnitActiveSec={seconds}
 AccuracySec=5s
 
 [Install]
 WantedBy=timers.target
 """
+    env = f"STATUS_HOST={shlex.quote(host)}\nENDPOINT={shlex.quote(endpoint)}\nPOOL={shlex.quote(pool)}\nNVME={shlex.quote(nvme)}\n"
     curl = f'header = "Authorization: Bearer {token}"\n' + (f'resolve = "{host}:443:{edge_ip}"\n' if edge_ip else "")
-    return {HEARTBEAT_FILES[0]: (curl, 0o600, True),
-            HEARTBEAT_FILES[1]: (unit, 0o644, False), HEARTBEAT_FILES[2]: (timer, 0o644, False)}
+    return {HB_CURL: (curl, 0o600, True), HB_ENV: (env, 0o644, False), HB_SCRIPT: (HEARTBEAT_SCRIPT_TEXT, 0o750, False),
+            HB_UNIT: (unit, 0o644, False), HB_TIMER: (timer, 0o644, False)}
 
 
 def heartbeat() -> None:
-    """Install the Gatus dead-man heartbeat as a systemd timer."""
+    """Install the guide's Proxmox heartbeat: health checks pushed to Gatus every minute."""
     host = typer.prompt("Gatus host, e.g. status.ts.<domain>")
     endpoint = typer.prompt("Gatus external endpoint key (<group>_<name>)", default="home_proxmox-heartbeat")
     seconds = ask_int("Push every N seconds", 10, 3600, 60)
+    pool = ask_name("ZFS pool to watch", root_pool() or "rpool")
+    nvme = typer.prompt("NVMe device for the SMART check", default="/dev/nvme0")
+    if not re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", nvme):
+        raise typer.Exit(fail("the device must look like /dev/nvme0"))
     token = typer.prompt("Heartbeat token", hide_input=True)
     edge_ip = ask_edge_ip()
-    if not edge_ip and not STATE["dry_run"] and subprocess.run(["getent", "hosts", host], capture_output=True, check=False).returncode != 0:
-        warn(f"{host} does not resolve here and no edge IP was given; the timer will fail")
-    wanted = heartbeat_files(host, endpoint, seconds, token, edge_ip)
+    if not STATE["dry_run"]:
+        if not shutil.which("smartctl"):
+            warn("smartctl is not installed (apt install smartmontools); every push would report 'smart'")
+        if not edge_ip and subprocess.run(["getent", "hosts", host], capture_output=True, check=False).returncode != 0:
+            warn(f"{host} does not resolve here and no edge IP was given; the timer will fail")
+    wanted = heartbeat_files(host, endpoint, seconds, token, edge_ip, pool, nvme)
     differing = [p for p, (content, _, _) in wanted.items() if read_text(p) != content]
     state = heartbeat_state()
     steps: list[Step] = [Write(p, wanted[p][0], wanted[p][1], wanted[p][2]) for p in differing]
     if any(p.endswith((".service", ".timer")) for p in differing):
         steps.append(Cmd(["systemctl", "daemon-reload"]))
     if differing or state["enabled"] != "enabled" or state["active"] != "active":
-        steps += [Cmd(["systemctl", "enable", "--now", "edge-heartbeat.timer"]), Cmd(["systemctl", "start", "edge-heartbeat.service"]),
-                  Cmd(["systemctl", "status", "--no-pager", "edge-heartbeat.service"])]
+        steps += [Cmd(["systemctl", "enable", "--now", "pve-heartbeat.timer"]), Cmd(["systemctl", "start", "pve-heartbeat.service"]),
+                  Cmd(["systemctl", "status", "--no-pager", "pve-heartbeat.service"])]
+    if state["legacy"] or state["legacy_active"]:
+        typer.echo("The earlier edge-heartbeat timer is replaced; it is removed after the new one has pushed once.")
+        steps += legacy_heartbeat_removal(state)
     if differing:
         typer.echo("Changed files: " + ", ".join(differing) + " (secret contents are never shown)")
     execute(Plan("Install the heartbeat timer", steps))
+
+
+def legacy_heartbeat_removal(state: dict) -> list[Step]:
+    steps: list[Step] = [Cmd(["systemctl", "disable", "--now", "edge-heartbeat.timer"])] if state["legacy_active"] else []
+    steps += [Remove(p) for p in state["legacy"]]
+    return [*steps, Cmd(["systemctl", "daemon-reload"])]
 
 
 # ---------- guests ----------
@@ -1126,6 +1178,452 @@ def remote_gate(reboot: bool = typer.Option(False, "--reboot", help="After a pas
         raise typer.Exit(1)
 
 
+# ---------- host configuration (guide section 8) ----------
+def root_dataset() -> str | None:
+    src = (soft(["findmnt", "-no", "SOURCE", "/"]) or "").strip()
+    if "/" in src and soft(["zfs", "list", "-H", "-o", "name", src]) is not None:
+        return src
+    return None
+
+
+def root_pool() -> str | None:
+    ds = root_dataset()
+    return ds.split("/")[0] if ds else None
+
+
+def utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def snapshot_step(label: str) -> Step:
+    """A pre-change snapshot of the root dataset, with its own undo."""
+    ds = root_dataset() or "<root dataset>"
+    name = f"{ds}@{SNAP_PREFIX}{label}-{utc_stamp()}"
+    return Cmd(["zfs", "snapshot", name], undo=Cmd(["zfs", "destroy", name]))
+
+
+def toolkit_snapshots() -> list[tuple[str, int]]:
+    ds = root_dataset()
+    if not ds:
+        return []
+    out = soft(["zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,creation", "-s", "creation", "-d", "1", ds]) or ""
+    rows = []
+    for line in out.splitlines():
+        name, _, created = line.partition("\t")
+        if f"@{SNAP_PREFIX}" in name and created.strip().isdigit():
+            rows.append((name, int(created)))
+    return rows
+
+
+ROLLBACK_NOTE = ("A snapshot of the running root dataset cannot be rolled back on the live system: boot a rescue environment "
+                 "(this needs the KVM or the console) and run `zfs rollback <snapshot>`.")
+
+
+def snapshot() -> None:
+    """Take a pre-change snapshot of the root dataset (the guide's 8.1 habit)."""
+    if not root_dataset() and not STATE["dry_run"]:
+        raise typer.Exit(fail("the root filesystem is not ZFS (findmnt/zfs found no dataset)"))
+    label = ask_name("What is about to change? (a short label)", "change")
+    typer.echo(ROLLBACK_NOTE)
+    execute(Plan(f"Snapshot the root dataset before '{label}'", [snapshot_step(label)]))
+
+
+def snapshot_prune() -> None:
+    """Delete this toolkit's old snapshots, keeping the newest N."""
+    rows = toolkit_snapshots()
+    if not rows:
+        typer.echo(f"No snapshots named @{SNAP_PREFIX}* on the root dataset.")
+        return
+    keep = ask_int("How many of the newest to keep", 1, 1000, 10)
+    old = [n for n, _ in rows[:-keep]]
+    if not old:
+        typer.echo(f"{len(rows)} snapshot(s); nothing older than the newest {keep}.")
+        return
+    for n in old:
+        typer.echo(f"  would destroy {n}")
+    if not confirm_typed("prune", f"{len(old)} snapshot(s) are destroyed; the changes they protect can no longer be rolled back."):
+        typer.echo("Cancelled.")
+        return
+    execute(Plan("Prune old snapshots", [Cmd(["zfs", "destroy", n]) for n in old]))
+
+
+def zfs_value(args: list[str]) -> str | None:
+    out = (soft(["zfs", "get", "-Hp", "-o", "value", *args]) or "").strip()
+    return out or None
+
+
+def size_bytes(size: str) -> int:
+    return int(size[:-1]) * (2**30 if size[-1] == "G" else 2**20)
+
+
+def scrub_scheduled(pool: str) -> bool:
+    return os.path.exists("/etc/cron.d/zfsutils-linux") or (soft(["systemctl", "is-enabled", f"zfs-scrub-monthly@{pool}.timer"]) or "").strip() == "enabled"
+
+
+def zfs_reserve() -> None:
+    """Enable autotrim, hold back a reserve so a full pool never wedges the host, and check scrubbing."""
+    pool = root_pool()
+    if not pool and not STATE["dry_run"]:
+        raise typer.Exit(fail("the root filesystem is not ZFS (findmnt/zfs found no dataset)"))
+    pool = pool or "rpool"
+    size = ask_size("Reserve size (the guide: 40G keeps free space above 10% of the 1 TB drive)", "40G")
+    dataset = f"{pool}/{RESERVE_DATASET_NAME}"
+    steps: list[Step] = []
+    if (soft(["zpool", "get", "-H", "-o", "value", "autotrim", pool]) or "").strip() != "on":
+        steps.append(Cmd(["zpool", "set", "autotrim=on", pool], undo=Cmd(["zpool", "set", "autotrim=off", pool])))
+    have = zfs_value(["refreservation", dataset])
+    if soft(["zfs", "list", "-H", "-o", "name", dataset]) is None:
+        steps.append(Cmd(["zfs", "create", "-o", f"refreservation={size}", "-o", "mountpoint=none", dataset], undo=Cmd(["zfs", "destroy", dataset])))
+    elif have != str(size_bytes(size)):
+        steps.append(Cmd(["zfs", "set", f"refreservation={size}", dataset]))
+    if not scrub_scheduled(pool):
+        warn("no monthly scrub is scheduled (/etc/cron.d/zfsutils-linux is missing)")
+        steps.append(Cmd(["systemctl", "enable", "--now", f"zfs-scrub-monthly@{pool}.timer"]))
+    if steps:
+        steps += [Cmd(["zpool", "status", "-x"]), Cmd(["zfs", "list", "-o", "name,used,avail", pool])]
+    typer.echo("Release the reserve only to recover from a full pool: zfs-reserve-release.")
+    execute(Plan("Pool health and a reserve", steps))
+
+
+def zfs_reserve_release() -> None:
+    """Release the pool reserve (only to recover from a full pool)."""
+    pool = root_pool() or "rpool"
+    dataset = f"{pool}/{RESERVE_DATASET_NAME}"
+    have = zfs_value(["refreservation", dataset])
+    if have in (None, "0", "none", "-"):
+        typer.echo("No reserve is held.")
+        return
+    if not confirm_typed("release", f"{dataset} stops holding {int(have) // 2**30} GiB; run zfs-reserve again afterwards to hold it back."):
+        typer.echo("Cancelled.")
+        return
+    execute(Plan("Release the reserve", [Cmd(["zfs", "set", "refreservation=none", dataset])]))
+
+
+FW_FILE = "/etc/pve/firewall/cluster.fw"
+FW_SAVE_DIR = "/root/.pve-setup"
+FW_BEFORE, FW_ABSENT, FW_WRITTEN = (f"{FW_SAVE_DIR}/cluster.fw.{x}" for x in ("before", "absent", "written"))
+FW_REVERT_UNIT = "pve-setup-fw-revert"
+TAILNET_CIDR = "100.64.0.0/10"
+
+
+def firewall_text(lan_cidr: str, ports: str) -> str:
+    return f"""[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+IN ACCEPT -source {TAILNET_CIDR} -p tcp -dport {ports}
+IN ACCEPT -source {lan_cidr} -p tcp -dport {ports}
+IN ACCEPT -p icmp
+"""
+
+
+def lan_cidr_default() -> str:
+    for line in (soft(["ip", "-4", "-o", "route", "show", "scope", "link"]) or "").splitlines():
+        cols = line.split()
+        dev = cols[cols.index("dev") + 1] if "dev" in cols else ""
+        try:
+            net = ipaddress.ip_network(cols[0])
+        except (ValueError, IndexError):
+            continue
+        if net.subnet_of(ipaddress.ip_network(TAILNET_CIDR)) or dev.startswith(("tailscale", "docker", "veth", "fw", "tap")):
+            continue
+        return str(net)
+    return ""
+
+
+def ask_lan_cidr() -> str:
+    while True:
+        v = typer.prompt("Your LAN subnet (CIDR) to allow", default=lan_cidr_default() or None).strip()
+        try:
+            net = ipaddress.ip_network(v)
+            if net.version == 4 and net.prefixlen >= 8:
+                return str(net)
+        except ValueError:
+            pass
+        typer.echo("  an IPv4 network such as 192.168.1.0/24 (not wider than a /8)")
+
+
+def ask_ports() -> str:
+    while True:
+        v = typer.prompt("TCP ports to allow from the tailnet and the LAN", default="22,8006").strip()
+        if re.fullmatch(r"\d{1,5}(,\d{1,5})*", v) and all(1 <= int(x) <= 65535 for x in v.split(",")):
+            return v
+        typer.echo("  comma-separated port numbers, e.g. 22,8006")
+
+
+def ssh_client_ip() -> str:
+    return (os.environ.get("SSH_CONNECTION", "").split() or [""])[0]
+
+
+def session_allowed(lan_cidr: str) -> bool:
+    ip = ssh_client_ip()
+    if not ip:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True
+    return addr in ipaddress.ip_network(TAILNET_CIDR) or addr in ipaddress.ip_network(lan_cidr)
+
+
+def fw_revert_armed() -> bool:
+    return soft(["systemctl", "is-active", f"{FW_REVERT_UNIT}.timer"]) is not None
+
+
+def fw_running() -> bool:
+    out = soft(["pve-firewall", "status"]) or ""
+    if "enabled/running" in out:
+        typer.echo("pve-firewall reports: enabled/running.")
+        return True
+    fail(f"pve-firewall does not report enabled/running (it said: {out.strip() or 'nothing'})")
+    return False
+
+
+def save_firewall(new_text: str) -> bool:
+    """Keep the rules from before the toolkit's first change; later runs keep that first copy."""
+    d = Path(FW_SAVE_DIR)
+    d.mkdir(mode=0o700, exist_ok=True)
+    current = read_text(FW_FILE)
+    written = read_text(FW_WRITTEN)
+    ours = current is not None and written is not None and hashlib.sha256(current.encode()).hexdigest() == written.strip()
+    if ours and (os.path.exists(FW_BEFORE) or os.path.exists(FW_ABSENT)):
+        return True
+    for f in (FW_BEFORE, FW_ABSENT):
+        if os.path.lexists(f):
+            os.unlink(f)
+    if current is None:
+        Path(FW_ABSENT).write_text("")
+    else:
+        fd = os.open(FW_BEFORE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(current)
+    return True
+
+
+def remember_written(text: str) -> bool:
+    fd = os.open(FW_WRITTEN, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(hashlib.sha256(text.encode()).hexdigest())
+    return True
+
+
+def restore_firewall(restart: bool = True) -> bool:
+    before = read_text(FW_BEFORE)
+    if before is not None:
+        write_file(Write(FW_FILE, before, in_place=True))
+    elif os.path.exists(FW_ABSENT):
+        if os.path.lexists(FW_FILE):
+            os.unlink(FW_FILE)
+    else:
+        fail(f"no saved copy of the earlier rules in {FW_SAVE_DIR}; restore {FW_FILE} by hand")
+        return False
+    return not restart or subprocess.run(["pve-firewall", "restart"], check=False).returncode == 0
+
+
+def compile_or_restore() -> bool:
+    r = subprocess.run(["pve-firewall", "compile"], capture_output=True, text=True, check=False)
+    for line in (r.stdout or r.stderr).splitlines()[:12]:
+        typer.echo("  " + line)
+    if r.returncode == 0:
+        return True
+    restore_firewall()
+    fail("pve-firewall compile rejected the rules; the earlier rules were restored")
+    return False
+
+
+def firewall() -> None:
+    """Enable the Proxmox firewall for the tailnet and the LAN (guide 8.3), with an automatic revert."""
+    lan = ask_lan_cidr()
+    ports = ask_ports()
+    text = firewall_text(lan, ports)
+    if read_text(FW_FILE) == text and (soft(["pve-firewall", "status"]) or "").count("enabled/running"):
+        typer.echo("The firewall already has exactly these rules and is running.")
+        execute(Plan("Enable the firewall", []))
+        return
+    if not session_allowed(lan):
+        warn(f"your SSH session comes from {ssh_client_ip()}, which is neither the tailnet nor {lan}: enabling the firewall would cut it")
+        if not confirm_typed("lockout", "Continue anyway only if you are at the console."):
+            typer.echo("Cancelled.")
+            return
+    typer.echo("Open an SSH session to the host first and keep it (and the console) open until the tests below pass.")
+    restore_cmd = f"if [ -f {FW_BEFORE} ]; then cat {FW_BEFORE} > {FW_FILE}; elif [ -f {FW_ABSENT} ]; then rm -f {FW_FILE}; fi; pve-firewall restart"
+    steps: list[Step] = [snapshot_step("firewall"), Do(f"save the current rules under {FW_SAVE_DIR}", lambda: save_firewall(text))]
+    if not fw_revert_armed():
+        steps.append(Cmd(["systemd-run", "--unit", FW_REVERT_UNIT, "--on-active=10m", "/bin/sh", "-c", restore_cmd]))
+    steps += [Write(FW_FILE, text, in_place=True, undo=Do("restore the earlier firewall rules and restart the firewall", restore_firewall)),
+              Do("remember what was written", lambda: remember_written(text)),
+              Do("validate with pve-firewall compile; the earlier rules come back if it fails", compile_or_restore),
+              Cmd(["pve-firewall", "restart"]), Do("check that pve-firewall reports enabled/running", fw_running)]
+    if execute(Plan("Enable the firewall", steps)) and not STATE["dry_run"]:
+        ts, lan_ip = tailnet_address(), lan_address()
+        typer.echo(f"\nTest in fresh sessions, while the automatic revert is still armed:\n  - SSH and https://{ts or '<tailnet IP>'}:8006 over the tailnet from a device off the LAN\n"
+                   f"  - SSH over the LAN ({lan_ip or '<LAN IP>'})\n  - the edge's proxmox probe turns green on the status page (it comes from a 100.64.0.0/10 address)\n"
+                   "Then run firewall-keep to cancel the revert. Guest traffic on the bridge is not filtered until you enable a guest firewall.")
+
+
+def firewall_keep() -> None:
+    """Cancel the automatic firewall revert once the tests pass."""
+    if not fw_revert_armed():
+        typer.echo("No automatic firewall revert is armed.")
+        return
+    if not confirm_typed("proven", "This keeps the firewall rules for good."):
+        typer.echo("Cancelled.")
+        return
+    execute(Plan("Keep the firewall rules", [Cmd(["systemctl", "stop", f"{FW_REVERT_UNIT}.timer"])]))
+
+
+def firewall_remove() -> None:
+    """Put back the firewall rules that were there before the toolkit's first change."""
+    if read_text(FW_BEFORE) is None and not os.path.exists(FW_ABSENT):
+        typer.echo(f"No saved earlier rules in {FW_SAVE_DIR}; nothing this toolkit can put back.")
+        return
+    if not confirm_typed("firewall", "The host stops being protected by these rules (the earlier ones come back)."):
+        typer.echo("Cancelled.")
+        return
+    steps: list[Step] = [Do("restore the earlier firewall rules and restart the firewall", restore_firewall)]
+    if fw_revert_armed():
+        steps.append(Cmd(["systemctl", "stop", f"{FW_REVERT_UNIT}.timer"]))
+    execute(Plan("Remove the toolkit's firewall rules", steps))
+
+
+INST_RE = re.compile(r"^Inst (\S+)(?: \[([^\]]+)\])? \(([^ ]+) ")
+
+
+def parse_simulation(text: str) -> list[dict]:
+    """The packages `apt-get -s full-upgrade` would install or upgrade: name, old version (None if new), new version."""
+    rows = []
+    for line in text.splitlines():
+        m = INST_RE.match(line)
+        if m:
+            rows.append({"name": m[1], "old": m[2], "new": m[3]})
+    return rows
+
+
+def is_kernel_package(name: str) -> bool:
+    return bool(re.match(r"^(proxmox-kernel|pve-kernel)-\d", name))
+
+
+def major_of(version: str | None) -> int | None:
+    m = re.match(r"^(?:\d+:)?(\d+)", version or "")
+    return int(m[1]) if m else None
+
+
+def major_bumps(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if r["name"] in ("pve-manager", "proxmox-ve") and r["old"]
+            and major_of(r["old"]) is not None and major_of(r["new"]) != major_of(r["old"])]
+
+
+UPDATE_NOTE = """If a new kernel was installed:
+  1. proxmox-boot-tool kernel pin <new version> --next-boot, then reboot (it boots once; a hang plus a power cycle falls back to the pinned kernel)
+  2. pin it for good only after a clean boot: proxmox-boot-tool kernel pin <new version>
+Tailscale stays held until the edge's headscale pin moves. Do not attempt the next Proxmox major version remotely."""
+
+
+def reboot_hint() -> bool:
+    if os.path.exists("/var/run/reboot-required"):
+        typer.echo("The host asks for a reboot (/var/run/reboot-required).")
+    return True
+
+
+def update() -> None:
+    """Upgrade packages the careful way (guide 8.7): snapshot, show what changes, refuse a major jump, warn about kernels."""
+    if not root_dataset() and not STATE["dry_run"]:
+        raise typer.Exit(fail("the root filesystem is not ZFS (findmnt/zfs found no dataset)"))
+    if not execute(Plan("Refresh the package lists", [Cmd(["apt-get", "update"])])):
+        return
+    sim = soft(["apt-get", "-s", "full-upgrade"])
+    if sim is None:
+        raise typer.Exit(fail("`apt-get -s full-upgrade` failed; run it by hand to see why"))
+    rows = parse_simulation(sim)
+    held = (soft(["apt-mark", "showhold"]) or "").split()
+    if not rows:
+        typer.echo("Nothing to upgrade.")
+        if held:
+            typer.echo("Held back on purpose: " + ", ".join(held))
+        return
+    kernels = [r for r in rows if is_kernel_package(r["name"])]
+    typer.echo(f"\n{len(rows)} package(s) would change:")
+    for r in rows[:40]:
+        typer.echo(f"  {r['name']}  {r['old'] or '(new)'} -> {r['new']}")
+    if len(rows) > 40:
+        typer.echo(f"  ... and {len(rows) - 40} more")
+    if held:
+        typer.echo("Held back on purpose: " + ", ".join(held))
+    bumps = major_bumps(rows)
+    if bumps:
+        raise typer.Exit(fail("this upgrade moves " + ", ".join(f"{b['name']} {b['old']} -> {b['new']}" for b in bumps)
+                              + " to a new major version; do not attempt that remotely"))
+    if kernels:
+        typer.echo("\nA new kernel is part of this upgrade: " + ", ".join(k["name"] for k in kernels))
+        if not confirm_typed("kernel", "With no KVM and nobody on site a kernel that fails to boot cannot be fixed remotely; skip kernel updates until a KVM is installed."):
+            typer.echo("Cancelled. Nothing was changed.")
+            return
+    steps: list[Step] = [snapshot_step("upgrade"), Cmd(["apt-get", "full-upgrade"]), Do("check whether a reboot is asked for", reboot_hint)]
+    if execute(Plan("Upgrade the packages", steps)) and not STATE["dry_run"]:
+        typer.echo("\n" + UPDATE_NOTE)
+
+
+def tfa_enrolled(user: str = "root@pam") -> bool | None:
+    out = soft(["pveum", "user", "tfa", "list", user])
+    return None if out is None else bool(out.strip())
+
+
+def fw_rules_ok(text: str | None) -> bool:
+    if not text:
+        return False
+    lines = [l.strip() for l in text.splitlines()]
+    ports_ok = any(l.startswith("IN ACCEPT") and f"-source {TAILNET_CIDR}" in l and "22" in l and "8006" in l for l in lines)
+    return "enable: 1" in lines and "policy_in: DROP" in lines and ports_ok
+
+
+def config_checks() -> list[tuple[str, bool, str]]:
+    pool = root_pool()
+    snaps = toolkit_snapshots()
+    newest = datetime.fromtimestamp(snaps[-1][1], timezone.utc).strftime("%Y-%m-%d") if snaps else "-"
+    reserve = zfs_value(["refreservation", f"{pool}/{RESERVE_DATASET_NAME}"]) if pool else None
+    autotrim = (soft(["zpool", "get", "-H", "-o", "value", "autotrim", pool]) or "").strip() if pool else ""
+    fw_text = read_text(FW_FILE)
+    tfa = tfa_enrolled()
+    hb = heartbeat_state()
+    last = latest_backup(default_backup_folder())
+    age_days = (datetime.now(timezone.utc).timestamp() - last[1]) / 86400 if last else None
+    return [
+        ("root is on ZFS", bool(pool), pool or "no ZFS root found"),
+        (f"a pre-change snapshot exists (@{SNAP_PREFIX}*)", bool(snaps), f"{len(snaps)} snapshot(s), newest {newest}"),
+        ("autotrim is on", autotrim == "on", autotrim or "unknown"),
+        ("a pool reserve is held", bool(reserve) and reserve not in ("0", "none", "-"), f"refreservation={reserve}"),
+        ("a monthly scrub is scheduled", bool(pool) and scrub_scheduled(pool), ""),
+        ("the firewall is enabled and running", "enabled/running" in (soft(["pve-firewall", "status"]) or ""), ""),
+        ("firewall rules: default DROP, tailnet allowed on 22 and 8006", fw_rules_ok(fw_text), FW_FILE),
+        ("two-factor is enrolled for root@pam", tfa is True, "unknown (pveum unavailable)" if tfa is None else "enrolled" if tfa else "none enrolled"),
+        ("the heartbeat timer is active", hb["enabled"] == "enabled" and hb["active"] == "active" and os.path.exists(HB_SCRIPT), f"{hb['enabled'] or 'not installed'} / {hb['active'] or 'inactive'}"),
+        ("a config backup is at most 8 days old", age_days is not None and age_days <= 8, f"{last[0]}, {age_days:.0f} d old" if last and age_days is not None else "none in " + default_backup_folder()),
+        ("no unconfirmed automatic revert is armed", not revert_armed() and not fw_revert_armed(),
+         " ".join(x for x, on in (("ssh (ssh-harden-keep)", revert_armed()), ("firewall (firewall-keep)", fw_revert_armed())) if on) or "none"),
+    ]
+
+
+def host_config_check_impl() -> bool:
+    checks = config_checks()
+    typer.secho("\n== Host configuration checks (guide section 8)", bold=True)
+    for name, passed, detail in checks:
+        typer.echo(f"  {'PASS' if passed else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
+    typer.echo("\nNot checked here: the web UI two-factor login itself (log in once from a fresh browser), and that a config backup copy is off this host.")
+    return all(c[1] for c in checks)
+
+
+def host_config_check_menu() -> None:
+    host_config_check_impl()
+
+
+def host_config_check() -> None:
+    """Check section 8 end to end: snapshots, pool reserve, firewall, 2FA, heartbeat, config backup (read-only)."""
+    if not host_config_check_impl():
+        raise typer.Exit(1)
+
+
 # ---------- status ----------
 def collect_status() -> dict:
     ts = tailscale_state()
@@ -1137,6 +1635,10 @@ def collect_status() -> dict:
         "tailscale": ts,
         "heartbeat": heartbeat_state(),
         "ssh": {"hardened": (ssh_is_hardened(eff) if (eff := sshd_effective()) else None), "revert_armed": revert_armed()},
+        "firewall": {"running": ("enabled/running" in out) if (out := soft(["pve-firewall", "status"])) is not None else None, "revert_armed": fw_revert_armed()},
+        "zfs": {"pool": root_pool(), "snapshots": len(toolkit_snapshots())},
+        "config_backup": {"timer": (soft(["systemctl", "is-enabled", "pve-config-backup.timer"]) or "").strip() or None,
+                          "latest": (lb[0] if (lb := latest_backup(default_backup_folder())) else None)},
         "guests": guests(),
         "storage": [{"id": s.get("storage"), "type": s.get("type"), "content": s.get("content")} for s in storage],  # type: ignore[union-attr]
         "backup_jobs": [{"id": j.get("id"), "schedule": j.get("schedule"), "storage": j.get("storage"), "enabled": j.get("enabled", 1),
@@ -1160,6 +1662,13 @@ def render_status(d: dict) -> list[str]:
     ssh = d["ssh"]
     out.append("SSH: " + ("password logins off" if ssh["hardened"] else "password logins NOT disabled" if ssh["hardened"] is False else "unknown (sshd -T unavailable)")
                + ("; automatic revert armed (run ssh-harden-keep once both logins are proven)" if ssh["revert_armed"] else ""))
+    fw = d["firewall"]
+    out.append("Firewall: " + ("unknown (pve-firewall unavailable)" if fw["running"] is None else "enabled/running" if fw["running"] else "NOT running")
+               + ("; automatic revert armed (run firewall-keep once the tests pass)" if fw["revert_armed"] else ""))
+    z = d["zfs"]
+    out.append(f"ZFS: pool {z['pool'] or 'none found'}, {z['snapshots']} pve-setup snapshot(s)")
+    cb = d["config_backup"]
+    out.append(f"Config backup: weekly timer {cb['timer'] or 'not installed'}; latest archive {cb['latest'] or 'none'}")
     out.append("Guests (* = created by this toolkit):")
     for g in sorted(d["guests"], key=lambda g: g["vmid"]):
         out.append(f"  {'*' if g['managed'] else ' '} {g['vmid']:>5} {g['type']:<5} {g['status']:<8} {g['name']}{' [template]' if g['template'] else ''}")
@@ -1205,10 +1714,10 @@ def tailscale_leave() -> None:
 
 
 def heartbeat_remove() -> None:
-    """Remove the heartbeat timer, its units and its token file."""
+    """Remove the heartbeat timer, script, units and token file (and the earlier edge-heartbeat one)."""
     state = heartbeat_state()
     present = [p for p, ok in state["files"].items() if ok]
-    if not present and not state["enabled"]:
+    if not present and not state["enabled"] and not state["legacy"]:
         typer.echo("The heartbeat is not installed.")
         return
     if not confirm_typed("heartbeat", "Gatus will alert once the heartbeat has been silent for its interval."):
@@ -1216,9 +1725,9 @@ def heartbeat_remove() -> None:
         return
     steps: list[Step] = []
     if state["enabled"] or state["active"] == "active":
-        steps.append(Cmd(["systemctl", "disable", "--now", "edge-heartbeat.timer"]))
+        steps.append(Cmd(["systemctl", "disable", "--now", "pve-heartbeat.timer"]))
     steps += [Remove(p) for p in present]
-    steps.append(Cmd(["systemctl", "daemon-reload"]))
+    steps += legacy_heartbeat_removal(state) if (state["legacy"] or state["legacy_active"]) else [Cmd(["systemctl", "daemon-reload"])]
     execute(Plan("Remove the heartbeat", steps))
 
 
@@ -1337,17 +1846,64 @@ def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes, mode: int = 0o600) 
     tar.addfile(info, io.BytesIO(data))
 
 
-def write_config_archive(dest: str, include_secrets: bool) -> bool:
+AGE_RECIPIENT_RE = re.compile(r"^age1[02-9ac-hj-np-z]{58}$")
+
+
+def valid_recipient(r: str) -> bool:
+    return bool(AGE_RECIPIENT_RE.match(r)) or key_ident(r) is not None
+
+
+def read_recipients(path: str) -> list[str]:
+    return [l.strip() for l in (read_text(path) or "").splitlines() if l.strip() and not l.lstrip().startswith("#") and valid_recipient(l.strip())]
+
+
+def ask_recipients() -> list[str]:
+    found = read_recipients(BACKUP_RECIPIENTS)
+    if found and typer.confirm(f"Encrypt to the {len(found)} recipient(s) in {BACKUP_RECIPIENTS}?", default=True):
+        return found
+    typer.echo("age recipients (age1... or an ssh public key). Empty line to finish; none = no encryption, and then no config.db and no secrets.")
+    out: list[str] = []
+    while (r := typer.prompt("Recipient", default="", show_default=False).strip()):
+        if valid_recipient(r):
+            out.append(r)
+        else:
+            typer.echo("  not an age recipient or ssh public key")
+    return out
+
+
+def cluster_db_bytes() -> bytes:
+    """A consistent copy of the pmxcfs database while pve-cluster keeps running (SQLite online backup)."""
+    src = sqlite3.connect(CLUSTER_DB)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            dst_path = os.path.join(d, "config.db")
+            dst = sqlite3.connect(dst_path)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+            return Path(dst_path).read_bytes()
+    finally:
+        src.close()
+
+
+def write_config_archive(dest: str, recipients: list[str] | None = None) -> bool:
+    """Write the verified archive; with recipients it also holds config.db and the secret files, and the result is dest + '.age'."""
+    recipients = recipients or []
+    if recipients and not shutil.which("age"):
+        fail("age is not installed (apt install age); without it config.db and secrets cannot be protected")
+        return False
     manifest = {"version": 1, "created": datetime.now(timezone.utc).isoformat(timespec="seconds"), "host": node(),
-                "pve": (soft(["pveversion"]) or "").strip(), "includes_secrets": include_secrets, "files": []}
+                "pve": (soft(["pveversion"]) or "").strip(), "includes_secrets": bool(recipients), "files": []}
     inventory = {"resources": pvesh_soft("/cluster/resources", "--type", "vm"), "storage": pvesh_soft("/storage"),
                  "backup": pvesh_soft("/cluster/backup"),
                  "users": [{"userid": u.get("userid"), "comment": u.get("comment")} for u in api_users()]}
     old_umask = os.umask(0o077)
-    tmp = dest + ".part"
+    work = tempfile.mkdtemp(prefix=".pve-setup-", dir=os.path.dirname(dest) or ".")
+    plain = os.path.join(work, os.path.basename(dest))
     try:
-        with tarfile.open(tmp, "w:gz") as tar:
-            for path, grp in collect_backup_files(include_secrets):
+        with tarfile.open(plain, "w:gz") as tar:
+            for path, grp in collect_backup_files(bool(recipients)):
                 if os.path.getsize(path) > MAX_FILE:
                     warn(f"skipping {path}: larger than {MAX_FILE // 2**20} MiB")
                     continue
@@ -1355,35 +1911,162 @@ def write_config_archive(dest: str, include_secrets: bool) -> bool:
                 manifest["files"].append({"path": path, "group": grp, "sha256": hashlib.sha256(data).hexdigest(),
                                           "mode": os.stat(path).st_mode & 0o777, "size": len(data)})
                 _add_bytes(tar, "files" + path, data)
+            if recipients and os.path.exists(CLUSTER_DB):
+                db = cluster_db_bytes()
+                manifest["files"].append({"path": CLUSTER_DB, "group": "cluster-db", "sha256": hashlib.sha256(db).hexdigest(), "mode": 0o600, "size": len(db)})
+                _add_bytes(tar, "files" + CLUSTER_DB, db)
             for k, v in inventory.items():
                 _add_bytes(tar, f"inventory/{k}.json", json.dumps(v, indent=1, sort_keys=True).encode())
             _add_bytes(tar, "MANIFEST.json", json.dumps(manifest, indent=1, sort_keys=True).encode())
-        os.replace(tmp, dest)
-        os.chmod(dest, 0o600)
+        read_config_archive(plain)  # re-read and re-hash what was just written
+        final = dest
+        if recipients:
+            final = dest + ".age"
+            argv = ["age", *[a for r in recipients for a in ("-r", r)], "-o", final, plain]
+            if subprocess.run(argv, check=False).returncode != 0:
+                fail("age failed; no archive was written")
+                return False
+            with open(final, "rb") as f:
+                if not f.read(32).startswith(b"age-encryption.org/v1"):
+                    fail("the encrypted file does not start with an age header; removed")
+                    os.unlink(final)
+                    return False
+        else:
+            os.replace(plain, final)
+        os.chmod(final, 0o600)
     finally:
         os.umask(old_umask)
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-    read_config_archive(dest)  # re-read and re-hash what was just written
-    typer.echo(f"Wrote and verified {dest} ({len(manifest['files'])} files{', including secrets' if include_secrets else ''}).")
+        if os.path.exists(plain):
+            os.unlink(plain)
+        os.rmdir(work)
+    typer.echo(f"Wrote {final} ({len(manifest['files'])} files{', encrypted with config.db and secrets' if recipients else ', no config.db and no secrets'}).")
     return True
 
 
-def config_backup() -> None:
-    """Archive host and Proxmox config (not guest disks) with a verified manifest."""
-    default = str(Path.home() / "pve-setup-backups")
-    folder = typer.prompt("Folder for the archive", default=default)
-    secrets_ = typer.confirm("Include secrets (/etc/pve/priv, TLS keys, the heartbeat token, Tailscale node key)?", default=False)
-    if secrets_:
-        warn("the archive then holds private keys; keep it off the host and encrypted")
+def prune_backups(folder: str, keep: int) -> list[str]:
+    names = sorted(f for f in os.listdir(folder) if re.fullmatch(rf"pve-config-{re.escape(node())}-\d{{8}}T\d{{6}}Z\.tar\.gz(\.age)?", f))
+    old = names[:-keep] if keep > 0 else []
+    for f in old:
+        os.unlink(os.path.join(folder, f))
+    return old
+
+
+def latest_backup(folder: str) -> tuple[str, float] | None:
+    try:
+        names = sorted(f for f in os.listdir(folder) if re.fullmatch(r"pve-config-.*\.tar\.gz(\.age)?", f))
+    except OSError:
+        return None
+    return (names[-1], os.stat(os.path.join(folder, names[-1])).st_mtime) if names else None
+
+
+def default_backup_folder() -> str:
+    return str(Path.home() / "pve-setup-backups")
+
+
+def config_backup_impl(auto: bool, folder: str | None, keep: int) -> bool:
+    folder = folder or (default_backup_folder() if auto else typer.prompt("Folder for the archive", default=default_backup_folder()))
+    if auto:
+        recipients = read_recipients(BACKUP_RECIPIENTS)
+        if not recipients:
+            fail(f"no valid recipients in {BACKUP_RECIPIENTS}; run config-backup-timer to set them")
+            return False
+    else:
+        recipients = ask_recipients()
+    if not recipients:
+        warn("no recipient: the archive will hold the host files only, without config.db or secrets")
     dest = os.path.join(folder, f"pve-config-{node()}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.tar.gz")
-    files = collect_backup_files(secrets_)
-    typer.echo(f"{len(files)} files: " + ", ".join(sorted({g for _, g in files})) + ". Guest disks are not included; use backup-job for those.")
+    files = collect_backup_files(bool(recipients))
+    typer.echo(f"{len(files)} files, groups: {', '.join(sorted({g for _, g in files}))}"
+               f"{' + config.db' if recipients else ''}. Guest disks are not included; use backup-job for those.")
+
     def make() -> bool:
         Path(folder).mkdir(parents=True, exist_ok=True, mode=0o700)
-        return write_config_archive(dest, secrets_)
+        if not write_config_archive(dest, recipients):
+            return False
+        for f in prune_backups(folder, keep):
+            typer.echo(f"pruned {f}")
+        return True
 
-    execute(Plan("Back up host and Proxmox config", [Do(f"create {dest} (0600) and verify it by re-reading", make)]))
+    return execute(Plan("Back up host and Proxmox config", [Do(f"create {dest}{'.age' if recipients else ''} (0600), verify it, keep the newest {keep}", make)]))
+
+
+def config_backup(auto: bool = typer.Option(False, "--auto", help="No prompts: recipients from the recipients file (used by the timer)"),
+                  folder: Optional[str] = typer.Option(None, help="Where the archives go"),
+                  keep: int = typer.Option(BACKUP_KEEP, help="How many archives to keep")) -> None:
+    """Archive host and Proxmox config (not guest disks); with an age recipient also config.db and secrets, encrypted."""
+    if not config_backup_impl(auto, folder, keep):
+        raise typer.Exit(1)
+
+
+def config_backup_menu() -> None:
+    config_backup_impl(False, None, BACKUP_KEEP)
+
+
+def config_backup_timer() -> None:
+    """Install a weekly local config backup (encrypted, newest few kept)."""
+    recipients = ask_recipients()
+    if not recipients:
+        raise typer.Exit(fail("a recipient is required: the weekly archive includes config.db and secrets, so it must be encrypted"))
+    when = typer.prompt("Weekly schedule (systemd calendar)", default="Sun *-*-* 03:30:00")
+    keep = ask_int("Archives to keep", 1, 200, BACKUP_KEEP)
+    folder = typer.prompt("Folder", default=default_backup_folder())
+    script = f"{BACKUP_INSTALL_DIR}/pve-setup.py"
+    unit = f"""[Unit]
+Description=Weekly encrypted Proxmox config backup (pve-setup)
+
+[Service]
+Type=oneshot
+ExecStart={shlex.quote(sys.executable)} {script} config-backup --auto --folder {shlex.quote(folder)} --keep {keep}
+"""
+    timer = f"""[Unit]
+Description=Weekly Proxmox config backup
+
+[Timer]
+OnCalendar={when}
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+"""
+    me = Path(__file__).resolve()
+    steps: list[Step] = []
+    if read_text(script) != me.read_text():
+        steps.append(Write(script, me.read_text(), 0o755))
+    wanted = {BACKUP_RECIPIENTS: ("\n".join(recipients) + "\n", 0o644), BACKUP_UNIT: (unit, 0o644), BACKUP_TIMER: (timer, 0o644)}
+    changed = [path for path, (content, _) in wanted.items() if read_text(path) != content]
+    steps += [Write(path, wanted[path][0], wanted[path][1]) for path in changed]
+    if BACKUP_UNIT in changed or BACKUP_TIMER in changed:
+        steps.append(Cmd(["systemctl", "daemon-reload"]))
+    if changed or (soft(["systemctl", "is-enabled", "pve-config-backup.timer"]) or "").strip() != "enabled":
+        steps.append(Cmd(["systemctl", "enable", "--now", "pve-config-backup.timer"]))
+    typer.echo(f"The timer runs {sys.executable} (keep that Python environment) and a copy of this script in {BACKUP_INSTALL_DIR}. "
+               "Archives stay on this host, so they protect against bad edits, not against losing the host: copy them off.")
+    execute(Plan("Install the weekly config backup", steps))
+
+
+def config_backup_timer_remove() -> None:
+    """Remove the weekly config backup timer (archives already written are kept)."""
+    present = [p for p in (BACKUP_UNIT, BACKUP_TIMER) if os.path.exists(p)]
+    if not present:
+        typer.echo("The weekly config backup is not installed.")
+        return
+    if not confirm_typed("backup", "No more weekly archives are written; the ones already there stay."):
+        typer.echo("Cancelled.")
+        return
+    execute(Plan("Remove the weekly config backup", [Cmd(["systemctl", "disable", "--now", "pve-config-backup.timer"]),
+                                                     *[Remove(p) for p in present], Cmd(["systemctl", "daemon-reload"])]))
+
+
+def decrypt_archive(path: str, identity: str | None, into: str) -> str:
+    if not shutil.which("age"):
+        raise ValueError("age is not installed (apt install age)")
+    identity = identity or typer.prompt("age identity (private key) file")
+    out = os.path.join(into, "archive.tar.gz")
+    r = subprocess.run(["age", "-d", "-i", identity, "-o", out, path], capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        raise ValueError(f"age could not decrypt it: {r.stderr.strip() or 'wrong identity?'}")
+    return out
 
 
 def read_config_archive(path: str) -> tuple[dict, dict[str, bytes], dict[str, object]]:
@@ -1427,27 +2110,34 @@ RESTORE_NOTES = {
     "/etc/pve": "pmxcfs: copy single files only, while the node is quorate; a wrong storage.cfg or user.cfg applies at once",
     "/etc/network": "review first; a wrong file cuts off the host. Apply with `ifreload -a` from the console, not over SSH",
     "/etc/fstab": "review first; a wrong entry can stop the host booting",
-    "/var/lib/tailscale": "stop tailscaled before copying, then start it",
+    "/var/lib/pve-cluster": "config.db replaces the whole cluster configuration: a rebuild-only step (stop pve-cluster, copy with mode 0600, adapt /etc/hostname and /etc/hosts, reboot)",
 }
 
 
-def config_restore_impl(path: str | None, stage: str | None, apply_owned: bool) -> None:
+def config_restore_impl(path: str | None, stage: str | None, apply_owned: bool, identity: str | None = None) -> None:
     path = path or typer.prompt("Archive to read")
     try:
-        manifest, files, inventory = read_config_archive(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o700)
+            manifest, files, inventory = read_config_archive(decrypt_archive(path, identity, tmp) if path.endswith(".age") else path)
     except (OSError, ValueError, tarfile.TarError, json.JSONDecodeError, KeyError) as e:
         raise typer.Exit(fail(f"cannot use {path}: {e}")) from None
     typer.secho(f"\n== Restore plan from {path}", bold=True)
     typer.echo(f"Created {manifest['created']} on {manifest['host']} ({manifest['pve']}); secrets included: {manifest['includes_secrets']}")
-    counts = {"same": 0, "differs": 0, "missing": 0}
+    counts = {"same": 0, "differs": 0, "missing": 0, "rebuild-only": 0}
     todo: list[dict] = []
     for e in manifest["files"]:
         live = Path(e["path"]).read_bytes() if os.path.isfile(e["path"]) else None
+        if e["group"] == "cluster-db":  # a backup copy never equals the live database byte for byte
+            counts["rebuild-only"] += 1
+            todo.append({**e, "state": "rebuild"})
+            continue
         state = "missing" if live is None else "same" if live == files[e["path"]] else "differs"
         counts[state] += 1
         if state != "same":
             todo.append({**e, "state": state})
-    typer.echo(f"{counts['same']} files unchanged, {counts['differs']} differ, {counts['missing']} missing.")
+    typer.echo(f"{counts['same']} files unchanged, {counts['differs']} differ, {counts['missing']} missing"
+               + (f", config.db is for a rebuild only (not compared)." if counts["rebuild-only"] else "."))
     if stage and STATE["dry_run"]:
         typer.echo(f"(dry run: would stage {len(todo)} files under {stage})")
     elif stage:
@@ -1487,9 +2177,10 @@ def config_restore_impl(path: str | None, stage: str | None, apply_owned: bool) 
 
 def config_restore(path: Optional[str] = typer.Argument(None, help="Archive from config-backup"),
                    stage: Optional[str] = typer.Option(None, help="Extract differing files here (new directory, 0700)"),
-                   apply_owned: bool = typer.Option(False, "--apply-owned", help="Restore only the files this toolkit wrote")) -> None:
-    """Verify an archive and print a restore plan; only the toolkit's own files can be applied."""
-    config_restore_impl(path, stage, apply_owned)
+                   apply_owned: bool = typer.Option(False, "--apply-owned", help="Restore only the files this toolkit wrote"),
+                   identity: Optional[str] = typer.Option(None, help="age identity file, to read a .age archive")) -> None:
+    """Verify an archive (decrypting a .age one) and print a restore plan; only the toolkit's own files can be applied."""
+    config_restore_impl(path, stage, apply_owned, identity)
 
 
 def status_command(as_json: bool = typer.Option(False, "--json", help="Machine-readable output")) -> None:
@@ -1503,6 +2194,11 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
                 ("vm-create", "Clone a VM", vm_create), ("lxc-create", "Create an LXC container", lxc_create),
                 ("storage-add", "Add storage", storage_add), ("backup-job", "Create or update a backup job", backup_job),
                 ("api-token", "Create an API user and token", api_token)]),
+    ("Host configuration", [("host-config-check", "Check section 8 end to end", host_config_check_menu), ("snapshot", "Snapshot the root dataset before a change", snapshot),
+                            ("zfs-reserve", "Autotrim, pool reserve and scrub check", zfs_reserve),
+                            ("firewall", "Enable the Proxmox firewall for tailnet and LAN", firewall),
+                            ("firewall-keep", "Cancel the automatic firewall revert", firewall_keep),
+                            ("update", "Upgrade packages with a snapshot and a kernel guard", update)]),
     ("Host hardening", [("ssh-harden", "Install your SSH key and disable password SSH", ssh_harden),
                         ("ssh-harden-keep", "Cancel the automatic SSH revert", ssh_harden_keep),
                         ("remote-gate", "Run the remote-readiness checks", remote_gate_menu)]),
@@ -1511,16 +2207,22 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
         ("tailscale-leave", "Leave the tailnet / uninstall Tailscale", tailscale_leave), ("heartbeat-remove", "Remove the heartbeat", heartbeat_remove),
         ("vm-destroy", "Destroy a VM, template or container", vm_destroy), ("storage-remove", "Remove a storage definition", storage_remove),
         ("backup-job-remove", "Remove a backup job", backup_job_remove), ("api-token-revoke", "Revoke a token or delete a user", api_token_revoke),
-        ("ssh-harden-remove", "Remove the SSH hardening drop-in", ssh_harden_remove)]),
-    ("Config backup", [("config-backup", "Archive host and Proxmox config", config_backup),
-                       ("config-restore", "Verify an archive and print a restore plan", lambda: config_restore_impl(None, None, False))]),
+        ("ssh-harden-remove", "Remove the SSH hardening drop-in", ssh_harden_remove),
+        ("config-backup-timer-remove", "Remove the weekly config backup", config_backup_timer_remove),
+        ("firewall-remove", "Put back the earlier firewall rules", firewall_remove),
+        ("snapshot-prune", "Destroy old pve-setup snapshots", snapshot_prune), ("zfs-reserve-release", "Release the pool reserve", zfs_reserve_release)]),
+    ("Config backup", [("config-backup", "Archive host and Proxmox config (encrypted with config.db)", config_backup_menu),
+                       ("config-restore", "Verify an archive and print a restore plan", lambda: config_restore_impl(None, None, False)),
+                       ("config-backup-timer", "Install a weekly encrypted local config backup", config_backup_timer)]),
 ]
 for _section, _items in SECTIONS:
     for _name, _label, _fn in _items:
-        if _name not in ("status", "config-restore", "remote-gate"):
+        if _name not in ("status", "config-restore", "remote-gate", "config-backup", "host-config-check"):
             app.command(_name, help=_fn.__doc__)(_fn)
 app.command("status")(status_command)
 app.command("config-restore")(config_restore)
+app.command("config-backup")(config_backup)
+app.command("host-config-check")(host_config_check)
 app.command("remote-gate")(remote_gate)
 
 

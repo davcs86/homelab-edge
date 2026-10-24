@@ -95,6 +95,18 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   vault (its vaults are fixed at creation), its token the only secret in the GitHub environment. The edge's own workflows keep
   GitHub secrets and SOPS, so rule 3 is unchanged. Workload Identity (v5, public preview) was not used: it still needs a GitHub
   secret and loads every variable of a 1Password Environment, with no per-item references or `ssh-format`.
+- **The firewall's automatic revert restores the previous `cluster.fw`, it does not stop the firewall.** A timer that only runs
+  `pve-firewall stop` would leave the host unfiltered and with no record of what was there; the toolkit saves the rules from before
+  its first change (a later run keeps that first copy, and a hand edit since counts as a new original) and a transient `systemd-run`
+  timer writes them back. `/etc/pve` is pmxcfs: files there are rewritten in place (no rename, no chmod, no symlink), and
+  `pve-firewall compile` runs before the restart so a rule file that does not parse never reaches the running firewall.
+- **`config.db` goes into a config backup only encrypted, and a restore never applies it.** It holds the whole cluster config
+  including secrets, so the archive that carries it is `age`-encrypted to recipients the owner supplies, and the unattended timer
+  refuses to run without them. It is copied with SQLite's online backup API so a running `pve-cluster` cannot tear it. A copy never
+  equals the live file byte for byte, so the restore plan marks it "rebuild only" instead of reporting a permanent difference.
+- **The Proxmox heartbeat reports health, not liveness.** It pushes `success=false&error=…` when `zpool status -x`, the NVMe SMART
+  status or pool capacity (≥ 85%) fail, and an unreadable pool counts as a failure, so a check that stops working cannot look
+  healthy. The token is in a 0600 curl `-K` file because argv is world-readable in `/proc`.
 - **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
   when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
   `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).
