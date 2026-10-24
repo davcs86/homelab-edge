@@ -55,7 +55,10 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -r tools/pve-setup.requirements.txt
+      - run: sudo apt-get install -y --no-install-recommends age
       - name: Proxmox toolkit (dry-run tests, no host needed)
+        env:
+          PVE_SETUP_REQUIRE_AGE: "1"
         run: python -m unittest tools/test_pve_setup.py
       - name: App deploy gate script against a fake docker
         run: scripts/app-deploy-test.sh
