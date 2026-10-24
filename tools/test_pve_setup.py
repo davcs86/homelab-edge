@@ -475,7 +475,7 @@ class ConfigArchive(unittest.TestCase):
     def test_backup_command_writes_the_archive(self):
         folder = self.tmp / "bk"
         steps = []
-        with mock.patch.object(pve, "run_step", lambda s: steps.append(s) or s.fn()):
+        with mock.patch.object(pve, "run_step", lambda s: steps.append(s) or s.fn()), mock.patch.object(pve.os, "geteuid", lambda: 0):
             r = runner.invoke(pve.app, ["config-backup"], input=f"{folder}\nn\ny\n")
         self.assertEqual(r.exit_code, 0, r.output)
         written = list(folder.glob("pve-config-pve-*.tar.gz")) if folder.exists() else []
