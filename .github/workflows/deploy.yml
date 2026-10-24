@@ -35,6 +35,8 @@ jobs:
       ANSIBLE_FORCE_COLOR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # the push below uses the App token, not GITHUB_TOKEN
 
       - uses: ./.github/actions/setup
         with:
@@ -119,13 +121,32 @@ jobs:
 
       # ---------- record state ----------
       - name: Commit generated state
+        id: stage
         if: always()
         run: |
           # Add only paths that exist: one missing pathspec makes `git add` stage nothing at all.
           for f in inventories/prod/group_vars/all/generated.yml inventories/prod/known_hosts secrets/deploy-authkey.sops.yaml; do
             if [ -e "$f" ]; then git add "$f"; fi
           done
-          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          if git diff --cached --quiet; then echo "nothing to commit"; echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "chore(deploy): record ${{ inputs.mode }} state [run ${{ github.run_id }}]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Push token is not configured
+        if: always() && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID == ''
+        run: |
+          echo "::error::main only accepts PRs: set PUSH_APP_CLIENT_ID and PUSH_APP_PRIVATE_KEY (docs/runbooks/github-push-app.md)"
+          exit 1
+      - name: Push token (GitHub App on the ruleset's bypass list)
+        id: push-token
+        if: always() && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.PUSH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Push to ${{ github.ref_name }}
+        if: always() && steps.stage.outputs.changed == 'true' && steps.push-token.outcome == 'success'
+        env:
+          PUSH_TOKEN: ${{ steps.push-token.outputs.token }}
+        run: git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

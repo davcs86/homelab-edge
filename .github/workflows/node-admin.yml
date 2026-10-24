@@ -40,6 +40,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # the push below uses the App token, not GITHUB_TOKEN
       - uses: ./.github/actions/setup
         with:
           tailscale: "true"
@@ -80,9 +82,29 @@ jobs:
       - if: always()
         run: scripts/runner-tailnet.sh down
       - name: Commit CI key
+        id: stage
         if: inputs.action == 'mint-ci-key'
         run: |
           git add secrets/ci-authkey.sops.yaml
+          if git diff --cached --quiet; then echo "nothing to commit"; echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "chore(tailnet): rotate tag:ci key [run ${{ github.run_id }}]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Push token is not configured
+        if: inputs.action == 'mint-ci-key' && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID == ''
+        run: |
+          echo "::error::main only accepts PRs: set PUSH_APP_CLIENT_ID and PUSH_APP_PRIVATE_KEY (docs/runbooks/github-push-app.md)"
+          exit 1
+      - name: Push token (GitHub App on the ruleset's bypass list)
+        id: push-token
+        if: inputs.action == 'mint-ci-key' && steps.stage.outputs.changed == 'true' && vars.PUSH_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.PUSH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUSH_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Push to ${{ github.ref_name }}
+        if: inputs.action == 'mint-ci-key' && steps.stage.outputs.changed == 'true' && steps.push-token.outcome == 'success'
+        env:
+          PUSH_TOKEN: ${{ steps.push-token.outputs.token }}
+        run: git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

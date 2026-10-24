@@ -39,6 +39,7 @@ Read only the row that matches the task.
 | Set up the local Proxmox host by hand | `docs/runbooks/proxmox-setup.md`, `tools/pve-setup.py` |
 | Changing public routes or limits | `roles/stack/templates/Caddyfile.j2`; test with `scripts/caddy-routing-test.sh` |
 | What each secret file holds | `secrets/README.md` |
+| A workflow fails to push to `main` (GH013); the commit-back App and ruleset bypass | `docs/runbooks/github-push-app.md` |
 
 ## Teardown
 
