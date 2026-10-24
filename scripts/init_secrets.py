@@ -5,6 +5,8 @@ Operator-chosen values come from the environment (GitHub environment secrets in 
   DESEC_TOKEN, HC_PING_URL, ADMIN_CONSOLE_PASSWORD, NTFY_DAVID_PASSWORD
 Everything else (ntfy publisher credentials, Gatus heartbeat tokens, pgBackRest mTLS PKI) is generated here.
 Usage: init_secrets.py <edge-tls-hostname> <output.sops.yaml>   (needs: sops, openssl, python bcrypt)
+       init_secrets.py --fill-missing <existing.sops.yaml>      adds only the generated credentials the file lacks; the
+                                                                 file is decrypted in memory and nothing existing changes
 """
 import os
 import secrets
@@ -30,6 +32,46 @@ def ntfy_token() -> str:
 
 def bcrypt_hash(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=10)).decode()
+
+
+# Plain credentials that can be added to an existing file without touching anything else.
+GENERATED = {
+    "ntfy_alerts_password_bcrypt": lambda: bcrypt_hash(secrets.token_urlsafe(32)),
+    "ntfy_alerts_token": ntfy_token,
+    "gatus_heartbeat_pve_token": lambda: secrets.token_urlsafe(32),
+    "gatus_heartbeat_backup_token": lambda: secrets.token_urlsafe(32),
+    "gatus_heartbeat_db_token": lambda: secrets.token_urlsafe(32),
+}
+OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
+PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
+
+
+def encrypt_to(doc: dict, out: str) -> None:
+    plaintext = yaml.safe_dump(doc, sort_keys=True).encode()
+    encrypted = run("sops", "encrypt", "--input-type", "yaml", "--output-type", "yaml",
+                    "--filename-override", out, "/dev/stdin", stdin=plaintext)
+    tmp = out + ".tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(encrypted)
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def fill_missing(path: str) -> None:
+    current = yaml.safe_load(run("sops", "decrypt", "--output-type", "yaml", path)) or {}
+    cannot = [k for k in OPERATOR_KEYS + PKI_KEYS if k not in current]
+    if cannot:
+        sys.exit(f"{path} lacks keys this mode cannot create: {', '.join(cannot)} "
+                 "(operator values come from environment secrets and the PKI is generated as one set; regenerate with overwrite)")
+    missing = [k for k in GENERATED if k not in current]
+    if not missing:
+        print("nothing to add")
+        return
+    encrypt_to({**current, **{k: GENERATED[k]() for k in missing}}, path)
+    print(f"added {', '.join(missing)} to {path}")
 
 
 def pki(edge_host: str, client_cn: str) -> dict:
@@ -61,6 +103,9 @@ def pki(edge_host: str, client_cn: str) -> dict:
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--fill-missing":
+        fill_missing(sys.argv[2])
+        return
     edge_host, out, client_cn = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "db-pgbackrest")
     missing = [k for k in REQUIRED if not os.environ.get(k)]
     if missing:
@@ -74,18 +119,10 @@ def main() -> None:
         "admin_console_password_hash": run("openssl", "passwd", "-6", "-stdin",
                                            stdin=os.environ["ADMIN_CONSOLE_PASSWORD"].encode()).decode().strip(),
         "ntfy_david_password_bcrypt": bcrypt_hash(os.environ["NTFY_DAVID_PASSWORD"]),
-        "ntfy_alerts_password_bcrypt": bcrypt_hash(secrets.token_urlsafe(32)),
-        "ntfy_alerts_token": ntfy_token(),
-        "gatus_heartbeat_pve_token": secrets.token_urlsafe(32),
-        "gatus_heartbeat_backup_token": secrets.token_urlsafe(32),
-        "gatus_heartbeat_db_token": secrets.token_urlsafe(32),
+        **{k: gen() for k, gen in GENERATED.items()},
         **pki(edge_host, client_cn),
     }
-    plaintext = yaml.safe_dump(doc, sort_keys=True).encode()
-    encrypted = run("sops", "encrypt", "--input-type", "yaml", "--output-type", "yaml",
-                    "--filename-override", out, "/dev/stdin", stdin=plaintext)
-    with open(out, "wb") as f:
-        f.write(encrypted)
+    encrypt_to(doc, out)
     print(f"wrote {out} ({len(doc)} keys)")
 
 
