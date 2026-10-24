@@ -74,6 +74,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   `recovery.md`). The transport is one script (`app-deploy.sh`), so switching later is a `runs-on` change.
 - **The app deploy key is a forced command, not a shell.** Docker-group access is root-equivalent, so the key can only
   `put`, `deploy`, `rollback` and `status` one app directory, and the script is installed by hand on the VM.
+- **The gate's rollback restores images, not schema.** A one-shot migrator that others depend on with
+  `service_completed_successfully` counts toward `up --wait` (compose `getDependencyCondition`), so a failed migration
+  rolls the release back; a migration that succeeded stays applied, so migrations must work with the previous release.
 - **The Proxmox toolkit only touches what it marked.** Guests carry the `pve-setup` tag, backup jobs the `pve-setup-` id
   prefix, users the comment `created by pve-setup`; status shows them and undo removes only them, behind a typed
   confirmation. Config restore applies only the files the toolkit itself wrote: cluster config, network and fstab

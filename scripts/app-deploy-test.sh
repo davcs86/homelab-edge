@@ -45,6 +45,17 @@ check "unhealthy release is rolled back" "$(release 8)" "$(basename "$(readlink 
 check "registry token never reaches docker argv or env" 0 "$(grep -c tok "$work/log" || true)"
 check "every up avoids pulling" 0 "$(grep 'up -d' "$work/log" | grep -vc -- '--pull never' || true)"
 
+check "default wait timeout is 120s" 0 "$(grep 'up -d' "$work/log" | grep -vc -- '--wait-timeout 120' || true)"
+r10="$(release 10)"
+echo x | SSH_ORIGINAL_COMMAND="put $r10 compose.yml" bash "$gate_script" "$app" myapp 300
+echo y | SSH_ORIGINAL_COMMAND="put $r10 .env" bash "$gate_script" "$app" myapp 300
+echo tok | SSH_ORIGINAL_COMMAND="deploy $r10 octo" bash "$gate_script" "$app" myapp 300 >/dev/null
+check "third argument sets the wait timeout" 1 "$(grep "$r10" "$work/log" | grep -c -- '--wait-timeout 300' || true)"
+rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp 5 >/dev/null 2>&1 || rc=$?
+check "wait timeout below 30s is rejected" 2 "$rc"
+rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp '1;id' >/dev/null 2>&1 || rc=$?
+check "non-numeric wait timeout is rejected" 2 "$rc"
+
 rc=0; gate put ../etc/passwd compose.yml </dev/null 2>/dev/null || rc=$?
 check "path-like release is rejected" 2 "$rc"
 rc=0; gate put "$(release 1)" evil </dev/null 2>/dev/null || rc=$?

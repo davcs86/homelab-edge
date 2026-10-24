@@ -14,7 +14,7 @@ credentials, and the digest in `.env` is the exact image that was built.
 
 ## 0. Open items before the first deploy
 
-- [ ] Staging SSH grant for `tag:ci` (section 2, first bullet): not in the policy yet.
+- [x] Staging SSH grant for `tag:ci` (section 2, first bullet).
 - [ ] Reusable `tag:ci` key stored as `TS_AUTHKEY` and `TS_AUTHKEY_EXPIRES` in the app repo (section 2, second bullet).
 - [ ] Each target VM prepared (section 1) and the app repo configured (sections 3 and 4).
 - [ ] Optional: a 1Password vault, items and service account per app and environment (section 3.1). Until then the GitHub secrets are used.
@@ -28,15 +28,15 @@ credentials, and the digest in `.env` is the exact image that was built.
 3. `sudo install -d -o deploy -g deploy -m 0750 /opt/<app>/releases`
 4. `sudo install -m 0755 templates/app-deploy/app-deploy.sh /usr/local/bin/app-deploy`. Re-install it by hand when the script changes; the deploy key cannot.
 5. Generate a key pair for this app and pin it (public half only on the VM), in `/home/deploy/.ssh/authorized_keys`:
-   `restrict,command="/usr/local/bin/app-deploy /opt/<app> <app>" ssh-ed25519 AAAA… gha-deploy-<app>`
+   `restrict,command="/usr/local/bin/app-deploy /opt/<app> <app> [wait seconds]" ssh-ed25519 AAAA… gha-deploy-<app>`.
+   The optional third argument is how long `up --wait` may take (30–900, default 120); the deploy key cannot change it.
 6. Host key for pinning: from an admin shell on the tailnet, `ssh-keyscan -t ed25519 <vm-hostname> | sed 's/^[^ ]*/<vm-hostname>/'`. Compare the fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the VM, then store the line as `DEPLOY_KNOWN_HOSTS`.
 
 ## 2. Tailnet side (this repo)
 
 - The VM's tailnet hostname follows its tag, and a new workload needs its own tag and grants (`docs/runbooks/onboard-service.md`).
 - `policy/policy.hujson` needs `{"src": ["tag:ci"], "dst": ["tag:<workload>"], "ip": ["tcp:22"]}` plus a test that `tag:ci` reaches `<workload>:22` and nothing else.
-  Prod already has it (`tag:xstockstrat`). Staging does not: the `tag:ci` test **denies** `tag:xstockstrat-staging:22`,
-  so a staging deploy needs a PR that adds the grant and moves that entry from `deny` to `accept`.
+  Both `tag:xstockstrat` and `tag:xstockstrat-staging` have it.
 - A reusable, ephemeral key that outlives one job: on the edge, `sudo docker compose -f /opt/edge/compose.yml exec -T headscale headscale preauthkeys create --tags tag:ci --reusable --ephemeral --expiration 2160h` (90 days). The `node-admin` workflow's 24 h key is for this repo's own CI. Put the key in the GitHub secret `TS_AUTHKEY` and its expiry date in the variable `TS_AUTHKEY_EXPIRES`; do not commit it.
 - One shared `tag:ci` key means every app repo holding it can join as `tag:ci`. The SSH key is per app and forced to one gate, so the key alone reaches nothing, but rotate it if any repo is compromised.
 
@@ -80,6 +80,38 @@ Once you trust the 1Password path, delete the GitHub copies; the fallback is the
 - Copy `deploy.yml` to `.github/workflows/`, resolve each `# EDIT` line, and keep a `Dockerfile` at the root.
 - Copy `compose.example.yml` to `compose.yml`: the image must be `${APP_IMAGE}`, and every service needs a `healthcheck`, because `--wait` and the rollback rely on it.
 - Everything environment-specific comes from `APP_ENV`; nothing secret goes in `compose.yml`.
+
+## 4.1 xstockstrat
+
+The app repo already carries this; it differs from the template in four ways.
+
+- **Pipeline:** `.github/workflows/deploy-homelab.yml`, called by `deploy-dev.yml` (push to `main-dev` → `staging`) and
+  `deploy-prod.yml` (push to `main` → `production`) next to the DigitalOcean deploy, from the same `docker-build.yml`
+  images. It runs only while the repository variable `HOMELAB_DEPLOY_ENABLED` is `true`; a manual run takes an environment and an
+  already-built short SHA.
+- **Images:** 13 (12 services + `xstockstrat-db-migrator`). Each `:<short sha>` tag is resolved to a digest and written as
+  `IMAGE_<SERVICE>=…@sha256:…` instead of one `APP_IMAGE`.
+- **Compose file:** `deploy/homelab/compose.yml` (a root `compose.yml` would shadow local dev's `docker-compose.yml`).
+  `db-migrator` runs on every deploy before anything else starts, so a failed migration fails the release and rolls it back. A
+  rollback restores images, not schema.
+- **Gate wait:** pin the key with `… /opt/xstockstrat xstockstrat 300`; twelve services start in dependency order.
+
+Extra inputs per environment, both in GitHub (environment secret) and 1Password (item in the same vault):
+
+| GitHub | 1Password item | Value |
+|---|---|---|
+| `MTLS_CA` | `mtls-ca` (Secure Note, body) | base64 `{ca_cert, ca_key}` of this environment's own CA; leaves are minted per deploy |
+| `APP_ENV` | `app-env` | `APPLICATION_ENV` (`production`, or `development` for staging), `DB_PASSWORD`, `JWT_SECRET`, `BROKER_ACCOUNTS_ENCRYPTION_KEY`, `CONFIG_SECRETS_ENCRYPTION_KEY`, `SEED_USER_ID`, `APP_URL` (see `home-side.md`); optional `SLACK_WEBHOOK_URL`, `SENDGRID_API_KEY`, `VAPID_*` |
+
+Create `mtls-ca` with the other four items: one missing item sends every secret to the GitHub fallback.
+
+New CA for one environment: in the xstockstrat repo,
+`d=$(mktemp -d) && CERTS_DIR=$d CA_CN=xstockstrat-homelab-<env>-ca scripts/gen-dev-certs.sh >/dev/null && python3 -c 'import base64,json,sys; d=sys.argv[1]; print(base64.b64encode(json.dumps({"ca_cert":open(d+"/_ca/ca.pem").read(),"ca_key":open(d+"/_ca/ca-key.pem").read()}).encode()).decode())' "$d"`, then `rm -rf "$d"`.
+
+The pipeline writes `DB_HOST=db.ts.<domain>` and `DB_NAME`/`DB_USER` = `xstockstrat` (production) or `xstockstrat_staging`
+after `APP_ENV`, so `APP_ENV` cannot override them or the image digests. Six services use PgBouncer (6432), the rest connect directly (5432),
+all with `sslmode=require`; PgBouncer needs a `[databases]` entry with the same name. Values must be URL- and dotenv-safe: no `$`,
+`@`, `:` or `/` in `DB_PASSWORD` (hex is). OTel is off.
 
 ## 5. Operating it
 

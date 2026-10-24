@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Forced-command gate for one compose app; the deploy key can run nothing else. Install on the app VM as
-# /usr/local/bin/app-deploy, then pin it: restrict,command="/usr/local/bin/app-deploy /opt/myapp myapp" ssh-ed25519 AAAA… gha-deploy
+# /usr/local/bin/app-deploy, then pin it: restrict,command="/usr/local/bin/app-deploy /opt/myapp myapp [wait seconds]" ssh-ed25519 AAAA… gha-deploy
 set -euo pipefail
 
-app_dir="${1:?usage: app-deploy <app dir> <compose project>}"
-project="${2:?usage: app-deploy <app dir> <compose project>}"
+app_dir="${1:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
+project="${2:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
+wait_seconds="${3:-120}"
 keep=5
-wait_seconds=120
 
 die() { echo "app-deploy: $*" >&2; exit 2; }
+if ! [[ "$wait_seconds" =~ ^[0-9]{1,3}$ ]] || (( wait_seconds < 30 || wait_seconds > 900 )); then
+  die "wait seconds must be 30-900"
+fi
 compose() { local d="$1"; shift; docker compose --project-name "$project" --env-file "$d/.env" -f "$d/compose.yml" "$@"; }
 
 read -r -a cmd <<<"${SSH_ORIGINAL_COMMAND:-}"
