@@ -72,7 +72,7 @@ endpoints:
       - "[STATUS] == 404"
     alerts: [{type: ntfy}]
 
-  - name: app-ui
+  - name: xstockstrat-ui
     group: home
     url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/api/health
     interval: 1m
@@ -81,9 +81,27 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
-  - name: app-agent
+  - name: xstockstrat-agent
     group: home
     url: http://{{ app_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: xstockstrat-staging-ui
+    group: home
+    url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/api/health
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: xstockstrat-staging-agent
+    group: home
+    url: http://{{ staging_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
     interval: 1m
     <<: *tailnet
     conditions:
