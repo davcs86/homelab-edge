@@ -87,3 +87,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Password SSH is disabled behind a typed proof and an automatic revert.** A lockout on a remote-only host costs a trip to
   the box, so `ssh-harden` arms a transient `systemd-run` timer (no `at` dependency) that removes the drop-in after
   10 minutes unless `ssh-harden-keep` stops it.
+- **Two SSH keys, agent forwarding off.** The owner keeps keys in the 1Password SSH agent, which is desktop-only and can be locked or
+  unavailable, so a remote-only host needs a second key that does not depend on it (the gate checks for two). The drop-in forbids agent
+  forwarding so a mistaken `ssh -A` cannot expose the 1Password keys to root on the host. A client that offers every agent key hits
+  `MaxAuthTries` (6), so the proof commands use `IdentitiesOnly` with the public key file.

@@ -462,8 +462,9 @@ class Undo(unittest.TestCase):
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKApHPR1HHqSoai6FXgCUwxfeeDChmSuhagQGqcsILm laptop"
 KEY2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOuroREm2DF2lSNSCIX5dUsHdhR2Yk3pPWJ79E45zZR other"
 SSHD_T = "sshd -T -f /etc/ssh/sshd_config"
-HARD = "passwordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\n"
-SOFT = "passwordauthentication yes\nkbdinteractiveauthentication no\npermitrootlogin without-password\n"
+HARD = "passwordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\nallowagentforwarding no\n"
+SOFT = "passwordauthentication yes\nkbdinteractiveauthentication no\npermitrootlogin without-password\nallowagentforwarding no\n"
+PROOF = "ssh -o IdentitiesOnly=yes -i <public key file>"
 NET = {"tailscale ip -4": "100.64.0.9\n", "hostname -I": "192.168.1.10 100.64.0.9 fd00::1\n", "systemctl cat ssh.service": "[Unit]\n"}
 
 
@@ -488,11 +489,22 @@ class Keys(Isolated):
 
     def test_paste_dedupes_and_skips_junk(self):
         with Env() as env:
-            r = env.run(["ssh-harden"], f"3\n{KEY}\n{KEY}\nnot a key\n{KEY2}\n\n", dry=True)
+            r = env.run(["ssh-harden"], f"3\n{KEY}\n{KEY}\nnot a key\n{KEY2}\n\ny\ny\n", dry=True)
         self.assertIn("new     256 SHA256:FP-laptop", r.output)
-        self.assertEqual(r.output.count("SHA256:FP-laptop"), 1)
+        self.assertEqual(r.output.count("SHA256:FP-laptop"), 2)  # once in the list, once in the per-key prompt
+        self.assertEqual(r.output.count("SHA256:FP-other"), 2)
         self.assertIn("skipping a line that is not a plain public key", r.output)
         self.assertIn("append 2 line(s) to /root/.ssh/authorized_keys in place (a symlink is kept)", r.output)
+
+    def test_several_new_keys_are_chosen_one_by_one(self):
+        with Env() as env:
+            r = env.run(["ssh-harden"], f"3\n{KEY}\n{KEY2}\n\ny\nn\n", dry=True)
+        self.assertIn("append 1 line(s)", r.output)
+        self.assertIn("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKApHPR1", r.output)
+        self.assertNotIn("AAAAIGOuroREm2DF2", r.output.split("== Add authorized keys")[-1])
+        with Env() as env:
+            r = env.run(["ssh-harden"], f"3\n{KEY}\n{KEY2}\n\nn\nn\n", dry=True)
+        self.assertNotIn("append", r.output)
 
     def test_only_https_urls_and_a_size_cap(self):
         with self.assertRaises(ValueError):
@@ -528,18 +540,20 @@ class SshHarden(Isolated):
 
     def test_effective_parse_accepts_both_spellings(self):
         for spelling in ("without-password", "prohibit-password"):
-            eff = {"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": spelling}
+            eff = {"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": spelling, "allowagentforwarding": "no"}
             self.assertTrue(pve.ssh_is_hardened(eff))
-        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "yes", "kbdinteractiveauthentication": "no", "permitrootlogin": "without-password"}))
-        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": "yes"}))
+            self.assertFalse(pve.ssh_is_hardened({**eff, "allowagentforwarding": "yes"}))
+            self.assertFalse(pve.ssh_is_hardened({k: v for k, v in eff.items() if k != "allowagentforwarding"}))
+        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "yes", "kbdinteractiveauthentication": "no", "permitrootlogin": "without-password", "allowagentforwarding": "no"}))
+        self.assertFalse(pve.ssh_is_hardened({"passwordauthentication": "no", "kbdinteractiveauthentication": "no", "permitrootlogin": "yes", "allowagentforwarding": "no"}))
         self.assertFalse(pve.ssh_is_hardened(None))
 
     def test_plan_shows_proof_commands_dropin_revert_and_checks(self):
         with self.env() as env:
             r = env.run(["ssh-harden"], "\n\n", dry=True)
         self.assertEqual(r.exit_code, 0, r.output)
-        for text in ("ssh root@192.168.1.10", "ssh root@100.64.0.9", "write /etc/ssh/sshd_config.d/10-hardening.conf",
-                     "PermitRootLogin prohibit-password", "validate with sshd -t", "systemd-run --unit pve-setup-ssh-revert --on-active=10m",
+        for text in (f"{PROOF} root@192.168.1.10", f"{PROOF} root@100.64.0.9", "write /etc/ssh/sshd_config.d/10-hardening.conf",
+                     "PermitRootLogin prohibit-password", "AllowAgentForwarding no", "Too many authentication", "validate with sshd -t", "systemd-run --unit pve-setup-ssh-revert --on-active=10m",
                      "systemctl reload ssh", "check the effective settings with sshd -T"):
             self.assertIn(text, r.output)
 
@@ -674,7 +688,7 @@ class Gate(Isolated):
 
     def env(self, **kw):
         soft = {SSHD_T: HARD, "ss -ltnH": SS, **NET, **kw.pop("soft", {})}
-        return Env(texts={pve.AUTHORIZED_KEYS: KEY + "\n"}, soft=soft, ts=kw.pop("ts", TS_PVE))
+        return Env(texts={pve.AUTHORIZED_KEYS: kw.pop("keys", KEY + "\n" + KEY2 + "\n")}, soft=soft, ts=kw.pop("ts", TS_PVE))
 
     def test_all_host_checks_pass_and_are_recorded(self):
         with self.env() as env:
@@ -683,7 +697,7 @@ class Gate(Isolated):
         self.assertEqual(r.output.count("PASS"), 7)
         self.assertNotIn("FAIL", r.output)
         self.assertIn("Passing boots recorded: 1", r.output)
-        self.assertIn("phone, Wi-Fi off", r.output)
+        self.assertIn("off the LAN", r.output)
         self.assertEqual(json.loads(pve.gate_path().read_text())["passing_boots"][0]["boot_id"], "boot-1")
         self.assertEqual(oct(pve.gate_path().stat().st_mode & 0o777), "0o600")
 
@@ -701,6 +715,7 @@ class Gate(Isolated):
             "password SSH": dict(soft={SSHD_T: SOFT}),
             "web UI listening": dict(soft={"ss -ltnH": "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"}),
             "tailscale up as pve": dict(ts={**TS_PVE, "hostname": "pve-1"}),
+            "at least two authorized keys": dict(keys=KEY + "\n"),
         }
         for name, kw in cases.items():
             with self.subTest(name), self.env(**kw) as env:
@@ -711,6 +726,18 @@ class Gate(Isolated):
             with self.subTest(label), mock.patch.object(pve, attr, value), self.env() as env:
                 r = env.run(["remote-gate"])
             self.assertRegex(r.output, rf"FAIL  .*{label}")
+
+    def test_forwarding_is_part_of_the_ssh_check(self):
+        with self.env(soft={SSHD_T: HARD.replace("allowagentforwarding no", "allowagentforwarding yes")}) as env:
+            r = env.run(["remote-gate"])
+        self.assertRegex(r.output, r"FAIL  .*password SSH")
+        self.assertIn("allowagentforwarding=yes", r.output)
+
+    def test_the_manual_checklist_covers_the_agent_and_the_phone(self):
+        with self.env() as env:
+            r = env.run(["remote-gate"])
+        self.assertIn("1Password SSH agent exists on desktops only", r.output)
+        self.assertIn("hotspot", r.output)
 
     def test_failing_gate_records_nothing(self):
         with self.env(soft={SSHD_T: SOFT}) as env:

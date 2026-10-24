@@ -45,7 +45,7 @@ ARC_MAX_BYTES = 3 * 2**30  # the guide's ZFS ARC cap (section 5.2)
 AUTHORIZED_KEYS = "/root/.ssh/authorized_keys"  # a symlink into the cluster filesystem on Proxmox
 SSHD_CONFIG = "/etc/ssh/sshd_config"
 SSH_DROPIN = "/etc/ssh/sshd_config.d/10-hardening.conf"
-SSH_DROPIN_TEXT = "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n"
+SSH_DROPIN_TEXT = "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowAgentForwarding no\n"
 SSH_REVERT_UNIT = "pve-setup-ssh-revert"
 HEARTBEAT_FILES = ("/etc/edge-heartbeat.curl", "/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer")
 TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list"
@@ -882,7 +882,7 @@ def sshd_effective() -> dict[str, str] | None:
 def ssh_is_hardened(eff: dict[str, str] | None) -> bool:
     # sshd -T prints the old spelling "without-password" for prohibit-password
     return bool(eff) and eff.get("passwordauthentication") == "no" and eff.get("kbdinteractiveauthentication") == "no" \
-        and eff.get("permitrootlogin") in ("prohibit-password", "without-password")
+        and eff.get("permitrootlogin") in ("prohibit-password", "without-password") and eff.get("allowagentforwarding") == "no"
 
 
 def ssh_service() -> str:
@@ -920,7 +920,7 @@ def validate_or_remove() -> bool:
 def verify_effective() -> bool:
     eff = sshd_effective()
     if ssh_is_hardened(eff):
-        typer.echo("sshd -T confirms: password and keyboard-interactive logins off, root by key only.")
+        typer.echo("sshd -T confirms: password and keyboard-interactive logins off, root by key only, agent forwarding off.")
         return True
     earlier = sorted(f for f in Path(SSH_DROPIN).parent.glob("*.conf") if f.name < Path(SSH_DROPIN).name) if Path(SSH_DROPIN).parent.is_dir() else []
     fail("sshd -T does not show the hardened settings" + (f"; the first value wins, so check these earlier drop-ins: {', '.join(map(str, earlier))}" if earlier
@@ -934,6 +934,9 @@ def remove_dropin_and_reload(svc: str) -> bool:
     return subprocess.run(["systemctl", "reload", svc], check=False).returncode == 0
 
 
+PROOF_SSH = "ssh -o IdentitiesOnly=yes -i <public key file>"
+
+
 def ssh_harden() -> None:
     """Install your SSH key, then disable password SSH (drop-in, automatic revert, effective-config check)."""
     have = existing_key_idents()
@@ -944,7 +947,10 @@ def ssh_harden() -> None:
         for k in found:
             typer.echo(f"  {'new    ' if k in new else 'present'} {k['fp']}")
         if found:
-            typer.echo("Compare each fingerprint with `ssh-keygen -lf <your key>.pub` on your laptop.")
+            typer.echo("Compare each fingerprint with the one 1Password (or `ssh-keygen -lf <key>.pub`) shows for that key.")
+        if len(new) > 1:
+            typer.echo("Several keys are new (`ssh-add -L` lists every key the agent holds). Choose which to install:")
+            new = [k for k in new if typer.confirm(f"  Install {k['fp']}?", default=False)]
         if not execute(Plan("Add authorized keys", [Append(AUTHORIZED_KEYS, [k["line"] for k in new])] if new else [])):
             return
         have |= {k["ident"] for k in new}
@@ -953,8 +959,10 @@ def ssh_harden() -> None:
     lan, ts = lan_address(), tailnet_address()
     if not ts and not STATE["dry_run"]:
         raise typer.Exit(fail("the host is not on the tailnet yet (run tailscale-join); the guide requires proving login over both paths"))
-    typer.echo(f"\nBefore passwords are disabled, open NEW terminals on your laptop:\n  ssh root@{lan or '<LAN IP>'}\n  ssh root@{ts or '<TAILNET IP>'}\n"
-               "Both must log in without a password. Keep this console logged in.")
+    typer.echo(f"\nBefore passwords are disabled, open NEW terminals on your laptop:\n  {PROOF_SSH} root@{lan or '<LAN IP>'}\n  {PROOF_SSH} root@{ts or '<TAILNET IP>'}\n"
+               "Both must log in without a password. Keep this console logged in.\n"
+               "With an SSH agent (1Password) that holds many keys, ssh offers them all and sshd stops after about 6 tries ('Too many authentication\n"
+               "failures'); IdentitiesOnly with the public key file makes ssh offer only that key, and the agent still signs.")
     if not confirm_typed("proven", "Password logins are disabled next."):
         typer.echo("Cancelled.")
         return
@@ -971,7 +979,7 @@ def ssh_harden() -> None:
         steps.append(Cmd(["systemd-run", "--unit", SSH_REVERT_UNIT, "--on-active=10m", "/bin/sh", "-c", f"rm -f {SSH_DROPIN} && systemctl reload {svc}"]))
     steps += [Cmd(["systemctl", "reload", svc]), Do("check the effective settings with sshd -T", verify_effective)]
     if execute(Plan("Disable password SSH", steps)) and not STATE["dry_run"]:
-        typer.echo(f"\nNow, in fresh terminals: ssh root@{lan or '<LAN IP>'} and ssh root@{ts or '<TAILNET IP>'} must still log in, and\n"
+        typer.echo(f"\nNow, in fresh terminals: {PROOF_SSH} root@{lan or '<LAN IP>'} and the same for {ts or '<TAILNET IP>'} must still log in, and\n"
                    f"  ssh -o PubkeyAuthentication=no root@{ts or '<TAILNET IP>'}   must fail with 'Permission denied (publickey)'.\n"
                    "Then run ssh-harden-keep to cancel the automatic revert. Keep the root password: the web UI and the console use it.")
 
@@ -1048,8 +1056,8 @@ def gate_checks() -> list[tuple[str, bool, str]]:
     ports = listening_ports()
     return [
         ("password SSH disabled (sshd -T)", ssh_is_hardened(eff), ", ".join(f"{k}={v}" for k, v in (eff or {}).items() if k in (
-            "passwordauthentication", "kbdinteractiveauthentication", "permitrootlogin")) or "sshd -T unavailable"),
-        ("an authorized key is installed", keys > 0, f"{keys} key(s)"),
+            "passwordauthentication", "kbdinteractiveauthentication", "permitrootlogin", "allowagentforwarding")) or "sshd -T unavailable"),
+        ("at least two authorized keys (one independent of 1Password)", keys >= 2, f"{keys} key(s)"),
         ("SSH listening on 22", 22 in ports, ""),
         ("web UI listening on 8006", 8006 in ports, ""),
         (f"tailscale up as {NODE_NAME} with tag:pve", ts.get("backend") == "Running" and ts.get("hostname") == NODE_NAME and "tag:pve" in ts.get("tags", []),
@@ -1074,8 +1082,9 @@ def record_gate(passing: bool) -> dict:
 
 
 GATE_MANUAL = """Still yours to do (the host cannot check these):
-  - phone, Wi-Fi off, Tailscale connected: ssh root@{ts} logs in with your key
-  - phone: https://{ts}:8006 loads and accepts root@pam
+  - off the LAN (laptop on the phone's hotspot with Wi-Fi off and Tailscale connected, or the phone's own SSH app with its own key):
+    ssh root@{ts} logs in with your key. The 1Password SSH agent exists on desktops only, so a phone needs a separate key.
+  - the same device: https://{ts}:8006 loads and accepts root@pam
   - after a reboot: SSH and the web UI are back within about 3 minutes, and node-admin -> list-devices shows pve online
   - pull the power cable, wait 30 s, plug it back in without pressing the button: the node boots and passes the SSH check
   - record in your password manager: static LAN IP, tailnet IP, hostname, pinned kernel, root password, BIOS photos"""

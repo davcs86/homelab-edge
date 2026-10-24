@@ -41,9 +41,16 @@ Do this after `tailscale-join`, with the console still logged in.
 
 | Command | What it does |
 |---|---|
-| `ssh-harden` | 1. Adds your key to `/root/.ssh/authorized_keys` from a URL (https only, e.g. `https://github.com/<you>.keys`), a file or pasted lines: each line is validated with `ssh-keygen`, shown with its fingerprint, and appended in place only if missing (the file is a symlink into the cluster filesystem and is never replaced). 2. Prints the two logins to prove from new terminals on your laptop (LAN and tailnet address) and waits for you to type `proven`. 3. Writes `/etc/ssh/sshd_config.d/10-hardening.conf`, runs `sshd -t` (removing the file again if it fails), optionally arms a 10-minute automatic revert, reloads sshd, then checks `sshd -T`. |
+| `ssh-harden` | 1. Adds your key to `/root/.ssh/authorized_keys` from a URL (https only, e.g. `https://github.com/<you>.keys`), a file or pasted lines: each line is validated with `ssh-keygen`, shown with its fingerprint, and appended in place only if missing (the file is a symlink into the cluster filesystem and is never replaced). 2. When several keys are new (`ssh-add -L` lists everything the agent holds) it asks about each one, default No. 3. Prints the two logins to prove from new terminals on your laptop (LAN and tailnet address, with `-o IdentitiesOnly=yes -i <public key file>`) and waits for you to type `proven`. 4. Writes `/etc/ssh/sshd_config.d/10-hardening.conf` (password, keyboard-interactive and agent forwarding off, root by key only), runs `sshd -t` (removing the file again if it fails), optionally arms a 10-minute automatic revert, reloads sshd, then checks `sshd -T`. |
 | `ssh-harden-keep` | Cancels the automatic revert once both logins are proven (type `proven`). |
-| `remote-gate` | The guide's remote-readiness gate, host side: password SSH off, a key installed, 22 and 8006 listening, tailscale up as `pve` with `tag:pve`, the running kernel is the pinned one, ZFS ARC cap 3 GiB. Records passing boots in `~/.pve-setup-gate.json` (a second passing boot proves the clean reboot; 48 h after the first pass the soak is complete) and prints what only you can check. `remote-gate --reboot` refuses unless every check passes, needs the word `reboot`, then reboots; run it again afterwards. |
+| `remote-gate` | The guide's remote-readiness gate, host side: password SSH and agent forwarding off, at least two keys installed, 22 and 8006 listening, tailscale up as `pve` with `tag:pve`, the running kernel is the pinned one, ZFS ARC cap 3 GiB. Records passing boots in `~/.pve-setup-gate.json` (a second passing boot proves the clean reboot; 48 h after the first pass the soak is complete) and prints what only you can check. `remote-gate --reboot` refuses unless every check passes, needs the word `reboot`, then reboots; run it again afterwards. |
+
+### With the 1Password SSH agent
+- The agent runs on your desktop; nothing changes on the host. Get the public key from the key's item in 1Password (or `ssh-add -L`) and paste it, or save it to a file; compare the fingerprint the script prints with the one 1Password shows.
+- Your client must offer only that key, or sshd stops after 6 attempts ("Too many authentication failures"): `ssh -o IdentitiesOnly=yes -i <public key file> root@<address>`, or the same two options under a `Host` block in `~/.ssh/config`. The agent still does the signing.
+- Never forward the agent to this host: the drop-in sets `AllowAgentForwarding no`, and keep `ForwardAgent no` on the client too.
+- Install a second key that does not depend on 1Password (for example the key of your phone's SSH app, or a hardware key kept offline); the gate requires two keys. If 1Password is locked, down or lost, the console and the web UI root password remain, and only at the box.
+- The 1Password agent has no phone version, so the gate's off-LAN test uses either the laptop on the phone's hotspot (Wi-Fi off, Tailscale connected) or the phone's own SSH app with that second key.
 
 The first value in sshd wins, so an earlier-sorted drop-in (say `00-cloud.conf` with `PasswordAuthentication yes`) beats this one: the `sshd -T` check names such files when the result is wrong. Undo: `ssh-harden-remove`. Keys are never removed.
 
@@ -86,7 +93,7 @@ apt list), after one confirmation. Cluster config, network and fstab are never a
 - Token for `heartbeat`: `gatus_heartbeat_pve_token` from `secrets/edge.sops.yaml`; the edge's tailnet IP from `ssh david_admin@edge tailscale ip -4`.
 - Cloud image: pick the image and its published SHA-256 yourself; the script refuses to import without a matching checksum.
   Use an image with `qemu-guest-agent` and `cloud-init`.
-- For `ssh-harden`: your public key (or its GitHub `.keys` URL), a second machine for the two login proofs, and the console. `ssh-keygen` must be installed (it is on Proxmox).
+- For `ssh-harden`: your public key (from 1Password, `ssh-add -L`, or a GitHub `.keys` URL), a second key that is independent of 1Password, a second machine for the two login proofs, and the console. `ssh-keygen` must be installed (it is on Proxmox).
 - For `remote-gate`: the kernel pin (`proxmox-boot-tool kernel pin <version>`) and the ZFS ARC cap from the guide's section 5 are checked but not set by this toolkit.
 - Guests join the tailnet themselves; give each the hostname its tag requires (`docs/runbooks/onboard-service.md`).
 
