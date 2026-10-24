@@ -78,3 +78,23 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The Proxmox host joins as `pve` with Tailscale DNS off.** The edge probes `pve.ts.<domain>:8006` and names its heartbeat for
   `pve`; MagicDNS would rewrite `/etc/resolv.conf`, which apt and the guests depend on. With DNS off the heartbeat cannot resolve
   `status.ts.<domain>`, so its curl config pins the edge's tailnet IP.
+- **The SSH hardening is judged by `sshd -T`, not by the file it wrote.** sshd takes the first value it sees and includes
+  `sshd_config.d/*.conf` in name order, so an earlier-sorted drop-in can silently win. `sshd -T` prints `without-password`
+  for `prohibit-password`, so both spellings count. A failed `sshd -t` removes the drop-in again, because the next start
+  would otherwise fail.
+- **`authorized_keys` is appended to in place.** On Proxmox it is a symlink into `/etc/pve`; the toolkit's file writer
+  replaces files, which would turn the symlink into a regular file and leave the cluster copy stale.
+- **Password SSH is disabled behind a typed proof and an automatic revert.** A lockout on a remote-only host costs a trip to
+  the box, so `ssh-harden` arms a transient `systemd-run` timer (no `at` dependency) that removes the drop-in after
+  10 minutes unless `ssh-harden-keep` stops it.
+- **Two SSH keys, agent forwarding off.** The owner keeps keys in the 1Password SSH agent, which is desktop-only and can be locked or
+  unavailable, so a remote-only host needs a second key that does not depend on it (the gate checks for two). The drop-in forbids agent
+  forwarding so a mistaken `ssh -A` cannot expose the 1Password keys to root on the host. A client that offers every agent key hits
+  `MaxAuthTries` (6), so the proof commands use `IdentitiesOnly` with the public key file.
+- **App-deploy secrets come from 1Password first and fall back to GitHub secrets.** One service account per app and environment
+  vault (its vaults are fixed at creation), its token the only secret in the GitHub environment. The edge's own workflows keep
+  GitHub secrets and SOPS, so rule 3 is unchanged. Workload Identity (v5, public preview) was not used: it still needs a GitHub
+  secret and loads every variable of a 1Password Environment, with no per-item references or `ssh-format`.
+- **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
+  when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
+  `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).

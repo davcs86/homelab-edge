@@ -41,6 +41,12 @@ USER_COMMENT = "created by pve-setup"
 
 NODE_NAME = "pve"  # Gatus probes tcp://pve.ts.<domain>:8006; the heartbeat endpoint is named for it
 TAILSCALE_VERSION = "1.98.10"  # keep in step with tailscale_package_version in inventories/prod/group_vars/all/versions.yml
+ARC_MAX_BYTES = 3 * 2**30  # the guide's ZFS ARC cap (section 5.2)
+AUTHORIZED_KEYS = "/root/.ssh/authorized_keys"  # a symlink into the cluster filesystem on Proxmox
+SSHD_CONFIG = "/etc/ssh/sshd_config"
+SSH_DROPIN = "/etc/ssh/sshd_config.d/10-hardening.conf"
+SSH_DROPIN_TEXT = "PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowAgentForwarding no\n"
+SSH_REVERT_UNIT = "pve-setup-ssh-revert"
 HEARTBEAT_FILES = ("/etc/edge-heartbeat.curl", "/etc/systemd/system/edge-heartbeat.service", "/etc/systemd/system/edge-heartbeat.timer")
 TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list"
 TAILSCALE_KEYRING = "/usr/share/keyrings/tailscale-archive-keyring.gpg"
@@ -70,6 +76,7 @@ class Write:
     content: str
     mode: int = 0o644
     secret: bool = False
+    undo: Optional["Step"] = None
 
 
 @dataclass
@@ -91,12 +98,18 @@ class Remove:
 
 
 @dataclass
+class Append:
+    path: str
+    lines: list[str]
+
+
+@dataclass
 class Do:
     label: str
     fn: Callable[[], bool]
 
 
-Step = Cmd | Write | Fetch | Verify | Remove | Do
+Step = Cmd | Write | Fetch | Verify | Remove | Append | Do
 
 
 @dataclass
@@ -133,6 +146,8 @@ def describe(step: Step) -> str:
         return f"require sha256 {step.sha256} for {step.path}"
     if isinstance(step, Remove):
         return f"remove {step.path}"
+    if isinstance(step, Append):
+        return f"append {len(step.lines)} line(s) to {step.path} in place (a symlink is kept)" + "".join(f"\n  {l[:100]}" for l in step.lines)
     return step.label
 
 
@@ -157,10 +172,26 @@ def write_file(step: Write) -> None:
             os.unlink(tmp)
 
 
+def append_lines(path: str, lines: list[str]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        existing = Path(path).read_text()
+    except FileNotFoundError:
+        existing = ""
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)  # follows a symlink, never replaces it
+    with os.fdopen(fd, "a") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write("".join(l.rstrip("\n") + "\n" for l in lines))
+
+
 def run_step(step: Step) -> bool:
     log(describe(step).splitlines()[0])
     if isinstance(step, Write):
         write_file(step)
+        return True
+    if isinstance(step, Append):
+        append_lines(step.path, step.lines)
         return True
     if isinstance(step, Remove):
         if os.path.lexists(step.path):
@@ -187,7 +218,7 @@ def run_step(step: Step) -> bool:
 
 
 def offer_rollback(done: list[Step], failed: Step) -> None:
-    undos = [s.undo for s in reversed(done) if isinstance(s, Cmd) and s.undo]
+    undos = [u for u in (getattr(s, "undo", None) for s in reversed(done)) if u]
     if isinstance(failed, Cmd) and failed.undo and failed.undo_on_fail:
         undos.insert(0, failed.undo)
     if not undos:
@@ -195,7 +226,7 @@ def offer_rollback(done: list[Step], failed: Step) -> None:
         return
     typer.secho("\nThe plan stopped part-way. These commands undo what it already did:", bold=True)
     for u in undos:
-        typer.echo("  $ " + (u.shown or shlex.join(u.argv)))
+        typer.echo("  " + describe(u).splitlines()[0])
     if not typer.confirm("Run the rollback now?", default=False):
         typer.echo("Left as is. Re-running the task resumes from what exists.")
         return
@@ -777,6 +808,324 @@ def api_token() -> None:
     execute(Plan(f"Create {user}!{token}", steps))
 
 
+# ---------- ssh hardening and the remote-readiness gate ----------
+KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
+                    r" ([A-Za-z0-9+/]+={0,3})(?: (.*))?$")
+
+
+def key_ident(line: str) -> tuple[str, str] | None:
+    m = KEY_RE.match(line.strip())
+    return (m[1], m[2]) if m else None
+
+
+def key_fingerprint(line: str) -> str | None:
+    try:
+        r = subprocess.run(["ssh-keygen", "-lf", "-"], input=line.strip() + "\n", capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def fetch_key_text(url: str) -> str:
+    if not url.startswith("https://"):
+        raise ValueError("only https:// URLs are fetched")
+    with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310  # https only, checked above
+        data = r.read(65537)
+    if len(data) > 65536:
+        raise ValueError("the response is larger than 64 KiB")
+    return data.decode()
+
+
+def collect_keys() -> list[dict]:
+    how = choose("Where are your public keys?", [("url", "A URL, e.g. https://github.com/<you>.keys"), ("file", "A file"), ("paste", "Paste lines")])
+    try:
+        if how == "url":
+            text = fetch_key_text(typer.prompt("URL"))
+        elif how == "file":
+            text = Path(typer.prompt("File")).expanduser().read_text()
+        else:
+            lines = []
+            while (l := typer.prompt("Public key line (empty to finish)", default="", show_default=False).strip()):
+                lines.append(l)
+            text = "\n".join(lines)
+    except (OSError, ValueError) as e:
+        raise typer.Exit(fail(f"cannot read the keys: {e}")) from None
+    keys: dict[tuple[str, str], dict] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        ident = key_ident(line)
+        fp = key_fingerprint(line) if ident else None
+        if not ident or not fp:
+            warn(f"skipping a line that is not a plain public key: {line[:40]}")
+            continue
+        keys.setdefault(ident, {"line": line, "ident": ident, "fp": fp})
+    return list(keys.values())
+
+
+def existing_key_idents() -> set[tuple[str, str]]:
+    return {i for i in (key_ident(l) for l in (read_text(AUTHORIZED_KEYS) or "").splitlines()) if i}
+
+
+def sshd_effective() -> dict[str, str] | None:
+    out = soft(["sshd", "-T", "-f", SSHD_CONFIG])
+    if not out:
+        return None
+    eff: dict[str, str] = {}
+    for line in out.splitlines():
+        k, _, v = line.partition(" ")
+        eff.setdefault(k.lower(), v.strip().lower())
+    return eff
+
+
+def ssh_is_hardened(eff: dict[str, str] | None) -> bool:
+    # sshd -T prints the old spelling "without-password" for prohibit-password
+    return bool(eff) and eff.get("passwordauthentication") == "no" and eff.get("kbdinteractiveauthentication") == "no" \
+        and eff.get("permitrootlogin") in ("prohibit-password", "without-password") and eff.get("allowagentforwarding") == "no"
+
+
+def ssh_service() -> str:
+    return "ssh" if soft(["systemctl", "cat", "ssh.service"]) is not None else "sshd"
+
+
+def revert_armed() -> bool:
+    return soft(["systemctl", "is-active", f"{SSH_REVERT_UNIT}.timer"]) is not None
+
+
+def lan_address() -> str:
+    for tok in (soft(["hostname", "-I"]) or "").split():
+        try:
+            ip = ipaddress.ip_address(tok)
+        except ValueError:
+            continue
+        if ip.version == 4 and not ip.is_loopback and ip not in ipaddress.ip_network("100.64.0.0/10"):
+            return tok
+    return ""
+
+
+def tailnet_address() -> str:
+    return ((soft(["tailscale", "ip", "-4"]) or "").split() or [""])[0]
+
+
+def validate_or_remove() -> bool:
+    if subprocess.run(["sshd", "-t", "-f", SSHD_CONFIG], check=False).returncode == 0:
+        return True
+    if os.path.lexists(SSH_DROPIN):
+        os.unlink(SSH_DROPIN)
+    fail("sshd -t rejected the configuration; the drop-in was removed again so the next sshd start cannot fail")
+    return False
+
+
+def verify_effective() -> bool:
+    eff = sshd_effective()
+    if ssh_is_hardened(eff):
+        typer.echo("sshd -T confirms: password and keyboard-interactive logins off, root by key only, agent forwarding off.")
+        return True
+    earlier = sorted(f for f in Path(SSH_DROPIN).parent.glob("*.conf") if f.name < Path(SSH_DROPIN).name) if Path(SSH_DROPIN).parent.is_dir() else []
+    fail("sshd -T does not show the hardened settings" + (f"; the first value wins, so check these earlier drop-ins: {', '.join(map(str, earlier))}" if earlier
+                                                           else "; check `sshd -T | grep -i -e passwordauth -e permitroot`"))
+    return False
+
+
+def remove_dropin_and_reload(svc: str) -> bool:
+    if os.path.lexists(SSH_DROPIN):
+        os.unlink(SSH_DROPIN)
+    return subprocess.run(["systemctl", "reload", svc], check=False).returncode == 0
+
+
+PROOF_SSH = "ssh -o IdentitiesOnly=yes -i <public key file>"
+
+
+def ssh_harden() -> None:
+    """Install your SSH key, then disable password SSH (drop-in, automatic revert, effective-config check)."""
+    have = existing_key_idents()
+    typer.echo(f"{AUTHORIZED_KEYS}: {len(have)} key(s).")
+    if not have or typer.confirm("Add more keys?", default=False):
+        found = collect_keys()
+        new = [k for k in found if k["ident"] not in have]
+        for k in found:
+            typer.echo(f"  {'new    ' if k in new else 'present'} {k['fp']}")
+        if found:
+            typer.echo("Compare each fingerprint with the one 1Password (or `ssh-keygen -lf <key>.pub`) shows for that key.")
+        if len(new) > 1:
+            typer.echo("Several keys are new (`ssh-add -L` lists every key the agent holds). Choose which to install:")
+            new = [k for k in new if typer.confirm(f"  Install {k['fp']}?", default=False)]
+        if not execute(Plan("Add authorized keys", [Append(AUTHORIZED_KEYS, [k["line"] for k in new])] if new else [])):
+            return
+        have |= {k["ident"] for k in new}
+    if not have and not STATE["dry_run"]:
+        raise typer.Exit(fail("no key in authorized_keys; refusing to disable passwords"))
+    lan, ts = lan_address(), tailnet_address()
+    if not ts and not STATE["dry_run"]:
+        raise typer.Exit(fail("the host is not on the tailnet yet (run tailscale-join); the guide requires proving login over both paths"))
+    typer.echo(f"\nBefore passwords are disabled, open NEW terminals on your laptop:\n  {PROOF_SSH} root@{lan or '<LAN IP>'}\n  {PROOF_SSH} root@{ts or '<TAILNET IP>'}\n"
+               "Both must log in without a password. Keep this console logged in.\n"
+               "With an SSH agent (1Password) that holds many keys, ssh offers them all and sshd stops after about 6 tries ('Too many authentication\n"
+               "failures'); IdentitiesOnly with the public key file makes ssh offer only that key, and the agent still signs.")
+    if not confirm_typed("proven", "Password logins are disabled next."):
+        typer.echo("Cancelled.")
+        return
+    eff = sshd_effective()
+    if read_text(SSH_DROPIN) == SSH_DROPIN_TEXT and ssh_is_hardened(eff):
+        typer.echo("Password SSH is already disabled by the drop-in.")
+        execute(Plan("Disable password SSH", []))
+        return
+    svc = ssh_service()
+    steps: list[Step] = [
+        Write(SSH_DROPIN, SSH_DROPIN_TEXT, undo=Do("remove the drop-in and reload sshd", lambda: remove_dropin_and_reload(svc))),
+        Do("validate with sshd -t; the drop-in is removed again if it fails", validate_or_remove)]
+    if not revert_armed() and typer.confirm("Arm an automatic revert in 10 minutes, cancelled by ssh-harden-keep once both logins are proven?", default=True):
+        steps.append(Cmd(["systemd-run", "--unit", SSH_REVERT_UNIT, "--on-active=10m", "/bin/sh", "-c", f"rm -f {SSH_DROPIN} && systemctl reload {svc}"]))
+    steps += [Cmd(["systemctl", "reload", svc]), Do("check the effective settings with sshd -T", verify_effective)]
+    if execute(Plan("Disable password SSH", steps)) and not STATE["dry_run"]:
+        typer.echo(f"\nNow, in fresh terminals: {PROOF_SSH} root@{lan or '<LAN IP>'} and the same for {ts or '<TAILNET IP>'} must still log in, and\n"
+                   f"  ssh -o PubkeyAuthentication=no root@{ts or '<TAILNET IP>'}   must fail with 'Permission denied (publickey)'.\n"
+                   "Then run ssh-harden-keep to cancel the automatic revert. Keep the root password: the web UI and the console use it.")
+
+
+def ssh_harden_keep() -> None:
+    """Cancel the automatic SSH revert once both logins are proven."""
+    if not revert_armed():
+        typer.echo("No automatic revert is armed.")
+        return
+    if not confirm_typed("proven", "This keeps password SSH disabled for good."):
+        typer.echo("Cancelled.")
+        return
+    execute(Plan("Keep the SSH hardening", [Cmd(["systemctl", "stop", f"{SSH_REVERT_UNIT}.timer"])]))
+
+
+def ssh_harden_remove() -> None:
+    """Remove the SSH hardening drop-in and reload sshd (keys are left alone)."""
+    if read_text(SSH_DROPIN) is None:
+        typer.echo("The hardening drop-in is not installed.")
+        return
+    if not confirm_typed("ssh", "Password logins become possible again if nothing else in sshd_config forbids them."):
+        typer.echo("Cancelled.")
+        return
+    steps: list[Step] = [Remove(SSH_DROPIN), Cmd(["systemctl", "reload", ssh_service()])]
+    if revert_armed():
+        steps.append(Cmd(["systemctl", "stop", f"{SSH_REVERT_UNIT}.timer"]))
+    execute(Plan("Remove the SSH hardening", steps))
+
+
+def pinned_kernel() -> str | None:
+    lines = [l.strip() for l in (soft(["proxmox-boot-tool", "kernel", "list"]) or "").splitlines()]
+    for i, l in enumerate(lines):
+        if l.lower().startswith("pinned kernel"):
+            for nxt in lines[i + 1:]:
+                if nxt:
+                    return None if nxt.lower().startswith("none") else nxt
+    return None
+
+
+def running_kernel() -> str:
+    return os.uname().release
+
+
+def listening_ports() -> set[int]:
+    ports = set()
+    for line in (soft(["ss", "-ltnH"]) or "").splitlines():
+        cols = line.split()
+        if len(cols) >= 4 and cols[3].rsplit(":", 1)[-1].isdigit():
+            ports.add(int(cols[3].rsplit(":", 1)[-1]))
+    return ports
+
+
+def zfs_arc_max() -> int | None:
+    try:
+        return int(Path("/sys/module/zfs/parameters/zfs_arc_max").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def gate_path() -> Path:
+    return LOG.with_name(".pve-setup-gate.json")
+
+
+def gate_checks() -> list[tuple[str, bool, str]]:
+    eff = sshd_effective()
+    keys = len(existing_key_idents())
+    ts = tailscale_state() or {}
+    pin, run = pinned_kernel(), running_kernel()
+    arc = zfs_arc_max()
+    ports = listening_ports()
+    return [
+        ("password SSH disabled (sshd -T)", ssh_is_hardened(eff), ", ".join(f"{k}={v}" for k, v in (eff or {}).items() if k in (
+            "passwordauthentication", "kbdinteractiveauthentication", "permitrootlogin", "allowagentforwarding")) or "sshd -T unavailable"),
+        ("at least two authorized keys (one independent of 1Password)", keys >= 2, f"{keys} key(s)"),
+        ("SSH listening on 22", 22 in ports, ""),
+        ("web UI listening on 8006", 8006 in ports, ""),
+        (f"tailscale up as {NODE_NAME} with tag:pve", ts.get("backend") == "Running" and ts.get("hostname") == NODE_NAME and "tag:pve" in ts.get("tags", []),
+         f"{ts.get('backend')}, {ts.get('hostname')}, {','.join(ts.get('tags', []))}"),
+        ("running kernel is the pinned one", bool(pin) and pin == run, f"pinned {pin}, running {run}"),
+        ("ZFS ARC cap is 3 GiB", arc == ARC_MAX_BYTES, f"zfs_arc_max={arc}"),
+    ]
+
+
+def record_gate(passing: bool) -> dict:
+    try:
+        data = json.loads(gate_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        data = {"passing_boots": [], "first_pass_at": None}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if passing and not STATE["dry_run"]:
+        if boot_id() not in [b["boot_id"] for b in data["passing_boots"]]:
+            data["passing_boots"].append({"boot_id": boot_id(), "at": now})
+        data["first_pass_at"] = data["first_pass_at"] or now
+        write_file(Write(str(gate_path()), json.dumps(data, indent=1), 0o600))
+    return data
+
+
+GATE_MANUAL = """Still yours to do (the host cannot check these):
+  - off the LAN (laptop on the phone's hotspot with Wi-Fi off and Tailscale connected, or the phone's own SSH app with its own key):
+    ssh root@{ts} logs in with your key. The 1Password SSH agent exists on desktops only, so a phone needs a separate key.
+  - the same device: https://{ts}:8006 loads and accepts root@pam
+  - after a reboot: SSH and the web UI are back within about 3 minutes, and node-admin -> list-devices shows pve online
+  - pull the power cable, wait 30 s, plug it back in without pressing the button: the node boots and passes the SSH check
+  - record in your password manager: static LAN IP, tailnet IP, hostname, pinned kernel, root password, BIOS photos"""
+
+
+def remote_gate_impl(reboot: bool) -> bool:
+    checks = gate_checks()
+    ok = all(c[1] for c in checks)
+    typer.secho("\n== Remote-readiness gate (host side)", bold=True)
+    for name, passed, detail in checks:
+        typer.echo(f"  {'PASS' if passed else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
+    data = record_gate(ok)
+    boots = len(data["passing_boots"])
+    typer.echo(f"\nPassing boots recorded: {boots}. Clean reboot with a passing gate afterwards: {'yes' if boots >= 2 else 'not yet'}.")
+    if data["first_pass_at"]:
+        hours = (datetime.now(timezone.utc) - datetime.fromisoformat(data["first_pass_at"])).total_seconds() / 3600
+        typer.echo(f"First pass {data['first_pass_at']}: " + (f"{hours:.0f} h ago. The 48 h soak is complete and the gate passes now." if hours >= 48 and ok
+                                                              else f"{hours:.0f} h of the 48 h soak so far; run this again after it."))
+    typer.echo(GATE_MANUAL.format(ts=tailnet_address() or "<tailnet IP>"))
+    if reboot:
+        if not ok:
+            fail("the gate must pass before a reboot test; fix the FAIL lines first")
+            return False
+        typer.echo("\nFrom your phone (Wi-Fi off), SSH and the web UI must be back within about 3 minutes. Then run remote-gate again.")
+        if not confirm_typed("reboot", "The host reboots now."):
+            typer.echo("Cancelled.")
+            return ok
+        execute(Plan("Reboot for the remote-readiness test", [Cmd(["systemctl", "reboot"])]))
+    return ok
+
+
+def remote_gate_menu() -> None:
+    remote_gate_impl(False)
+
+
+def remote_gate(reboot: bool = typer.Option(False, "--reboot", help="After a passing gate, record it and reboot for the clean-reboot test")) -> None:
+    """Run the host-side remote-readiness checks and keep a baseline across reboots."""
+    if not remote_gate_impl(reboot):
+        raise typer.Exit(1)
+
+
 # ---------- status ----------
 def collect_status() -> dict:
     ts = tailscale_state()
@@ -787,6 +1136,7 @@ def collect_status() -> dict:
         "host": {"node": node(), "pve": (soft(["pveversion"]) or "").strip() or None},
         "tailscale": ts,
         "heartbeat": heartbeat_state(),
+        "ssh": {"hardened": (ssh_is_hardened(eff) if (eff := sshd_effective()) else None), "revert_armed": revert_armed()},
         "guests": guests(),
         "storage": [{"id": s.get("storage"), "type": s.get("type"), "content": s.get("content")} for s in storage],  # type: ignore[union-attr]
         "backup_jobs": [{"id": j.get("id"), "schedule": j.get("schedule"), "storage": j.get("storage"), "enabled": j.get("enabled", 1),
@@ -807,6 +1157,9 @@ def render_status(d: dict) -> list[str]:
     hb = d["heartbeat"]
     out.append(f"Heartbeat: timer {hb['enabled'] or 'not installed'} / {hb['active'] or 'inactive'}; files "
                + ", ".join(f"{Path(p).name}={'yes' if ok else 'no'}" for p, ok in hb["files"].items()))
+    ssh = d["ssh"]
+    out.append("SSH: " + ("password logins off" if ssh["hardened"] else "password logins NOT disabled" if ssh["hardened"] is False else "unknown (sshd -T unavailable)")
+               + ("; automatic revert armed (run ssh-harden-keep once both logins are proven)" if ssh["revert_armed"] else ""))
     out.append("Guests (* = created by this toolkit):")
     for g in sorted(d["guests"], key=lambda g: g["vmid"]):
         out.append(f"  {'*' if g['managed'] else ' '} {g['vmid']:>5} {g['type']:<5} {g['status']:<8} {g['name']}{' [template]' if g['template'] else ''}")
@@ -1150,20 +1503,25 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
                 ("vm-create", "Clone a VM", vm_create), ("lxc-create", "Create an LXC container", lxc_create),
                 ("storage-add", "Add storage", storage_add), ("backup-job", "Create or update a backup job", backup_job),
                 ("api-token", "Create an API user and token", api_token)]),
+    ("Host hardening", [("ssh-harden", "Install your SSH key and disable password SSH", ssh_harden),
+                        ("ssh-harden-keep", "Cancel the automatic SSH revert", ssh_harden_keep),
+                        ("remote-gate", "Run the remote-readiness checks", remote_gate_menu)]),
     ("Inspect", [("status", "Show what exists and what this toolkit created", status)]),
     ("Undo (only things this toolkit created)", [
         ("tailscale-leave", "Leave the tailnet / uninstall Tailscale", tailscale_leave), ("heartbeat-remove", "Remove the heartbeat", heartbeat_remove),
         ("vm-destroy", "Destroy a VM, template or container", vm_destroy), ("storage-remove", "Remove a storage definition", storage_remove),
-        ("backup-job-remove", "Remove a backup job", backup_job_remove), ("api-token-revoke", "Revoke a token or delete a user", api_token_revoke)]),
+        ("backup-job-remove", "Remove a backup job", backup_job_remove), ("api-token-revoke", "Revoke a token or delete a user", api_token_revoke),
+        ("ssh-harden-remove", "Remove the SSH hardening drop-in", ssh_harden_remove)]),
     ("Config backup", [("config-backup", "Archive host and Proxmox config", config_backup),
                        ("config-restore", "Verify an archive and print a restore plan", lambda: config_restore_impl(None, None, False))]),
 ]
 for _section, _items in SECTIONS:
     for _name, _label, _fn in _items:
-        if _name not in ("status", "config-restore"):
+        if _name not in ("status", "config-restore", "remote-gate"):
             app.command(_name, help=_fn.__doc__)(_fn)
 app.command("status")(status_command)
 app.command("config-restore")(config_restore)
+app.command("remote-gate")(remote_gate)
 
 
 @app.callback(invoke_without_command=True)

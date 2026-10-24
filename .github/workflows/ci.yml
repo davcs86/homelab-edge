@@ -31,6 +31,8 @@ jobs:
         run: for p in playbooks/*.yml; do ansible-playbook --syntax-check "$p"; done
       - name: shellcheck
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
+      - name: App-deploy template (pins, secret handling, source and report steps)
+        run: python3 scripts/app-deploy-template-test.py
       - name: No plaintext secrets in secrets/
         run: |
           for f in secrets/*.sops.yaml; do

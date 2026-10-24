@@ -17,6 +17,7 @@ credentials, and the digest in `.env` is the exact image that was built.
 - [ ] Staging SSH grant for `tag:ci` (section 2, first bullet): not in the policy yet.
 - [ ] Reusable `tag:ci` key stored as `TS_AUTHKEY` and `TS_AUTHKEY_EXPIRES` in the app repo (section 2, second bullet).
 - [ ] Each target VM prepared (section 1) and the app repo configured (sections 3 and 4).
+- [ ] Optional: a 1Password vault, items and service account per app and environment (section 3.1). Until then the GitHub secrets are used.
 
 `deploy.yml` has not run yet; expect to fix small things on the first staging run, and strike the items above as they are done.
 
@@ -41,7 +42,7 @@ credentials, and the digest in `.env` is the exact image that was built.
 
 ## 3. GitHub side (app repo)
 
-Create environments `staging` and `production`; on `production` require reviewers.
+Create environments `staging` and `production`; on `production` require reviewers. Secrets come from 1Password (3.1) when the environment has `OP_SERVICE_ACCOUNT_TOKEN`, otherwise from the same-named GitHub secrets below; if both exist, 1Password wins.
 
 | Kind | Name | Value |
 |---|---|---|
@@ -53,6 +54,26 @@ Create environments `staging` and `production`; on `production` require reviewer
 | secret (per environment) | `APP_ENV` | the app's whole dotenv, one `KEY=value` per line |
 
 The package must be readable by the repository's `GITHUB_TOKEN` (GHCR package settings → Manage Actions access).
+
+### 3.1 1Password (one vault per app and environment)
+
+| Item (exact name) | Type | Field | Becomes |
+|---|---|---|---|
+| `deploy-ssh-key` | SSH Key | `private key` (read in OpenSSH format) | `DEPLOY_SSH_KEY` |
+| `deploy-known-hosts` | Secure Note or Login | `known_hosts` | `DEPLOY_KNOWN_HOSTS` |
+| `tailnet-authkey` | Login or Password | `authkey`; `expires` as a **text** field holding a date such as `2027-01-20` | `TS_AUTHKEY`, `TS_AUTHKEY_EXPIRES` |
+| `app-env` | Secure Note | the note body (the whole dotenv) | `APP_ENV` |
+
+1. Create a shared vault per app and environment (for example `<app>-staging`) with service accounts enabled, and the four items above. Create all four: if any reference fails to resolve the whole load fails and every secret falls back to GitHub.
+2. Create one service account per vault. A service account cannot be given more vaults afterwards, and it cannot read your Personal, Private or Employee vaults:
+   `op service-account create "<app>-<environment>" --vault "<vault>:read_items" --expires-in 365d`.
+   The token is shown once: save it in a vault this account cannot read (your Private vault) before leaving the terminal.
+3. In the GitHub **environment** (so `production`'s reviewers gate it): secret `OP_SERVICE_ACCOUNT_TOKEN`; variables `OP_VAULT` (the vault name) and `OP_TOKEN_EXPIRES` (the token's expiry date).
+4. Rotate yearly: create a new service account for the same vault, update the secret and `OP_TOKEN_EXPIRES`, delete the old account.
+
+The first steps of the deploy job pick the source, install a pinned `op` (the action would otherwise download an unverified "latest"), load the secrets as masked step outputs (never exported to the whole job) and write a **Secret sources** list to the run summary. An expired token (`OP_TOKEN_EXPIRES` in the past), an unreachable 1Password or a missing item falls back to the GitHub secrets with a warning; a secret found in neither source fails the job. The token's expiry warns 14 days ahead; an unparseable `OP_TOKEN_EXPIRES` fails the job.
+
+Once you trust the 1Password path, delete the GitHub copies; the fallback is then gone and a 1Password outage blocks deploys.
 
 ## 4. The app repo
 
@@ -76,6 +97,7 @@ The package must be readable by the repository's `GITHUB_TOKEN` (GHCR package se
 |---|---|---|
 | Edge or headscale down | the job cannot join the tailnet, so no deploy; running apps are unaffected | `docs/runbooks/recovery.md`; deploy by hand from an admin shell with the gate command above |
 | `TS_AUTHKEY` expired | job fails at the first step with a clear error | mint a new key, update the secret and variable |
+| 1Password unreachable, token expired or revoked, or an item missing | the job warns and uses the GitHub secrets where they exist (see the run summary); with none, it fails naming the secret | fix the vault or token (3.1), or restore the GitHub secret |
 | GHCR unavailable | build or pull fails before anything changes | re-run the job |
 | New release unhealthy | automatic rollback, job fails | read the container logs on the VM |
 | Job killed mid-deploy | `current` may point at a release that is not up | re-run, or `rollback <previous release>` |
