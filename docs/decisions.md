@@ -62,6 +62,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
   by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
   `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
+- **A new generated secret is added by `init-secrets` `fill_missing`, never by hand or by regenerating the file.** Regenerating rotates every
+  credential, including the pgBackRest PKI the DB host holds. The mode adds only absent plain credentials, decrypts in memory with the deploy
+  key, and refuses when an operator value or a PKI key is missing. Without it, a release that reads a new key fails the deploy mid-play.
+- **A failed play loses the handlers it had queued.** Ansible skips them, and the re-run finds the files already correct so it never
+  queues them again; a policy file written by the failed run is then never loaded. After a failed deploy, a successful re-run must be
+  followed by the reloads in `docs/runbooks/recovery.md` (headscale policy HUP, and Gatus if its files changed).
 - **Gatus endpoints are named after the workload tag, staging included.** `xstockstrat-ui`, `xstockstrat-staging-agent`, … in group
   `home`, matching the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
   alert like prod, so the staging VM must be registered before the deploy that adds them.
