@@ -1,5 +1,6 @@
 ---
 # Copy to .github/workflows/deploy.yml in the app repo and resolve every EDIT line. Guide: docs/runbooks/deploy-compose-app.md.
+# Secrets come from 1Password when OP_SERVICE_ACCOUNT_TOKEN is set (vault in vars.OP_VAULT), else from same-named GitHub secrets.
 name: deploy
 
 on:
@@ -21,6 +22,9 @@ env:
   # Keep in step with tailscale_package_version / tailscale_tgz_amd64_sha256 in homelab-edge's versions.yml.
   TAILSCALE_VERSION: "1.98.10"
   TAILSCALE_SHA256: 52490ce0832b245857e2afef7426d6ae5a4b49fb391412833cc95729bd23f7de
+  # 1Password CLI, GPG-verified when pinned (docs/versions.md in homelab-edge); preinstalled so the action never downloads "latest".
+  OP_CLI_VERSION: "2.40.0"
+  OP_CLI_SHA256: 74277219e8da60958c00f9aee9d2023225e98fdda8bfd2156a5d9e85e0edaab3
 
 jobs:
   build:
@@ -62,9 +66,81 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Choose the secret source (1Password when its token is usable, else GitHub secrets)
+        id: src
+        env:
+          OP_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          OP_EXPIRES: ${{ vars.OP_TOKEN_EXPIRES }}
+        run: |
+          use=false
+          if [ -n "$OP_TOKEN" ]; then
+            use=true
+            if [ -n "$OP_EXPIRES" ]; then
+              expires_at=$(date -d "$OP_EXPIRES" +%s) || { echo "::error::OP_TOKEN_EXPIRES is not a date: $OP_EXPIRES"; exit 1; }
+              left=$(( (expires_at - $(date +%s)) / 86400 ))
+              if [ "$left" -lt 0 ]; then
+                use=false
+                echo "::warning::The 1Password service account token expired; using GitHub secrets"
+              elif [ "$left" -lt 14 ]; then
+                echo "::warning::The 1Password service account token expires in $left days"
+              fi
+            fi
+          fi
+          echo "op=$use" >>"$GITHUB_OUTPUT"
+
+      - name: 1Password CLI (pinned, checksum-verified)
+        id: opcli
+        if: steps.src.outputs.op == 'true'
+        continue-on-error: true
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://cache.agilebits.com/dist/1P/op2/pkg/v${OP_CLI_VERSION}/op_linux_amd64_v${OP_CLI_VERSION}.zip"
+          echo "${OP_CLI_SHA256}  op_linux_amd64_v${OP_CLI_VERSION}.zip" | sha256sum -c -
+          unzip -q -o "op_linux_amd64_v${OP_CLI_VERSION}.zip" op -d op-bin
+          sudo install -m 0755 op-bin/op /usr/local/bin/op
+          op --version
+
+      - name: Load secrets from 1Password
+        id: op
+        if: steps.src.outputs.op == 'true' && steps.opcli.outcome == 'success'
+        continue-on-error: true
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2  # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          TS_AUTHKEY: "op://${{ vars.OP_VAULT }}/tailnet-authkey/authkey"
+          TS_AUTHKEY_EXPIRES: "op://${{ vars.OP_VAULT }}/tailnet-authkey/expires"
+          DEPLOY_SSH_KEY: "op://${{ vars.OP_VAULT }}/deploy-ssh-key/private key?ssh-format=openssh"
+          DEPLOY_KNOWN_HOSTS: "op://${{ vars.OP_VAULT }}/deploy-known-hosts/known_hosts"
+          APP_ENV: "op://${{ vars.OP_VAULT }}/app-env/notesPlain"
+
+      - name: Report where each secret came from
+        env:
+          OP_WANTED: ${{ steps.src.outputs.op }}
+          OP_OUTCOME: ${{ steps.op.outcome }}
+          S_TS_AUTHKEY: ${{ steps.op.outputs.TS_AUTHKEY != '' && '1password' || (secrets.TS_AUTHKEY != '' && 'github' || 'MISSING') }}
+          S_DEPLOY_SSH_KEY: ${{ steps.op.outputs.DEPLOY_SSH_KEY != '' && '1password' || (secrets.DEPLOY_SSH_KEY != '' && 'github' || 'MISSING') }}
+          S_DEPLOY_KNOWN_HOSTS: ${{ steps.op.outputs.DEPLOY_KNOWN_HOSTS != '' && '1password' || (secrets.DEPLOY_KNOWN_HOSTS != '' && 'github' || 'MISSING') }}
+          S_APP_ENV: ${{ steps.op.outputs.APP_ENV != '' && '1password' || (secrets.APP_ENV != '' && 'github' || 'MISSING') }}
+        run: |
+          if [ "$OP_WANTED" = true ] && [ "$OP_OUTCOME" != success ]; then
+            echo "::warning::1Password was configured but the load did not succeed; using GitHub secrets where set"
+          fi
+          echo "### Secret sources" >>"$GITHUB_STEP_SUMMARY"
+          missing=0
+          for n in TS_AUTHKEY DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS APP_ENV; do
+            v="S_$n"
+            src="${!v}"
+            echo "- $n: $src" >>"$GITHUB_STEP_SUMMARY"
+            [ "$src" != MISSING ] || { echo "::error::$n is in neither 1Password nor the GitHub secrets"; missing=1; }
+            if [ "$OP_WANTED" = true ] && [ "$src" = github ]; then echo "::warning::$n came from the GitHub secret, not 1Password"; fi
+          done
+          exit "$missing"
+
       - name: Tailnet key must not be about to expire
         env:
-          EXPIRES: ${{ vars.TS_AUTHKEY_EXPIRES }}
+          EXPIRES: ${{ steps.op.outputs.TS_AUTHKEY_EXPIRES || vars.TS_AUTHKEY_EXPIRES }}
         run: |
           left=$(( ($(date -d "$EXPIRES" +%s) - $(date +%s)) / 86400 ))
           [ "$left" -ge 0 ] || { echo "::error::TS_AUTHKEY expired; mint a new tag:ci key (see the runbook)"; exit 1; }
@@ -80,7 +156,7 @@ jobs:
 
       - name: Join the tailnet as an ephemeral tag:ci node
         env:
-          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_AUTHKEY: ${{ steps.op.outputs.TS_AUTHKEY || secrets.TS_AUTHKEY }}
         run: |
           sudo mkdir -p /run/tailscale
           sudo tailscaled --state=mem: --socket=/run/tailscale/tailscaled.sock >"$RUNNER_TEMP/tailscaled.log" 2>&1 &
@@ -90,8 +166,8 @@ jobs:
 
       - name: SSH credentials (files only, host key pinned)
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ steps.op.outputs.DEPLOY_SSH_KEY || secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ steps.op.outputs.DEPLOY_KNOWN_HOSTS || secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           install -d -m 0700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/deploy && chmod 600 ~/.ssh/deploy
@@ -100,7 +176,7 @@ jobs:
 
       - name: Ship the release and deploy it; the VM rolls back if it is not healthy
         env:
-          APP_ENV: ${{ secrets.APP_ENV }}
+          APP_ENV: ${{ steps.op.outputs.APP_ENV || secrets.APP_ENV }}
           GHCR_TOKEN: ${{ github.token }}
         run: |
           rel="${GITHUB_SHA::12}-${GITHUB_RUN_ID}"

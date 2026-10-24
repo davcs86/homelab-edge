@@ -91,3 +91,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   unavailable, so a remote-only host needs a second key that does not depend on it (the gate checks for two). The drop-in forbids agent
   forwarding so a mistaken `ssh -A` cannot expose the 1Password keys to root on the host. A client that offers every agent key hits
   `MaxAuthTries` (6), so the proof commands use `IdentitiesOnly` with the public key file.
+- **App-deploy secrets come from 1Password first and fall back to GitHub secrets.** One service account per app and environment
+  vault (its vaults are fixed at creation), its token the only secret in the GitHub environment. The edge's own workflows keep
+  GitHub secrets and SOPS, so rule 3 is unchanged. Workload Identity (v5, public preview) was not used: it still needs a GitHub
+  secret and loads every variable of a 1Password Environment, with no per-item references or `ssh-format`.
+- **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
+  when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
+  `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).
