@@ -504,11 +504,11 @@ def tailscale_install() -> None:
     repo_ok = os.path.exists(TAILSCALE_KEYRING) and read_text(TAILSCALE_LIST) == listing
     if not repo_ok:
         steps += [Cmd(["curl", "-fsSL", "-o", TAILSCALE_KEYRING, f"{base}.noarmor.gpg"]), Write(TAILSCALE_LIST, listing),
-                  Cmd(["apt-get", "update"])]
+                  Cmd(["apt", "update"])]
     installing = not st or st["package"] != version
     if installing:
         steps += [Do(f"check that tailscale {version} exists in apt (stops here if not)", lambda: apt_has_version(version)),
-                  Cmd(["apt-get", "install", "-y", "--allow-change-held-packages", "--allow-downgrades", f"tailscale={version}"])]
+                  Cmd(["apt", "install", "-y", "--allow-change-held-packages", "--allow-downgrades", f"tailscale={version}"])]
     if not st or not st["held"] or installing:
         steps.append(Cmd(["apt-mark", "hold", "tailscale"]))
     if installing or (soft(["systemctl", "is-active", "tailscaled"]) or "").strip() != "active":
@@ -1492,7 +1492,7 @@ INST_RE = re.compile(r"^Inst (\S+)(?: \[([^\]]+)\])? \(([^ ]+) ")
 
 
 def parse_simulation(text: str) -> list[dict]:
-    """The packages `apt-get -s full-upgrade` would install or upgrade: name, old version (None if new), new version."""
+    """The packages `apt -s full-upgrade` would install or upgrade: name, old version (None if new), new version."""
     rows = []
     for line in text.splitlines():
         m = INST_RE.match(line)
@@ -1531,11 +1531,11 @@ def update() -> None:
     """Upgrade packages the careful way (guide 8.7): snapshot, show what changes, refuse a major jump, warn about kernels."""
     if not root_dataset() and not STATE["dry_run"]:
         raise typer.Exit(fail("the root filesystem is not ZFS (findmnt/zfs found no dataset)"))
-    if not execute(Plan("Refresh the package lists", [Cmd(["apt-get", "update"])])):
+    if not execute(Plan("Refresh the package lists", [Cmd(["apt", "update"])])):
         return
-    sim = soft(["apt-get", "-s", "full-upgrade"])
+    sim = soft(["apt", "-s", "full-upgrade"])
     if sim is None:
-        raise typer.Exit(fail("`apt-get -s full-upgrade` failed; run it by hand to see why"))
+        raise typer.Exit(fail("`apt -s full-upgrade` failed; run it by hand to see why"))
     rows = parse_simulation(sim)
     held = (soft(["apt-mark", "showhold"]) or "").split()
     if not rows:
@@ -1560,7 +1560,7 @@ def update() -> None:
         if not confirm_typed("kernel", "With no KVM and nobody on site a kernel that fails to boot cannot be fixed remotely; skip kernel updates until a KVM is installed."):
             typer.echo("Cancelled. Nothing was changed.")
             return
-    steps: list[Step] = [snapshot_step("upgrade"), Cmd(["apt-get", "full-upgrade"]), Do("check whether a reboot is asked for", reboot_hint)]
+    steps: list[Step] = [snapshot_step("upgrade"), Cmd(["apt", "full-upgrade"]), Do("check whether a reboot is asked for", reboot_hint)]
     if execute(Plan("Upgrade the packages", steps)) and not STATE["dry_run"]:
         typer.echo("\n" + UPDATE_NOTE)
 
@@ -1796,7 +1796,7 @@ def tailscale_leave() -> None:
         return
     steps: list[Step] = [Cmd(["tailscale", "logout"])] if st["backend"] == "Running" else []
     if uninstall:
-        steps += [Cmd(["apt-mark", "unhold", "tailscale"]), Cmd(["apt-get", "remove", "-y", "tailscale"]), Remove(TAILSCALE_LIST)]
+        steps += [Cmd(["apt-mark", "unhold", "tailscale"]), Cmd(["apt", "remove", "-y", "tailscale"]), Remove(TAILSCALE_LIST)]
     typer.echo("The node record stays in headscale: remove it with node-admin -> remove-device.")
     execute(Plan("Leave the tailnet", steps))
 

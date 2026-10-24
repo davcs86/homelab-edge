@@ -164,7 +164,7 @@ class Tailscale(Isolated):
     def test_install_upgrades_with_held_package_flags(self):
         r = self.install({**TS_UP, "package": "1.90.0"}, "\n", soft={"systemctl is-active tailscaled": "active\n"})
         self.assertIn("--allow-change-held-packages --allow-downgrades tailscale=1.98.10", r.output, r.output)
-        self.assertNotIn("apt-get update", r.output)
+        self.assertNotIn("apt update", r.output)
 
     def test_another_version_warns(self):
         self.assertIn("the edge pins 1.98.10", self.install(None, "1.100.0\n").output)
@@ -1126,7 +1126,7 @@ class Update(Isolated):
         self.assertEqual(pve.major_bumps(bump), bump[:1])
 
     def run_update(self, sim, text="", held="", dry=True):
-        soft = {**ZFS_SOFT, "apt-get -s full-upgrade": sim, "apt-mark showhold": held}
+        soft = {**ZFS_SOFT, "apt -s full-upgrade": sim, "apt-mark showhold": held}
         with Env(soft=soft) as env:
             r = env.run(["update"], text, dry=dry)
             self.last_cmds = env.cmds()
@@ -1145,11 +1145,11 @@ class Update(Isolated):
     def test_a_kernel_needs_the_typed_word_and_cancelling_changes_nothing(self):
         r = self.run_update(SIM, "y\nno\n", dry=False)
         self.assertIn("Cancelled. Nothing was changed.", r.output)
-        self.assertEqual(self.last_cmds, ["apt-get update"])
+        self.assertEqual(self.last_cmds, ["apt update"])
 
     def test_plan_snapshots_first_then_upgrades(self):
         r = self.run_update(SIM, "kernel\n")
-        self.assertLess(r.output.index("zfs snapshot"), r.output.index("apt-get full-upgrade"))
+        self.assertLess(r.output.index("zfs snapshot"), r.output.index("apt full-upgrade"))
         self.assertIn("3 package(s) would change", r.output)
         self.assertNotIn("\\n", r.output)
 
