@@ -8,6 +8,7 @@ only the missing steps. Secrets are read with hidden input, are never written to
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import ipaddress
 import json
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -540,12 +542,35 @@ JOIN_CHECKLIST = """Next, from an admin device:
   - ssh root@<tailscale ip> works (after SSH hardening)"""
 
 
+def ask_control_url() -> str:
+    while True:
+        v = typer.prompt("Control server URL, e.g. https://hs.<domain>").strip()
+        u = urllib.parse.urlsplit(v)
+        if u.scheme == "https" and "." in (u.hostname or "") and u.path in ("", "/") and not (u.query or u.fragment or u.username):
+            return v.rstrip("/")
+        typer.echo("  the full https:// URL of headscale with no path, e.g. https://hs.<domain>; a bare domain is not accepted")
+
+
+def headscale_answers(url: str) -> bool:
+    """`tailscale up` waits silently on a server that is not headscale, so look at /health first."""
+    try:
+        with urllib.request.urlopen(url + "/health", timeout=10) as r:
+            body = json.loads(r.read(4096))
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        fail(f"{url}/health did not answer ({e}); is this the headscale URL, and is the host online?")
+        return False
+    if not (isinstance(body, dict) and body.get("status") == "pass"):
+        fail(f"{url}/health answered, but not like headscale (expected status pass)")
+        return False
+    return True
+
+
 def tailscale_join() -> None:
     """Join the tailnet as the node the edge expects (name pve, DNS and routes off)."""
     st = tailscale_state()
     if st is None and not STATE["dry_run"]:
         raise typer.Exit(fail("tailscale is not installed; run tailscale-install first"))
-    login = typer.prompt("Control server URL, e.g. https://hs.<domain>")
+    login = ask_control_url()
     host = ask_name("Node name on the tailnet", NODE_NAME)
     if host != NODE_NAME:
         warn(f"the edge's Gatus probe (tcp://{NODE_NAME}.ts.<domain>:8006) and heartbeat expect the name '{NODE_NAME}'")
@@ -566,7 +591,7 @@ def tailscale_join() -> None:
     keyfile = "/run/pve-setup-authkey"
     flags = [*(["--reset", "--force-reauth"] if running else []), "--login-server", login, "--hostname", host,
              f"--accept-dns={str(dns).lower()}", "--accept-routes=false"]
-    steps: list[Step] = []
+    steps: list[Step] = [Do(f"check that {login}/health answers like headscale", lambda: headscale_answers(login))]
     if key:
         steps.append(Write(keyfile, key + "\n", 0o600, secret=True))
         argv = ["tailscale", "up", *flags, "--auth-key", f"file:{keyfile}"]

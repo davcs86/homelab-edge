@@ -189,6 +189,35 @@ class Tailscale(Isolated):
         self.assertIn("tailscale ip -4", r.output)
         self.assertIn("registered as 'pve', not 'pve-1'", r.output)
 
+    def test_a_bare_domain_or_a_path_is_not_a_control_url(self):
+        r = self.join("natanddavehouse.com\nhttp://hs.example.test\nhttps://hs.example.test/api\nhttps://localhost\nhttps://hs.example.test/\n\n\nKEY\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertEqual(r.output.count("the full https:// URL of headscale"), 4)
+        self.assertIn("--login-server https://hs.example.test --hostname", r.output)
+
+    def test_the_plan_checks_headscale_before_anything_is_written_or_run(self):
+        out = self.join("https://hs.example.test\n\n\nSECRET-KEY-VALUE\n").output
+        order = [out.index(x) for x in ("answers like headscale", "write /run/pve-setup-authkey", "$ tailscale up")]
+        self.assertEqual(order, sorted(order), out)
+
+    def test_headscale_health_check(self):
+        def reply(body, boom=None):
+            class R(io.BytesIO):
+                def __enter__(s): return s
+                def __exit__(s, *a): return False
+            def fake(url, timeout):
+                if boom:
+                    raise boom
+                self.assertEqual((url, timeout), ("https://hs.example.test/health", 10))
+                return R(body)
+            return mock.patch.object(pve.urllib.request, "urlopen", fake)
+        with reply(b'{"status":"pass"}'):
+            self.assertTrue(pve.headscale_answers("https://hs.example.test"))
+        for body, boom in ((b'{"status":"fail"}', None), (b"<html>", None), (b"[1]", None), (b"", OSError("timed out")),
+                           (b"", pve.http.client.BadStatusLine("x"))):
+            with reply(body, boom):
+                self.assertFalse(pve.headscale_answers("https://hs.example.test"), (body, boom))
+
     def test_other_name_warns(self):
         r = self.join("https://hs.example.test\nworkbench\n\nKEY\n")
         self.assertIn("expect the name 'pve'", r.output)
