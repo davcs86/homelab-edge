@@ -91,25 +91,24 @@ pgbackrest_client_cn: db-pgbackrest                     # CN on the database hos
 pgbackrest_edge_client_cn: edge-pgbackrest              # CN on the edge's client cert (the edge pulls backups)
 pgbackrest_retention_full: 2
 pgbackrest_retention_diff: 6
-# Off until the stanza exists on the edge (docs/runbooks/db-host.md); then flip and deploy.
-pgbackrest_backups_enabled: false
-# TODO(ask): schedules are not stated by the owner; the build guide asks for a weekly full and a daily differential.
-pgbackrest_full_schedule: "Sun *-*-* 02:30:00 UTC"
-pgbackrest_diff_schedule: "Mon..Sat *-*-* 02:30:00 UTC"
+pgbackrest_backups_enabled: true
+# The owner's choice: 03:00 Los Angeles time, a full on Sundays and a differential on the other days.
+pgbackrest_full_schedule: "Sun *-*-* 03:00:00 America/Los_Angeles"
+pgbackrest_diff_schedule: "Mon..Sat *-*-* 03:00:00 America/Los_Angeles"
 
 # ---------- Database host (tag:db) ----------
 db_tailnet_hostname: db
 db_tailnet_host: "{{ db_tailnet_hostname }}.{{ magicdns_base_domain }}"
 db_postgres_major: 18
 db_data_dir: "/var/lib/postgresql/{{ db_postgres_major }}/main"
-# Off until the stanza exists on the edge; with it on and no stanza, WAL piles up on the data disk.
-db_archive_enabled: false
-# TODO(ask): match DigitalOcean's datcollate before restoring a dump (SELECT datcollate FROM pg_database).
+# Archiving starts only once the stanza exists on the edge (roles/db_host/tasks/archive.yml); without one WAL piles up on the data disk.
+db_archive_enabled: true
+# Chosen by the owner (UTF-8). A restored dump keeps its own collation only if the database is created to match.
 db_cluster_locale: C.UTF-8
 db_workload_locale: C.UTF-8
 db_pgbouncer_pool_size: 5               # per database; xstockstrat's bars-fetch ceiling is this pool size
 # Tailnet names of devices allowed to log in as `admin` (read-only) and as `superadmin` (hostssl); empty = ssh in, `sudo -u postgres psql`.
-db_admin_tailnet_hosts: []
+db_admin_tailnet_hosts: []             # TODO(ask): none named yet
 db_superadmin_tailnet_hosts: [macbook-pro]
 db_admin_connection_limit: 3
 db_superadmin_connection_limit: 3
@@ -122,7 +121,7 @@ db_workloads:
     password_key: db_role_xstockstrat_production_password
     tailnet_host: "{{ app_tailnet_host.split('.')[0] }}"
     connection_limit: 25
-    settings: {}
+    settings: {}                        # TODO(ask): idle_in_transaction_session_timeout, statement_timeout
   - env: staging
     database: xstockstrat-staging
     role: xstockstrat_staging

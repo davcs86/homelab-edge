@@ -22,6 +22,12 @@
 - name: Packages (pinned, held)
   ansible.builtin.import_tasks: packages.yml
 
+- name: Backups with pgBackRest
+  ansible.builtin.import_tasks: pgbackrest.yml
+
+- name: Archiving only once the stanza exists
+  ansible.builtin.import_tasks: archive.yml
+
 - name: PostgreSQL configuration
   ansible.builtin.import_tasks: postgres.yml
 
@@ -30,9 +36,6 @@
 
 - name: PgBouncer
   ansible.builtin.import_tasks: pgbouncer.yml
-
-- name: Backups with pgBackRest
-  ansible.builtin.import_tasks: pgbackrest.yml
 
 - name: Verify
   ansible.builtin.import_tasks: verify.yml

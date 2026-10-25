@@ -35,7 +35,7 @@
       Signed-By: /etc/apt/keyrings/timescaledb.asc
   register: _timescale
 
-# The cluster is created by the postgresql package; UTF-8 is not negotiable, the locale is a TODO(ask) variable.
+# The postgresql package creates the cluster with these options; a non-UTF-8 locale would give SQL_ASCII.
 - name: Directory for cluster creation options
   ansible.builtin.file:
     path: /etc/postgresql-common/createcluster.d

@@ -134,8 +134,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   passwordless sudo. `tag:deploy` would narrow it. The owner's own login (`admin_user`, key only, passwordless sudo because the container has no
   console password) is created too, so manual work does not depend on the CI key. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
   PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
-- **Archiving and backups are off until the stanza exists.** `archive_command` against a missing stanza fails forever and WAL fills the
-  data disk, so `db_archive_enabled` and `pgbackrest_backups_enabled` are flipped by a PR after `stanza-create` on the edge.
+- **Archiving follows the stanza.** `archive_command` against a missing stanza fails forever and WAL fills the data disk, and `stanza-create`
+  needs PostgreSQL running, so the first `db-host` run cannot archive. `archive.yml` asks the edge (`pgbackrest info`, status 1 = missing
+  stanza path) and turns `archive_mode` on only when the stanza exists, so the flags can stay on. The edge's backup service has
+  `ConditionPathExists` on the stanza's backup directory, so the timers are skipped, not failed, until then.
 - **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
   server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
   pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.

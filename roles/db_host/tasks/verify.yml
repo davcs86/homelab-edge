@@ -53,4 +53,4 @@
   become: true
   become_user: postgres
   changed_when: false
-  when: db_archive_enabled
+  when: db_archive_effective

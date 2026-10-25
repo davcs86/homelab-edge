@@ -1,0 +1,23 @@
+---
+# archive_command against a missing stanza fails forever and WAL fills the data disk, so archiving follows the stanza.
+- name: What the repository on the edge says about the stanza
+  ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} --output=json info"
+  become: true
+  become_user: postgres
+  register: _stanza_info
+  changed_when: false
+  failed_when: false
+  when: db_archive_enabled
+
+- name: Archiving is on only when the stanza exists (status 1 is "missing stanza path")
+  ansible.builtin.set_fact:
+    db_archive_effective: >-
+      {{ db_archive_enabled and _stanza_info.rc == 0 and (_stanza_info.stdout | from_json | length) > 0
+         and (_stanza_info.stdout | from_json)[0].status.code != 1 }}
+
+- name: Say why archiving is off
+  ansible.builtin.debug:
+    msg: >-
+      Archiving stays off: stanza {{ pgbackrest_stanza }} does not exist on the edge (or the edge cannot be reached).
+      On the edge run: sudo -u pgbackrest pgbackrest --stanza={{ pgbackrest_stanza }} stanza-create, then run db-host again.
+  when: db_archive_enabled and not db_archive_effective

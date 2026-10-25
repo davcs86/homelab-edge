@@ -146,6 +146,8 @@
       After=network-online.target tailscaled.service
       Wants=network-online.target
       OnFailure=edge-notify@%n.service
+      # Silently skipped until stanza-create has run.
+      ConditionPathExists={{ pgbackrest_repo_path }}/backup/{{ pgbackrest_stanza }}
 
       [Service]
       Type=oneshot
