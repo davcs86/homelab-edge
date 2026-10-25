@@ -900,6 +900,35 @@ def vm_create() -> None:
     execute(Plan(f"Create VM {vmid} ({name})", steps))
 
 
+def ask_gib(prompt: str, default: str) -> str:
+    while True:
+        v = ask_size(prompt, default)
+        if v.endswith("G"):
+            return v
+        typer.echo("  whole GiB only, e.g. 64G")
+
+
+def ask_abs_path(prompt: str, default: str) -> str:
+    while True:
+        v = typer.prompt(prompt, default=default).strip()
+        if v.startswith("/") and ".." not in v.split("/") and "," not in v and " " not in v:
+            return v
+        typer.echo("  an absolute path without spaces, commas or '..'")
+
+
+LXC_TUN_LINES = ["lxc.cgroup2.devices.allow: c 10:200 rwm", "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file"]
+
+
+def lxc_allow_tun(ctid: str) -> bool:
+    path = Path(f"/etc/pve/lxc/{ctid}.conf")
+    text = path.read_text()
+    missing = [l for l in LXC_TUN_LINES if l not in text.splitlines()]
+    if missing:
+        with open(path, "w") as f:  # pmxcfs: rewrite in place, never replace
+            f.write(text.rstrip("\n") + "\n" + "".join(l + "\n" for l in missing))
+    return True
+
+
 def lxc_create() -> None:
     """Create an unprivileged LXC container from a downloaded template."""
     tpl_storage = choose("Template storage", storages("vztmpl"))
@@ -917,18 +946,35 @@ def lxc_create() -> None:
     size = ask_size("Root disk size", "16G")
     cores = ask_int("Cores", 1, 128, 2)
     mem = ask_int("Memory (MiB)", 128, 1 << 20, 2048)
+    swap = ask_int("Swap (MiB, 0 disables)", 0, 1 << 20, 512)
     bridge = choose("Bridge", bridges())
     ipcfg = ip_config()
     key = ask_pubkey_file()
     docker = typer.confirm("Enable nesting+keyctl (needed to run Docker inside; weakens isolation)?", default=False)
-    cmd = ["pct", "create", ctid, tpl, "--hostname", host, "--cores", str(cores), "--memory", str(mem),
+    data = None
+    if typer.confirm("Add a separate data volume (its own filesystem, for example for PostgreSQL)?", default=False):
+        dstorage = choose("Data volume storage", storages("rootdir"))
+        data = {"storage": dstorage, "size": ask_gib("Data volume size", "64G"), "path": ask_abs_path("Mount path inside the container", "/var/lib/postgresql")}
+        cfg = storage_config(dstorage) or {}
+        data["pool"] = cfg.get("pool") if cfg.get("type") == "zfspool" else None
+        data["tune"] = bool(data["pool"]) and typer.confirm(
+            "Tune the data dataset for PostgreSQL (recordsize=16K, compression=lz4, atime=off)?", default=True)
+    tun = typer.confirm("Allow /dev/net/tun (needed to run Tailscale inside the container)?", default=False)
+    cmd = ["pct", "create", ctid, tpl, "--hostname", host, "--cores", str(cores), "--memory", str(mem), "--swap", str(swap),
            "--rootfs", f"{storage}:{size.rstrip('G')}", "--net0", f"name=eth0,bridge={bridge},{ipcfg}", "--unprivileged", "1",
            "--ssh-public-keys", key, "--onboot", "1", "--tags", TAG]
     if docker:
         cmd += ["--features", "nesting=1,keyctl=1"]
+    if data:
+        cmd += ["--mp0", f"{data['storage']}:{data['size'].rstrip('G')},mp={data['path']},backup=1"]
     destroy = Cmd(["pct", "destroy", ctid, "--purge", "1", "--destroy-unreferenced-disks", "1"])
-    execute(Plan(f"Create container {ctid} ({host})", [Cmd(cmd, undo=destroy, undo_on_fail=True),
-                                                       Cmd(["pct", "start", ctid], undo=Cmd(["pct", "stop", ctid]))]))
+    steps: list[Step] = [Cmd(cmd, undo=destroy, undo_on_fail=True)]
+    if data and data["tune"]:
+        steps.append(Cmd(["zfs", "set", "recordsize=16K", "compression=lz4", "atime=off", f"{data['pool']}/subvol-{ctid}-disk-1"]))
+    if tun:
+        steps.append(Do(f"allow /dev/net/tun in /etc/pve/lxc/{ctid}.conf", lambda: lxc_allow_tun(ctid)))
+    steps.append(Cmd(["pct", "start", ctid], undo=Cmd(["pct", "stop", ctid])))
+    execute(Plan(f"Create container {ctid} ({host})", steps))
 
 
 # ---------- storage, backups, access ----------

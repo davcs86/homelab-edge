@@ -1,0 +1,25 @@
+---
+- name: PgBouncer configuration
+  ansible.builtin.template:
+    src: pgbouncer.ini.j2
+    dest: /etc/pgbouncer/pgbouncer.ini
+    owner: root
+    group: postgres
+    mode: "0640"
+  notify: Restart pgbouncer
+
+- name: PgBouncer user list (SCRAM verifiers read from PostgreSQL)
+  ansible.builtin.template:
+    src: userlist.txt.j2
+    dest: /etc/pgbouncer/userlist.txt
+    owner: root
+    group: postgres
+    mode: "0640"
+  no_log: true
+  notify: Reload pgbouncer
+
+- name: PgBouncer enabled and running
+  ansible.builtin.systemd_service:
+    name: pgbouncer
+    enabled: true
+    state: started

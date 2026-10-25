@@ -3,7 +3,8 @@
 
 Operator-chosen values come from the environment (GitHub environment secrets in CI):
   DESEC_TOKEN, HC_PING_URL, ADMIN_CONSOLE_PASSWORD, NTFY_DAVID_PASSWORD
-Everything else (ntfy publisher credentials, Gatus heartbeat tokens, pgBackRest mTLS PKI) is generated here.
+Everything else (ntfy publisher credentials, Gatus heartbeat tokens, database role passwords, pgBackRest mTLS PKI,
+the database host's TLS CA) is generated here.
 Usage: init_secrets.py <edge-tls-hostname> <output.sops.yaml>   (needs: sops, openssl, python bcrypt)
        init_secrets.py --fill-missing <existing.sops.yaml>      adds only the generated credentials the file lacks; the
                                                                  file is decrypted in memory and nothing existing changes
@@ -14,9 +15,12 @@ import string
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import bcrypt
 import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
 
 REQUIRED = ["DESEC_TOKEN", "HC_PING_URL", "ADMIN_CONSOLE_PASSWORD", "NTFY_DAVID_PASSWORD"]
 
@@ -41,9 +45,21 @@ GENERATED = {
     "gatus_heartbeat_pve_token": lambda: secrets.token_urlsafe(32),
     "gatus_heartbeat_backup_token": lambda: secrets.token_urlsafe(32),
     "gatus_heartbeat_db_token": lambda: secrets.token_urlsafe(32),
+    "gatus_heartbeat_pgbackrest_token": lambda: secrets.token_urlsafe(32),
+    "db_role_admin_password": lambda: secrets.token_urlsafe(32),
+    "db_role_superadmin_password": lambda: secrets.token_urlsafe(32),
+    "db_role_xstockstrat_production_password": lambda: secrets.token_urlsafe(32),
+    "db_role_xstockstrat_staging_password": lambda: secrets.token_urlsafe(32),
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
+# Sets that are created whole, never completed: the TLS CA of the database host, and the certs the pull direction adds.
+DB_TLS_KEYS = [f"db_tls_{n}_{k}" for n in ("ca", "server") for k in ("crt", "key")]
+PGBACKREST_DB_KEYS = ["pgbackrest_db_server_crt", "pgbackrest_db_server_key", "pgbackrest_edge_client_crt", "pgbackrest_edge_client_key"]
+
+
+def inventory_var(name: str) -> str:
+    return str(yaml.safe_load((ROOT / "inventories/prod/group_vars/all/main.yml").read_text())[name])
 
 
 def encrypt_to(doc: dict, out: str) -> None:
@@ -66,12 +82,20 @@ def fill_missing(path: str) -> None:
     if cannot:
         sys.exit(f"{path} lacks keys this mode cannot create: {', '.join(cannot)} "
                  "(operator values come from environment secrets and the PKI is generated as one set; regenerate with overwrite)")
-    missing = [k for k in GENERATED if k not in current]
-    if not missing:
+    for group in (DB_TLS_KEYS, PGBACKREST_DB_KEYS):
+        have = [k for k in group if k in current]
+        if have and len(have) != len(group):
+            sys.exit(f"{path} holds only part of the set {', '.join(group)}; a certificate set is created whole, so fix it by hand or regenerate with overwrite")
+    new = {k: GENERATED[k]() for k in GENERATED if k not in current}
+    if not all(k in current for k in DB_TLS_KEYS):
+        new |= db_tls_pki()
+    if not all(k in current for k in PGBACKREST_DB_KEYS):
+        new |= pgbackrest_db_pki(current["pgbackrest_tls_ca_crt"], current["pgbackrest_tls_ca_key"])
+    if not new:
         print("nothing to add")
         return
-    encrypt_to({**current, **{k: GENERATED[k]() for k in missing}}, path)
-    print(f"added {', '.join(missing)} to {path}")
+    encrypt_to({**current, **new}, path)
+    print(f"added {', '.join(new)} to {path}")
 
 
 def pki(edge_host: str, client_cn: str) -> dict:
@@ -102,6 +126,48 @@ def pki(edge_host: str, client_cn: str) -> dict:
         }
 
 
+def issue(ca_crt: str, ca_key: str, cn: str, ext: str) -> tuple[str, str]:
+    """ECDSA P-256 leaf signed by a CA given as PEM text, with a random serial (3y)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = lambda n: os.path.join(d, n)  # noqa: E731
+        for name, pem in (("ca.crt", ca_crt), ("ca.key", ca_key)):
+            fd = os.open(p(name), os.O_WRONLY | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(pem)
+        run("openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", p("leaf.key"))
+        run("openssl", "req", "-new", "-key", p("leaf.key"), "-subj", f"/CN={cn}", "-out", p("leaf.csr"))
+        with open(p("leaf.ext"), "w") as f:
+            f.write(ext + "\n")
+        run("openssl", "x509", "-req", "-in", p("leaf.csr"), "-CA", p("ca.crt"), "-CAkey", p("ca.key"),
+            "-set_serial", "0x" + secrets.token_hex(8), "-days", "1095", "-extfile", p("leaf.ext"), "-out", p("leaf.crt"))
+        return Path(p("leaf.crt")).read_text(), Path(p("leaf.key")).read_text()
+
+
+def db_host() -> str:
+    return f"db.{inventory_var('magicdns_base_domain').replace('{{ domain }}', inventory_var('domain'))}"
+
+
+def db_tls_pki() -> dict:
+    """Separate private CA (10y) and a server cert for PostgreSQL and PgBouncer; not shared with the pgBackRest PKI."""
+    with tempfile.TemporaryDirectory() as d:
+        run("openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", os.path.join(d, "ca.key"))
+        run("openssl", "req", "-x509", "-new", "-key", os.path.join(d, "ca.key"), "-days", "3650",
+            "-subj", "/CN=homelab-db-tls-ca", "-out", os.path.join(d, "ca.crt"))
+        ca_crt, ca_key = Path(d, "ca.crt").read_text(), Path(d, "ca.key").read_text()
+    host = db_host()
+    crt, key = issue(ca_crt, ca_key, host, f"subjectAltName=DNS:{host}\nextendedKeyUsage=serverAuth")
+    return {"db_tls_ca_crt": ca_crt, "db_tls_ca_key": ca_key, "db_tls_server_crt": crt, "db_tls_server_key": key}
+
+
+def pgbackrest_db_pki(ca_crt: str, ca_key: str) -> dict:
+    """The database host's pgBackRest server cert and the edge's client cert, from the existing pgBackRest CA."""
+    host = db_host()
+    server = issue(ca_crt, ca_key, host, f"subjectAltName=DNS:{host}\nextendedKeyUsage=serverAuth")
+    client = issue(ca_crt, ca_key, inventory_var("pgbackrest_edge_client_cn"), "extendedKeyUsage=clientAuth")
+    return {"pgbackrest_db_server_crt": server[0], "pgbackrest_db_server_key": server[1],
+            "pgbackrest_edge_client_crt": client[0], "pgbackrest_edge_client_key": client[1]}
+
+
 def main() -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--fill-missing":
         fill_missing(sys.argv[2])
@@ -120,7 +186,9 @@ def main() -> None:
                                            stdin=os.environ["ADMIN_CONSOLE_PASSWORD"].encode()).decode().strip(),
         "ntfy_david_password_bcrypt": bcrypt_hash(os.environ["NTFY_DAVID_PASSWORD"]),
         **{k: gen() for k, gen in GENERATED.items()},
-        **pki(edge_host, client_cn),
+        **(base := pki(edge_host, client_cn)),
+        **db_tls_pki(),
+        **pgbackrest_db_pki(base["pgbackrest_tls_ca_crt"], base["pgbackrest_tls_ca_key"]),
     }
     encrypt_to(doc, out)
     print(f"wrote {out} ({len(doc)} keys)")

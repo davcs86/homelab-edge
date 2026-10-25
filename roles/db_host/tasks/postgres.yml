@@ -1,0 +1,111 @@
+---
+- name: Require every connection limit to fit under max_connections (3 are reserved for superusers)
+  ansible.builtin.assert:
+    that: >-
+      (db_workloads | map(attribute='connection_limit') | sum) + db_admin_connection_limit + db_superadmin_connection_limit + 3
+      <= db_pg_settings.max_connections
+    fail_msg: the role connection limits plus admin, superadmin and the reserved slots exceed max_connections
+
+- name: Wait-for-tailnet-address helper
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/wait-tailnet-ip
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # Block until $1 is on tailscale0: the services bind to it, and tailscaled brings it up after boot.
+      i=0
+      while ! ip -o -4 addr show dev tailscale0 | grep -q " $1/"; do
+        i=$((i + 1)); [ "$i" -gt 60 ] && exit 1; sleep 1
+      done
+
+- name: Drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service.d"
+    state: directory
+    mode: "0755"
+  loop: ["{{ db_pg_service }}", pgbouncer, pgbackrest-server]
+
+- name: Start order for services that bind to the tailnet address
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.service.d/10-tailnet.conf"
+    mode: "0644"
+    content: |
+      [Unit]
+      After=tailscaled.service
+      [Service]
+      ExecStartPre=/usr/local/sbin/wait-tailnet-ip {{ db_tailnet_ipv4 }}
+  loop: ["{{ db_pg_service }}", pgbouncer, pgbackrest-server]
+  notify: Reload systemd
+
+- name: TLS directory
+  ansible.builtin.file:
+    path: "{{ db_tls_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+
+- name: TLS material
+  ansible.builtin.copy:
+    dest: "{{ db_tls_dir }}/{{ item.name }}"
+    content: "{{ edge_secrets[item.key] }}"
+    owner: root
+    group: postgres
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: ca.crt, key: db_tls_ca_crt, mode: "0644"}
+    - {name: server.crt, key: db_tls_server_crt, mode: "0644"}
+    - {name: server.key, key: db_tls_server_key, mode: "0640"}
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  notify: Restart postgresql
+
+- name: Resolve the app and admin devices on the tailnet
+  ansible.builtin.command: "tailscale ip -4 {{ item }}"
+  loop: "{{ ((db_workloads | map(attribute='tailnet_host') | list) + db_admin_tailnet_hosts + db_superadmin_tailnet_hosts) | unique }}"
+  register: _peer_ips
+  changed_when: false
+  failed_when: false
+
+- name: Tell which peers are not on the tailnet yet
+  ansible.builtin.debug:
+    msg: "{{ item.item }} is not on the tailnet; no hostssl line for it until it joins and this runs again"
+  loop: "{{ _peer_ips.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc != 0
+
+- name: Peer addresses by name
+  ansible.builtin.set_fact:
+    _peer_ip: >-
+      {{ dict(_found | map(attribute='item') | zip(_found | map(attribute='stdout') | map('trim'))) }}
+  vars:
+    _found: "{{ _peer_ips.results | selectattr('rc', 'eq', 0) | list }}"
+
+- name: PostgreSQL settings
+  ansible.builtin.template:
+    src: 10-xs.conf.j2
+    dest: "/etc/postgresql/{{ db_postgres_major }}/main/conf.d/10-xs.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  notify: Restart postgresql
+
+- name: Client authentication
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ db_postgres_major }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Reload postgresql
+
+- name: Apply the restart and reload now
+  ansible.builtin.meta: flush_handlers
+
+- name: PostgreSQL enabled and running
+  ansible.builtin.systemd_service:
+    name: "{{ db_pg_service }}"
+    enabled: true
+    state: started

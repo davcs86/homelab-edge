@@ -16,6 +16,11 @@ All pins were at least two weeks old on 2026-10-14; container images are pinned 
 | Docker CE / CLI | 29.8.2 | 29.9.x under two weeks |
 | containerd.io / compose / buildx | 2.3.6 / 5.5.1 / 0.37.1 | newest ≥ 2 weeks for 26.04 |
 | pgBackRest | 2.59.2 (PGDG) | 2.59.3 under two weeks; **must equal the DB host's version** |
+| PostgreSQL (DB host) | 18.6-1.pgdg13+2 (PGDG, Debian 13) | the newest 18 in PGDG's trixie index on 2026-10-25 and older than two weeks (published 2026-08-13); DigitalOcean runs 18, xstockstrat's CI still runs 16 |
+| TimescaleDB (DB host) | 2.30.2, Apache build (`timescaledb-2-oss`) | 2.31.0 was five days old; 2.30.2 is 2026-09-29 and needs PostgreSQL ≥ 18.6. The Apache build matches DigitalOcean's edition; compression waits for the cutover. DigitalOcean production runs 2.30.2 (confirmed by the owner on 2026-10-25), which a restore requires |
+| PgBouncer (DB host) | 1.26.0-4.pgdg13+1 | 1.26.1 was 11 days old; ≥ 1.21 is needed for `max_prepared_statements` |
+| pgBackRest (DB host) | 2.59.2-1.pgdg13+1 | the same upstream release as the edge's Ubuntu build; repo-host mode needs both sides equal |
+| Debian (DB host) | 13 (trixie) | what Proxmox VE 9 is built on; the pins above are the `pgdg13` and `debian13` builds |
 | ansible-core | 2.21.4 | 2.21.5 under two weeks |
 | collections | general 13.4.0, docker 5.3.0, posix 2.2.2, sops 2.4.0, crypto 3.4.0 | newest ≥ 2 weeks |
 | sops | 3.13.3 | SSH-key age recipients need ≥ 3.10 |

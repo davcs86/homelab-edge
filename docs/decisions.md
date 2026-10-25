@@ -128,6 +128,43 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   are visible in the host's process list, a file is not. The token is staged on tmpfs and removed even when the plan fails. The checks
   are `pg_isready` on PostgreSQL and PgBouncer, the pgBackRest TLS port and the data disk; an unreadable disk is a failure so a broken
   check cannot look healthy. The address the checks use is asked, not assumed, because the services may listen only on the tailnet address.
+- **The DB host is configured by Ansible over the tailnet from `tag:ci`, in two stages.** The container has no tailnet or deploy user
+  when it is born, so a root bootstrap over the LAN (users, sshd, pinned Tailscale, join with a `tag:db` key from the environment)
+  precedes the `db-host` workflow. The cost: `tag:ci`, which xstockstrat's deploys also use, can SSH to the DB host as a user with
+  passwordless sudo. `tag:deploy` would narrow it. The owner's own login (`admin_user`, key only, passwordless sudo because the container has no
+  console password) is created too, so manual work does not depend on the CI key. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
+  PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
+- **Archiving follows the stanza.** `archive_command` against a missing stanza fails forever and WAL fills the data disk, and `stanza-create`
+  needs PostgreSQL running, so the first `db-host` run cannot archive. `archive.yml` asks the edge (`pgbackrest info`, status 1 = missing
+  stanza path) and turns `archive_mode` on only when the stanza exists, so the flags can stay on. The edge's backup service has
+  `ConditionPathExists` on the stanza's backup directory, so the timers are skipped, not failed, until then.
+- **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
+  server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
+  pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.
+- **Two administrative roles: `admin` is read-only, `superadmin` is a superuser.** Routine inspection and automation should not be able to drop
+  production data, but manual repairs and restores need a superuser. `superadmin` is reachable only by `hostssl` from named devices, has no
+  PgBouncer entry and 3 connections; it is a network-reachable superuser guarded by a password and a source address, which the owner chose
+  over `ssh` + `sudo -u postgres psql` alone. Leave `db_superadmin_tailnet_hosts` empty to keep it local-only.
+- **The edge pushes a heartbeat after each pgBackRest backup.** `OnFailure` only fires when the unit runs and fails; a timer that never fires
+  (disabled, edge down, stanza missing) is silent. A Gatus external endpoint (`edge_pgbackrest-backup`, 26 h) turns that silence into an
+  alert, as `nightly-backup` does for headscale. The token is passed to curl on stdin (argv is world-readable) by a root-run `ExecStartPost=+`.
+  A Gatus outage right after a good backup marks the unit failed and notifies; that is the same trade as `edge-backup.service`.
+- **Owner roles get `idle_in_transaction_session_timeout = 10min` and no `statement_timeout`.** A leaked transaction holds locks and pins
+  vacuum, and 60 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
+- **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
+  the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
+- **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
+  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 5 = 23, so each role is limited to 25.
+  Both environments deploy together (the daily promotion): 2 x 25 + admin 3 + superadmin 3 + 3 reserved slots = 59, so `max_connections` is 60 (the
+  playbook asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
+  60 x 26 MB + 768 MB of `shared_buffers` is about 2.3 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
+  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool stays 5 per database: xstockstrat bounds
+  `max_concurrent_bars_fetches` to [1, 5] with the marketdata PgBouncer pool as the ceiling, so a smaller pool queues work it allows, and 5 is
+  already 2 x cores + 1. Raise nothing before measuring.
+- **Traps:** a Debian LXC without a UTF-8 locale creates a `SQL_ASCII` cluster, so `createcluster.d` forces `--encoding=UTF8`;
+  PostgreSQL and PgBouncer bind the tailnet address, which tailscaled brings up after boot, so their units wait for it
+  (`wait-tailnet-ip`); a `postgres` login with `ALTER ROLE … PASSWORD` can log the statement on error, so it sets
+  `log_min_error_statement = panic` first.
 - **Kernel pin changes are followed by `proxmox-boot-tool refresh`.** The Proxmox Host Bootloader page says the ESPs must be
   synchronised after setting or clearing a pin on systems that use proxmox-boot-tool; the runbook's 5.4 steps leave it out, so
   the toolkit's `update` note includes it.

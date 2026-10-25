@@ -1,0 +1,58 @@
+---
+- name: Directories for pgBackRest
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/pgbackrest/tls, mode: "0750"}
+    - {path: /var/log/pgbackrest, mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: TLS material (the pgBackRest CA, this host's client cert for pushing, its server cert for the edge's pulls)
+  ansible.builtin.copy:
+    dest: "/etc/pgbackrest/tls/{{ item.name }}"
+    content: "{{ edge_secrets[item.key] }}"
+    owner: postgres
+    group: postgres
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: ca.crt, key: pgbackrest_tls_ca_crt, mode: "0644"}
+    - {name: client.crt, key: pgbackrest_tls_client_crt, mode: "0644"}
+    - {name: client.key, key: pgbackrest_tls_client_key, mode: "0600"}
+    - {name: server.crt, key: pgbackrest_db_server_crt, mode: "0644"}
+    - {name: server.key, key: pgbackrest_db_server_key, mode: "0600"}
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  notify: Restart pgbackrest server
+
+- name: Configuration file for pgBackRest
+  ansible.builtin.template:
+    src: pgbackrest.conf.j2
+    dest: /etc/pgbackrest/pgbackrest.conf
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart pgbackrest server
+
+- name: TLS server unit
+  ansible.builtin.template:
+    src: pgbackrest-server.service.j2
+    dest: /etc/systemd/system/pgbackrest-server.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart pgbackrest server
+
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the TLS server
+  ansible.builtin.systemd_service:
+    name: pgbackrest-server
+    enabled: true
+    state: started

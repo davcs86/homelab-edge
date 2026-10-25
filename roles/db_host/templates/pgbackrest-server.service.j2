@@ -1,0 +1,17 @@
+[Unit]
+Description=pgBackRest TLS server (tailnet only)
+After=network-online.target tailscaled.service {{ db_pg_service }}.service
+Wants=network-online.target
+
+[Service]
+User=postgres
+Group=postgres
+ExecStart=/usr/bin/pgbackrest server
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

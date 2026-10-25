@@ -1,0 +1,58 @@
+---
+- name: Base packages
+  ansible.builtin.apt:
+    name: [acl, ca-certificates, curl, gnupg, iproute2, openssh-server, sudo, python3]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Deploy user (automation only, no password)
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    shell: /bin/bash
+    password: "!"
+    update_password: always
+
+- name: Admin user (interactive, key only)
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    shell: /bin/bash
+    groups: [sudo]
+    append: true
+    password: "!"
+    update_password: always
+
+- name: Authorise the admin keys
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_public_keys | join('\n') }}"
+    exclusive: true
+
+- name: Authorise the deploy key
+  ansible.posix.authorized_key:
+    user: "{{ deploy_user }}"
+    key: "{{ deploy_ssh_public_key }}"
+    exclusive: true
+
+- name: Sudo for the deploy and admin users
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ item.name }}"
+    content: "{{ item.user }} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  loop:
+    - {name: 10-admin, user: "{{ admin_user }}"}
+    - {name: 20-deploy, user: "{{ deploy_user }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+# Root may log in with a key only until the deploy user exists; every run as the deploy user closes it.
+- name: Harden sshd
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    mode: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin {{ 'prohibit-password' if ansible_user == 'root' else 'no' }}
+      AllowAgentForwarding no
+  notify: Restart sshd

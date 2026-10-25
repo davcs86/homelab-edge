@@ -70,6 +70,7 @@ gatus_port: 8081
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
+heartbeat_pgbackrest_interval: 26h  # the edge pushes after each daily full/differential
 heartbeat_db_interval: 11m          # DB host pushes every 5 min
 
 # ---------- Backups ----------
@@ -88,6 +89,47 @@ pgbackrest_tls_port: 8432
 pgbackrest_stanza: main
 pgbackrest_repo_path: /var/lib/pgbackrest
 pgbackrest_client_cn: db-pgbackrest                     # CN on the database host's client cert
+pgbackrest_edge_client_cn: edge-pgbackrest              # CN on the edge's client cert (the edge pulls backups)
+pgbackrest_retention_full: 2
+pgbackrest_retention_diff: 6
+pgbackrest_backups_enabled: true
+# The owner's choice: 03:00 Los Angeles time, a full on Sundays and a differential on the other days.
+pgbackrest_full_schedule: "Sun *-*-* 03:00:00 America/Los_Angeles"
+pgbackrest_diff_schedule: "Mon..Sat *-*-* 03:00:00 America/Los_Angeles"
+
+# ---------- Database host (tag:db) ----------
+db_tailnet_hostname: db
+db_tailnet_host: "{{ db_tailnet_hostname }}.{{ magicdns_base_domain }}"
+db_postgres_major: 18
+db_data_dir: "/var/lib/postgresql/{{ db_postgres_major }}/main"
+# Archiving starts only once the stanza exists on the edge (roles/db_host/tasks/archive.yml); without one WAL piles up on the data disk.
+db_archive_enabled: true
+# Chosen by the owner (UTF-8). A restored dump keeps its own collation only if the database is created to match.
+db_cluster_locale: C.UTF-8
+db_workload_locale: C.UTF-8
+db_pgbouncer_pool_size: 5               # per database; xstockstrat's bars-fetch ceiling is this pool size
+# Tailnet names of devices allowed to log in as `admin` (read-only) and as `superadmin` (hostssl); empty = ssh in, `sudo -u postgres psql`.
+db_admin_tailnet_hosts: []
+db_superadmin_tailnet_hosts: [macbook-pro]
+db_admin_connection_limit: 3
+db_superadmin_connection_limit: 3
+# One database and owner role per workload (never shared across environments); the PgBouncer pool is named after the database.
+# connection_limit: 8 direct pools doubled by a rolling deploy, 2 migrator, 1 pool of db_pgbouncer_pool_size (23).
+db_workloads:
+  - env: production
+    database: xstockstrat-production
+    role: xstockstrat_production
+    password_key: db_role_xstockstrat_production_password
+    tailnet_host: "{{ app_tailnet_host.split('.')[0] }}"
+    connection_limit: 25
+    settings: {idle_in_transaction_session_timeout: 10min}
+  - env: staging
+    database: xstockstrat-staging
+    role: xstockstrat_staging
+    password_key: db_role_xstockstrat_staging_password
+    tailnet_host: "{{ staging_tailnet_host.split('.')[0] }}"
+    connection_limit: 25
+    settings: {idle_in_transaction_session_timeout: 10min}
 
 # ---------- Paths ----------
 edge_root: /opt/edge

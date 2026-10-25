@@ -1,0 +1,71 @@
+---
+- name: Tailscale apt key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/debian/{{ ansible_facts.distribution_release }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Tailscale apt source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.sources
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://pkgs.tailscale.com/stable/debian
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: main
+      Signed-By: /usr/share/keyrings/tailscale-archive-keyring.gpg
+  register: _ts_repo
+
+- name: Pinned Tailscale
+  ansible.builtin.apt:
+    name: "tailscale={{ tailscale_package_version }}"
+    update_cache: "{{ _ts_repo is changed }}"
+    allow_downgrade: true
+
+- name: Hold Tailscale
+  ansible.builtin.dpkg_selections:
+    name: tailscale
+    selection: hold
+
+- name: Start tailscaled
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Is the node on the tailnet
+  ansible.builtin.command: tailscale ip -4
+  register: _ts_up
+  changed_when: false
+  failed_when: false
+
+# The key comes from the environment (a tag:db pre-auth key), never from the repo or a command line.
+- name: Join the tailnet as tag:db
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - up
+      - --login-server=https://{{ headscale_hostname }}
+      - --auth-key={{ lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') }}
+      - --hostname={{ db_tailnet_hostname }}
+      - --accept-dns=true
+      - --accept-routes=false
+  when: _ts_up.rc != 0 and (lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') | length > 0)
+  changed_when: true
+  no_log: true
+
+- name: Require the tailnet before anything binds to it
+  ansible.builtin.command: tailscale ip -4
+  register: _ts_check
+  changed_when: false
+  failed_when: _ts_check.rc != 0
+  when: db_stage != 'bootstrap'
+
+- name: Say what is left to do after the bootstrap stage
+  ansible.builtin.debug:
+    msg: >-
+      Bootstrap done. {{ 'Join the tailnet: export DB_TAILSCALE_AUTHKEY (a tag:db pre-auth key) and run again.'
+      if _ts_up.rc != 0 and (lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') | length == 0)
+      else 'The node is on the tailnet; approve it if needed, add its tag, then run the db-host workflow.' }}
+  when: db_stage == 'bootstrap'

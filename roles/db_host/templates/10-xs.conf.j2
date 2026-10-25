@@ -1,0 +1,16 @@
+# Managed by Ansible (roles/db_host).
+listen_addresses = '127.0.0.1,{{ db_tailnet_ipv4 }}'
+shared_preload_libraries = 'timescaledb'
+{% for key, value in db_pg_settings.items() %}
+{{ key }} = {{ value }}
+{% endfor %}
+ssl = on
+ssl_cert_file = '{{ db_tls_dir }}/server.crt'
+ssl_key_file = '{{ db_tls_dir }}/server.key'
+password_encryption = scram-sha-256
+{% if db_archive_effective %}
+archive_mode = on
+archive_command = 'pgbackrest --stanza={{ pgbackrest_stanza }} archive-push %p'
+{% else %}
+archive_mode = off
+{% endif %}
