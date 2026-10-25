@@ -8,18 +8,40 @@ One Debian 13 LXC (`db`) runs PostgreSQL 18 with TimescaleDB (Apache build), PgB
 | 5432 | PostgreSQL, TLS only | config, ledger, identity, notify, ui and the migrator (they need `LISTEN/NOTIFY` and advisory locks) |
 | 6432 | PgBouncer, transaction mode, TLS | trading, portfolio, marketdata, indicators, ingest, analysis (`DB_PGBOUNCER=true`) |
 | 8432 | pgBackRest TLS server | the edge, which pulls backups (`tag:edge`) |
-| 22 | sshd | `tag:ci` (this playbook), admins |
+| 22 | sshd | `tag:ci` as `deploy` (this playbook), admins as `david_admin` |
 
 Per workload (`db_workloads` in `group_vars/all/main.yml`): database `xstockstrat-<env>`, owner role `xstockstrat_<env>`, a
-`CONNECT` grant for that role and `admin` only, a `hostssl` line for that workload's tailnet IP, a PgBouncer pool named after the
-database. `admin` is read-only (`pg_monitor`, `pg_read_all_data`) and is what automation and routine inspection use. `superadmin` is a PostgreSQL
-superuser for manual work: it can log in only over TLS from the devices in `db_superadmin_tailnet_hosts` (`macbook-pro`), is never
-in PgBouncer, and is limited to 3 connections. Without a listed device, manual work is `ssh` to the container and `sudo -u postgres psql`.
-Passwords live in `secrets/edge.sops.yaml` (`fill_missing` adds `db_role_superadmin_password`).
+`CONNECT` grant for that role and `admin` only, a `hostssl` line for that workload's tailnet IP, a PgBouncer pool named after the database.
+
+| Role | Can do | Reaches the host from | Connections | SOPS key |
+|---|---|---|---|---|
+| `xstockstrat_production`, `xstockstrat_staging` | own their database (schemas, hypertables, data) | that workload's tailnet IP (TLS), loopback for PgBouncer | 25 each | `db_role_xstockstrat_<env>_password` |
+| `admin` | read only: `pg_monitor`, `pg_read_all_data` | devices in `db_admin_tailnet_hosts` (empty), loopback | 3 | `db_role_admin_password` |
+| `superadmin` | everything (PostgreSQL superuser), for manual work | devices in `db_superadmin_tailnet_hosts` (`macbook-pro`) over TLS, loopback; never PgBouncer | 3 | `db_role_superadmin_password` |
+| `postgres` (OS user) | superuser over the local socket | `ssh david_admin@db…`, then `sudo -u postgres psql` (key only, passwordless sudo) | n/a | none (peer authentication) |
+
+## Manual access
+
+From `macbook-pro` (it must be on the tailnet under that name and owned by `david_admin`, and the **db-host** workflow must have run while
+it was online, because that run writes its `hostssl` line):
+
+```sh
+export SOPS_AGE_SSH_PRIVATE_KEY_FILE=~/keys/sops_admin
+PGPASSWORD="$(sops decrypt --extract '["db_role_superadmin_password"]' secrets/edge.sops.yaml)" \
+  psql "host=db.ts.natanddavehouse.com user=superadmin dbname=postgres sslmode=require"
+```
+
+`sslmode=verify-full` with `sslrootcert=<file holding db_tls_ca_crt>` also verifies the server (the certificate's name is `db.ts.natanddavehouse.com`).
+Use `superadmin` for repairs, restores and `ALTER` work; use the owner roles through the app, and `admin` for looking around. Without the
+laptop on the tailnet: `ssh david_admin@db.ts.natanddavehouse.com` (your key from `admin_ssh_public_keys`), then `sudo -u postgres psql`. If a connection is refused with "no pg_hba.conf entry",
+the device was not visible during the last run: confirm it with **node-admin → list-devices** and run **db-host** again.
+
+Add a device to `db_superadmin_tailnet_hosts` (or `db_admin_tailnet_hosts`) in `group_vars/all/main.yml`, merge, run **db-host**. Remove it the same way; the next run
+rewrites `pg_hba.conf` whole. Passwords never go on a command line: read them from SOPS as above.
 
 ## First build
 
-1. **Secrets.** Run **Actions → init-secrets** with `fill_missing` on the branch. It adds the three `db_role_*_password` values, the
+1. **Secrets.** Run **Actions → init-secrets** with `fill_missing` on the branch. It adds the four `db_role_*_password` values (`admin`, `superadmin`, one per workload), the
    database TLS CA and server cert (`db_tls_*`, its own CA, not the pgBackRest one), and, signed by the pgBackRest CA, the
    database host's pgBackRest server cert and the edge's client cert (`pgbackrest_db_server_*`, `pgbackrest_edge_client_*`).
    Nothing existing changes. A set that is only partly present is refused.
@@ -38,7 +60,7 @@ Passwords live in `secrets/edge.sops.yaml` (`fill_missing` adds `db_role_superad
    export DB_TAILSCALE_AUTHKEY=<the key>
    ansible-playbook playbooks/db.yml -e db_stage=bootstrap -e ansible_user=root -e ansible_host=<LAN IP of the container>
    ```
-   It creates the `deploy` user, hardens sshd, installs the pinned Tailscale and joins as `db` with `tag:db`. Check
+   It creates the `deploy` user and your admin user (`david_admin`, keys from `admin_ssh_public_keys`), hardens sshd, installs the pinned Tailscale and joins as `db` with `tag:db`. Check
    **node-admin → list-devices**: `db` carries `tag:db`.
 6. **Converge.** **node-admin → mint-ci-key** (24 h), then **Actions → db-host**. It installs the pinned packages, writes the
    configuration, creates roles, databases and the TimescaleDB extension, sets passwords, builds the PgBouncer user list from
@@ -55,6 +77,21 @@ Passwords live in `secrets/edge.sops.yaml` (`fill_missing` adds `db_role_superad
    it works for all three checks. The data directory is `/var/lib/postgresql/18/main`.
 9. **Gate before cutover** (build guide, phase 3): restore a staging dump into a scratch database, compare row counts, one full restore
    and one point-in-time recovery from the edge repository, both timed.
+
+## Sizing
+
+The container has 3 GiB, 2 cores and no swap. Where each number lives and why (the arithmetic is in `decisions.md`):
+
+| Setting | Value | Where |
+|---|---|---|
+| `max_connections` | 60 | `roles/db_host/defaults/main.yml` (`db_pg_settings`) |
+| Role connection limits | 25 per workload, 3 `admin`, 3 `superadmin` | `db_workloads`, `db_admin_connection_limit`, `db_superadmin_connection_limit` |
+| PgBouncer pool | 5 per database (server connections); `max_client_conn` 200 | `db_pgbouncer_pool_size`; `templates/pgbouncer.ini.j2` |
+| `shared_buffers`, `work_mem`, `maintenance_work_mem`, `autovacuum_work_mem` | 768MB, 8MB, 256MB, 64MB | `db_pg_settings` |
+
+The playbook refuses to run when the role limits plus 3 reserved slots exceed `max_connections`. Change the container size and these together.
+Memory use is an estimate until measured: after the first restore read the container's memory with `pct exec <id> -- free -m`, check the
+journal of the PVE host for OOM kills, and tune from there.
 
 ## Why it can be re-run
 
@@ -77,6 +114,26 @@ steady state changes nothing. `pg_hba.conf` is rewritten whole from the template
 - `tailscale up` runs with `--accept-dns=true` (the host resolves `edge.ts…` and the workload names through MagicDNS). If apt cannot resolve
   names after the join, look at headscale's DNS settings first.
 - The backup schedules (`pgbackrest_full_schedule`, `pgbackrest_diff_schedule`) are not stated by the owner; check them.
+
+## Upgrading a pin
+
+Edit the version in `inventories/prod/group_vars/all/versions.yml` and the row in `docs/versions.md`, run **db-host**. The packages are held, so
+nothing changes until you do. The PostgreSQL major, the TimescaleDB version (must match the restore source) and pgBackRest (must equal the
+edge's upstream version, `pgbackrest_package_version`) move together; a PostgreSQL major upgrade is a new cluster, not a pin bump.
+
+## Still open (`TODO(ask)`)
+
+Nothing below is guessed; each is a variable or an empty list waiting for your value.
+
+| What | Where | Placeholder |
+|---|---|---|
+| Locale of the cluster and of the workload databases; compare DigitalOcean's `datcollate` | `db_cluster_locale`, `db_workload_locale` | `C.UTF-8` |
+| Backup schedules (weekly full, daily differential) | `pgbackrest_full_schedule`, `pgbackrest_diff_schedule` | Sunday / other days 02:30 UTC |
+| Per-role `statement_timeout`, `idle_in_transaction_session_timeout` | `settings:` of each entry in `db_workloads` | `{}` |
+| Devices allowed to log in as read-only `admin` | `db_admin_tailnet_hosts` | `[]` |
+| Turning archiving and backups on, after `stanza-create` | `db_archive_enabled`, `pgbackrest_backups_enabled` | `false` |
+| Compression, after the DigitalOcean cutover (community build, per-hypertable policy) | not implemented | none |
+| A heartbeat from the edge after each backup (the build guide asks for one) | not implemented | none |
 
 ## Break glass
 

@@ -131,7 +131,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The DB host is configured by Ansible over the tailnet from `tag:ci`, in two stages.** The container has no tailnet or deploy user
   when it is born, so a root bootstrap over the LAN (users, sshd, pinned Tailscale, join with a `tag:db` key from the environment)
   precedes the `db-host` workflow. The cost: `tag:ci`, which xstockstrat's deploys also use, can SSH to the DB host as a user with
-  passwordless sudo. `tag:deploy` would narrow it. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
+  passwordless sudo. `tag:deploy` would narrow it. The owner's own login (`admin_user`, key only, passwordless sudo because the container has no
+  console password) is created too, so manual work does not depend on the CI key. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
   PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
 - **Archiving and backups are off until the stanza exists.** `archive_command` against a missing stanza fails forever and WAL fills the
   data disk, so `db_archive_enabled` and `pgbackrest_backups_enabled` are flipped by a PR after `stanza-create` on the edge.
