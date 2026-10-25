@@ -107,12 +107,12 @@ db_archive_enabled: false
 # TODO(ask): match DigitalOcean's datcollate before restoring a dump (SELECT datcollate FROM pg_database).
 db_cluster_locale: C.UTF-8
 db_workload_locale: C.UTF-8
-db_pgbouncer_pool_size: 5               # per database; the size DigitalOcean's pools run at
+db_pgbouncer_pool_size: 5               # per database; xstockstrat's bars-fetch ceiling is this pool size
 # Tailnet names of admin devices allowed to log in as `admin` (hostssl); empty = ssh in and use the local socket.
 db_admin_tailnet_hosts: []
 db_admin_connection_limit: 5
 # One database and owner role per workload (never shared across environments); the PgBouncer pool is named after the database.
-# connection_limit: 8 direct pools doubled by a rolling deploy, the migrator, and one pool of db_pgbouncer_pool_size.
+# connection_limit: 8 direct pools doubled by a rolling deploy, 2 migrator, 1 pool of db_pgbouncer_pool_size (23).
 db_workloads:
   - env: production
     database: xstockstrat-production

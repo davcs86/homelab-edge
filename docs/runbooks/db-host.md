@@ -64,13 +64,13 @@ steady state changes nothing. `pg_hba.conf` is rewritten whole from the template
 - **Compression is not enabled.** The package is TimescaleDB's Apache build, the same edition as DigitalOcean's. Compression needs the
   community build and waits for the DigitalOcean cutover; xstockstrat's `003_canonicalize_ohlcv_timeframe` also refuses to run
   against compressed `marketdata.ohlcv` chunks.
-- **The extension version must equal the source's for a restore.** Before restoring a DigitalOcean dump, read
-  `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` there and compare it with `db_timescaledb_version`.
+- **The extension version must equal the source's for a restore.** DigitalOcean production runs 2.30.2, the pinned version. Read
+  `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` again before the cutover and after any bump of either side.
 - **Locales are placeholders.** `db_cluster_locale` and `db_workload_locale` are `C.UTF-8` until you compare them with DigitalOcean's
   `datcollate`. The workload databases are created with `db_workload_locale`, so drop and recreate an empty one to change it.
 - **Role settings** (`statement_timeout`, `idle_in_transaction_session_timeout`) are per workload `settings:`, empty until you give the values.
 - **`tag:ci` reaches this host's sshd and the `deploy` user has passwordless sudo.** Anything that runs with a `tag:ci` key (including
-  xstockstrat's deploy pipeline) can become root here. Narrowing it to `tag:deploy` is a one-line grant change plus the workflow's key.
+  xstockstrat's deploy pipeline) can become root here. The owner accepted this; `tag:deploy` would narrow it with a one-line grant change plus the workflow's key.
 - `tailscale up` runs with `--accept-dns=true` (the host resolves `edge.ts…` and the workload names through MagicDNS). If apt cannot resolve
   names after the join, look at headscale's DNS settings first.
 - The backup schedules (`pgbackrest_full_schedule`, `pgbackrest_diff_schedule`) are not stated by the owner; check them.
