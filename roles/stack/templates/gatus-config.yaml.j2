@@ -148,3 +148,13 @@ external-endpoints:
       - type: ntfy
         failure-threshold: 1
         send-on-resolved: true
+
+  - name: pgbackrest-backup
+    group: edge
+    token: ${HEARTBEAT_PGBACKREST_TOKEN}
+    heartbeat:
+      interval: {{ heartbeat_pgbackrest_interval }}
+    alerts:
+      - type: ntfy
+        failure-threshold: 1
+        send-on-resolved: true

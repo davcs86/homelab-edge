@@ -69,8 +69,13 @@ class Gatus(unittest.TestCase):
             for port in (V["app_ui_port"], V["app_agent_port"]):
                 self.assertIn(f"{tag}:{port}", accepted)
 
+    def test_the_pgbackrest_heartbeat_waits_longer_than_a_daily_backup(self):
+        self.assertEqual(EXTERNAL["pgbackrest-backup"]["group"], "edge")
+        self.assertEqual(EXTERNAL["pgbackrest-backup"]["heartbeat"]["interval"], "26h")
+        self.assertEqual(EXTERNAL["pgbackrest-backup"]["token"], "${HEARTBEAT_PGBACKREST_TOKEN}")
+
     def test_heartbeats_are_unchanged(self):
-        self.assertEqual(set(EXTERNAL), {"proxmox-heartbeat", "db-heartbeat", "nightly-backup"})
+        self.assertEqual(set(EXTERNAL), {"proxmox-heartbeat", "db-heartbeat", "nightly-backup", "pgbackrest-backup"})
 
 
 if __name__ == "__main__":

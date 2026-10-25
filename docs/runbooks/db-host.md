@@ -73,6 +73,9 @@ rewrites `pg_hba.conf` whole. Passwords never go on a command line: read them fr
    turns archiving on (one PostgreSQL restart) and ends with `pgbackrest --stanza=main check`. The edge's timers (Sundays a full, Monday to
    Saturday a differential, 03:00 `America/Los_Angeles`) are enabled by **deploy** and skip silently until the stanza exists. Take the first
    full by hand (`sudo -u pgbackrest pgbackrest --stanza=main --type=full backup`) and read the repository size against the 15 GB budget.
+   After every successful backup the edge pushes to the Gatus endpoint `edge_pgbackrest-backup` (`/usr/local/sbin/pgbackrest-heartbeat`, token
+   `gatus_heartbeat_pgbackrest_token`); Gatus alerts through ntfy when 26 h pass without one. It alerts from the first deploy until the first
+   backup has run, which is expected, like the other heartbeats before their hosts exist.
 8. **Heartbeat.** From the PVE host: `python3 pve-setup.py db-heartbeat`. The address to give is the container's **tailnet IP**
    (`tailscale ip -4` inside it): PostgreSQL and PgBouncer listen on loopback and that address, pgBackRest only on that address, so only
    it works for all three checks. The data directory is `/var/lib/postgresql/18/main`.
@@ -110,7 +113,8 @@ steady state changes nothing. `pg_hba.conf` is rewritten whole from the template
 - **Locale is `C.UTF-8`** (`db_cluster_locale`, `db_workload_locale`), the owner's choice. The workload databases are created with
   `db_workload_locale`, so drop and recreate an empty one to change it. A dump restored from DigitalOcean keeps its data; compare
   `SELECT datcollate FROM pg_database` there once, because text ordering in indexes follows the collation.
-- **Role settings** (`statement_timeout`, `idle_in_transaction_session_timeout`) are per workload `settings:`, empty until you give the values.
+- **Role settings** are per workload `settings:` (today `idle_in_transaction_session_timeout: 10min`); any key PostgreSQL accepts in `ALTER ROLE … SET`
+  works, and a changed value applies to new sessions.
 - **`tag:ci` reaches this host's sshd and the `deploy` user has passwordless sudo.** Anything that runs with a `tag:ci` key (including
   xstockstrat's deploy pipeline) can become root here. The owner accepted this; `tag:deploy` would narrow it with a one-line grant change plus the workflow's key.
 - `tailscale up` runs with `--accept-dns=true` (the host resolves `edge.ts…` and the workload names through MagicDNS). If apt cannot resolve
@@ -122,17 +126,18 @@ Edit the version in `inventories/prod/group_vars/all/versions.yml` and the row i
 nothing changes until you do. The PostgreSQL major, the TimescaleDB version (must match the restore source) and pgBackRest (must equal the
 edge's upstream version, `pgbackrest_package_version`) move together; a PostgreSQL major upgrade is a new cluster, not a pin bump.
 
-## Still open
+## Decided, and what is still open
 
-Nothing below is guessed; each is a variable or an empty list waiting for your value. Settled: locale `C.UTF-8`, backups at 03:00
-Los Angeles time (weekly full, daily differential), archiving that follows the stanza, compression deferred until the DigitalOcean cutover.
+Settled: locale `C.UTF-8`; backups at 03:00 Los Angeles time (weekly full, daily differential); archiving that follows the stanza; an edge
+heartbeat after each backup; `idle_in_transaction_session_timeout = 10min` on both owner roles and no `statement_timeout` (the migrator shares the
+owner role and DigitalOcean sets none); the read-only `admin` has no remote device (`macbook-pro` has `superadmin`, and the edge holds no
+database credentials).
 
-| What | Where | Now | Recommendation |
-|---|---|---|---|
-| Per-role `idle_in_transaction_session_timeout`, `statement_timeout` | `settings:` of each entry in `db_workloads` | `{}` | `idle_in_transaction_session_timeout: 10min`; no `statement_timeout`: the migrator shares the owner role and DigitalOcean sets neither |
-| Devices allowed to log in as read-only `admin` | `db_admin_tailnet_hosts` | `[]` | leave empty: `macbook-pro` already has `superadmin`, and the edge must not hold database credentials |
-| Compression (community build, per-hypertable policy) | not implemented | none | after the DigitalOcean cutover; start with append-only tables such as `ledger.events` |
-| A heartbeat from the edge after each backup | not implemented | none | add: a Gatus external endpoint pushed on success, so a backup that never runs (timer off, edge down) alerts too |
+| Still open | Where | Now |
+|---|---|---|
+| Compression (community build, per-hypertable policy), after the DigitalOcean cutover; start with append-only tables such as `ledger.events` | not implemented | none |
+| A remote device for the read-only `admin`, if you ever want one | `db_admin_tailnet_hosts` | `[]` |
+| Per-role `statement_timeout`, once you have measured the longest legitimate query | `settings:` of each entry in `db_workloads` | unset |
 
 ## Break glass
 

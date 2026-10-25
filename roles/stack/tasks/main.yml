@@ -86,6 +86,7 @@
       HEARTBEAT_PVE_TOKEN={{ edge_secrets.gatus_heartbeat_pve_token }}
       HEARTBEAT_BACKUP_TOKEN={{ edge_secrets.gatus_heartbeat_backup_token }}
       HEARTBEAT_DB_TOKEN={{ edge_secrets.gatus_heartbeat_db_token }}
+      HEARTBEAT_PGBACKREST_TOKEN={{ edge_secrets.gatus_heartbeat_pgbackrest_token }}
     mode: "0600"
   no_log: true
   notify: Restart gatus

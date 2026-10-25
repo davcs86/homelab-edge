@@ -25,7 +25,7 @@ OLD = {  # what the 2026-10-15 file held: no gatus_heartbeat_db_token
     "gatus_heartbeat_pve_token": "pve-OLD", "gatus_heartbeat_backup_token": "backup-OLD",
     **{k: PEM for k in init_secrets.PKI_KEYS},
 }
-OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password": "sup-OLD", "db_role_xstockstrat_production_password": "prod-OLD",
+OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password": "sup-OLD", "gatus_heartbeat_pgbackrest_token": "pgbr-OLD", "db_role_xstockstrat_production_password": "prod-OLD",
        "db_role_xstockstrat_staging_password": "stg-OLD", **{k: PEM for k in init_secrets.DB_TLS_KEYS + init_secrets.PGBACKREST_DB_KEYS}}
 
 
@@ -114,14 +114,14 @@ class FillMissing(unittest.TestCase):
     def test_a_file_from_before_the_database_host_gets_passwords_and_both_certificate_sets(self):
         base = init_secrets.pki("edge.ts.example.test", "db-pgbackrest")
         old = {k: v for k, v in OLD.items() if k not in init_secrets.DB_TLS_KEYS + init_secrets.PGBACKREST_DB_KEYS
-               and not k.startswith("db_role_")}
+               and not k.startswith("db_role_") and k != "gatus_heartbeat_pgbackrest_token"}
         self.write({**old, **base})
         r = self.fill()
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
-                         {"gatus_heartbeat_db_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
+                         {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
                           *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")

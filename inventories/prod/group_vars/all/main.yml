@@ -70,6 +70,7 @@ gatus_port: 8081
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
+heartbeat_pgbackrest_interval: 26h  # the edge pushes after each daily full/differential
 heartbeat_db_interval: 11m          # DB host pushes every 5 min
 
 # ---------- Backups ----------
@@ -108,7 +109,7 @@ db_cluster_locale: C.UTF-8
 db_workload_locale: C.UTF-8
 db_pgbouncer_pool_size: 5               # per database; xstockstrat's bars-fetch ceiling is this pool size
 # Tailnet names of devices allowed to log in as `admin` (read-only) and as `superadmin` (hostssl); empty = ssh in, `sudo -u postgres psql`.
-db_admin_tailnet_hosts: []             # TODO(ask): none named yet
+db_admin_tailnet_hosts: []
 db_superadmin_tailnet_hosts: [macbook-pro]
 db_admin_connection_limit: 3
 db_superadmin_connection_limit: 3
@@ -121,14 +122,14 @@ db_workloads:
     password_key: db_role_xstockstrat_production_password
     tailnet_host: "{{ app_tailnet_host.split('.')[0] }}"
     connection_limit: 25
-    settings: {}                        # TODO(ask): idle_in_transaction_session_timeout, statement_timeout
+    settings: {idle_in_transaction_session_timeout: 10min}
   - env: staging
     database: xstockstrat-staging
     role: xstockstrat_staging
     password_key: db_role_xstockstrat_staging_password
     tailnet_host: "{{ staging_tailnet_host.split('.')[0] }}"
     connection_limit: 25
-    settings: {}
+    settings: {idle_in_transaction_session_timeout: 10min}
 
 # ---------- Paths ----------
 edge_root: /opt/edge

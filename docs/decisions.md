@@ -145,6 +145,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   production data, but manual repairs and restores need a superuser. `superadmin` is reachable only by `hostssl` from named devices, has no
   PgBouncer entry and 3 connections; it is a network-reachable superuser guarded by a password and a source address, which the owner chose
   over `ssh` + `sudo -u postgres psql` alone. Leave `db_superadmin_tailnet_hosts` empty to keep it local-only.
+- **The edge pushes a heartbeat after each pgBackRest backup.** `OnFailure` only fires when the unit runs and fails; a timer that never fires
+  (disabled, edge down, stanza missing) is silent. A Gatus external endpoint (`edge_pgbackrest-backup`, 26 h) turns that silence into an
+  alert, as `nightly-backup` does for headscale. The token is passed to curl on stdin (argv is world-readable) by a root-run `ExecStartPost=+`.
+  A Gatus outage right after a good backup marks the unit failed and notifies; that is the same trade as `edge-backup.service`.
+- **Owner roles get `idle_in_transaction_session_timeout = 10min` and no `statement_timeout`.** A leaked transaction holds locks and pins
+  vacuum, and 60 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
 - **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
   the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
 - **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
