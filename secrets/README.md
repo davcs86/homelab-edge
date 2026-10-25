@@ -11,7 +11,7 @@ Only SOPS-encrypted files live here (`*.sops.yaml`); recipients are listed in `.
 A new release that needs another generated credential (the `gatus_heartbeat_db_token` from PR #20 is the example) fails the deploy at the task
 that reads it, because the committed file predates the key. Run **Actions → init-secrets** with `fill_missing` (not `overwrite`): it decrypts
 with the deploy key in memory, adds only the generated keys that are absent, re-encrypts and commits; nothing existing changes and no value is
-printed. Operator values (deSEC token, ping URL, passwords) and the pgBackRest PKI are never created this way.
+printed. Operator values (deSEC token, ping URL, passwords) and the pgBackRest PKI are never created this way. Committing the result to `main` needs the push token (`docs/runbooks/github-push-token.md`).
 
 Read a value locally:
 

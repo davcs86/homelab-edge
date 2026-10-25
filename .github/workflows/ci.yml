@@ -33,6 +33,8 @@ jobs:
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
       - name: App-deploy template (pins, secret handling, source and report steps)
         run: python3 scripts/app-deploy-template-test.py
+      - name: Workflows that commit to main (App token only when needed, key confined to production)
+        run: python3 scripts/workflow-push-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
         run: python3 scripts/gatus-config-test.py
       - name: No plaintext secrets in secrets/

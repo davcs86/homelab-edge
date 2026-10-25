@@ -25,7 +25,6 @@ All pins were at least two weeks old on 2026-10-14; container images are pinned 
 | 1password/load-secrets-action (`templates/app-deploy`) | v5.0.1, commit `70062d7a876d3eb6334754fa26efd2fbd90c32f2` | released 2026-08-18; v5 is newer than the v4 in 1Password's docs examples. Its Workload Identity mode is public preview and needs a GitHub secret too, so service accounts are used. |
 | 1Password CLI (`templates/app-deploy`) | 2.40.0, zip sha256 `74277219e8da60958c00f9aee9d2023225e98fdda8bfd2156a5d9e85e0edaab3` | released 2026-10-02; 2.41.x under two weeks. The zip's `op.sig` verified against 1Password's code-signing key `3FEF 9748 469A DBE1 5DA7 CA80 AC2D 6274 2012 EA22` when pinned. The template installs it first, because the action otherwise downloads an unverified "latest". |
 | actions/checkout, setup-python | v7.0.1, v7.0.0 by commit | newest ≥ 2 weeks |
-
 | age and smartmontools (Proxmox host, used by `tools/pve-setup.py`) | Debian archive packages | not pinned: the toolkit calls only `age -r/-o/-d/-i`, `age-keygen` and `smartctl -H`, stable across releases, and the host gets security updates from its own apt. The `tools` CI job installs `age` from the Ubuntu archive for the same reason. |
 
 Ubuntu-archive packages (fail2ban, chrony, sqlite3, age, …) are pinned by the release and receive security updates
