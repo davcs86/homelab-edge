@@ -105,3 +105,23 @@ jobs:
             caddy validate --config /etc/caddy/Caddyfile
       - name: Routing, rate limits, body caps, tailnet split (offline, mock upstreams)
         run: scripts/caddy-routing-test.sh edge-caddy:ci
+
+  # The only check the `main` ruleset should require; skipped upstream jobs count as passing.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [lint, policy, tools, secrets, caddy]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Evaluate upstream results
+        run: |
+          echo "lint:    ${{ needs.lint.result }}"
+          echo "policy:  ${{ needs.policy.result }}"
+          echo "tools:   ${{ needs.tools.result }}"
+          echo "secrets: ${{ needs.secrets.result }}"
+          echo "caddy:   ${{ needs.caddy.result }}"
+      - name: Fail on upstream failure or cancellation
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::One or more CI jobs failed or were cancelled"
+          exit 1
