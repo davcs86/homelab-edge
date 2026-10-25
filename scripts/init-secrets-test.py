@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/init_secrets.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import init_secrets  # noqa: E402
+import secret_keys  # noqa: E402
 
 PEM = "-----BEGIN CERTIFICATE-----\nAAAA\nBBBB\n-----END CERTIFICATE-----\n"
 OLD = {  # what the 2026-10-15 file held: no gatus_heartbeat_db_token
@@ -122,10 +123,7 @@ class Registry(unittest.TestCase):
 
     def test_every_secret_the_roles_use_is_generated_or_known(self):
         known = set(init_secrets.GENERATED) | set(init_secrets.OPERATOR_KEYS) | set(init_secrets.PKI_KEYS)
-        used = set()
-        for f in list((ROOT / "roles").rglob("*")) + list((ROOT / "playbooks").rglob("*")):
-            if f.is_file() and f.suffix in (".yml", ".yaml", ".j2"):
-                used |= set(re.findall(r"edge_secrets\.([a-z_0-9]+)", f.read_text()))
+        used = secret_keys.used_keys()
         self.assertTrue(used)
         self.assertEqual(used - known, set())
 
