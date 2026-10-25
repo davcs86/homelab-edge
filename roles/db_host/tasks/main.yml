@@ -1,0 +1,38 @@
+---
+# Stage `bootstrap` (operator, once, as root over the LAN): users, sshd, Tailscale. Stage `full` (CI, over the tailnet): the rest.
+- name: Base system, deploy user, sshd
+  ansible.builtin.import_tasks: base.yml
+
+- name: Tailscale package and (bootstrap) join
+  ansible.builtin.import_tasks: tailscale.yml
+
+- name: Stop after the bootstrap stage
+  ansible.builtin.meta: end_play
+  when: db_stage == 'bootstrap'
+
+- name: Tailnet address of this host
+  ansible.builtin.command: tailscale ip -4
+  register: _tsip
+  changed_when: false
+
+- name: Keep it
+  ansible.builtin.set_fact:
+    db_tailnet_ipv4: "{{ _tsip.stdout | trim }}"
+
+- name: Packages (pinned, held)
+  ansible.builtin.import_tasks: packages.yml
+
+- name: PostgreSQL configuration
+  ansible.builtin.import_tasks: postgres.yml
+
+- name: Roles, databases and extensions
+  ansible.builtin.import_tasks: workloads.yml
+
+- name: PgBouncer
+  ansible.builtin.import_tasks: pgbouncer.yml
+
+- name: Backups with pgBackRest
+  ansible.builtin.import_tasks: pgbackrest.yml
+
+- name: Verify
+  ansible.builtin.import_tasks: verify.yml

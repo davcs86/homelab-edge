@@ -113,6 +113,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
+| Build or change the DB host (PostgreSQL, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | Set up Proxmox by hand (interactive script) | [`docs/runbooks/proxmox-setup.md`](docs/runbooks/proxmox-setup.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |

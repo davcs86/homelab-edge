@@ -1,0 +1,14 @@
+# Managed by Ansible (roles/db_host). Anything not listed is rejected.
+local   all   postgres                       peer
+# This host: PgBouncer, the password check, and the admin role's check.
+{% for w in db_workloads %}
+host    "{{ w.database }}"   "{{ w.role }}"   127.0.0.1/32   scram-sha-256
+{% endfor %}
+host    postgres   admin   127.0.0.1/32   scram-sha-256
+# Workload hosts on the tailnet: TLS only, one line per database and role.
+{% for w in db_workloads if w.tailnet_host in _peer_ip %}
+hostssl "{{ w.database }}"   "{{ w.role }}"   {{ _peer_ip[w.tailnet_host] }}/32   scram-sha-256
+{% endfor %}
+{% for host in db_admin_tailnet_hosts if host in _peer_ip %}
+hostssl all   admin   {{ _peer_ip[host] }}/32   scram-sha-256
+{% endfor %}

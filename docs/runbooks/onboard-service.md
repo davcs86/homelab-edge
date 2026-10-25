@@ -24,14 +24,15 @@ tag; add it (and flip the `tag:ci` test for that tag from `deny` to `accept`) in
 
 ## 2. Shared Postgres (database-level isolation)
 
-The DB server is shared, so the tailnet cannot separate databases. Per workload, on the DB host:
+The DB server is shared, so the tailnet cannot separate databases. `playbooks/db.yml` applies every item below from `db_workloads`
+(`docs/runbooks/db-host.md`), except the per-role limits you have not given values for (`settings:`). Per workload, on the DB host:
 
 - Own database and own login role(s); never share a role across environments.
 - `REVOKE CONNECT ON DATABASE <db> FROM PUBLIC;` then `GRANT CONNECT` to that workload's role only; `REVOKE CREATE ON SCHEMA public FROM PUBLIC`.
 - `pg_hba.conf`: one `hostssl <db> <role> <app tailnet IP>/32 scram-sha-256` line per workload, before any broader line.
 - `CREATE EXTENSION timescaledb` in that database (extensions are per database).
 - Limits: `ALTER ROLE <role> CONNECTION LIMIT n`, `statement_timeout`, `idle_in_transaction_session_timeout`.
-- PgBouncer: its own `[databases]` entry pinned to `dbname`/`user`, its own `userlist.txt` entry and `pool_size`; keep the sum of pools below Postgres `max_connections`.
+- PgBouncer: its own `[databases]` entry pinned to `dbname` (a forced `user=` cannot use the SCRAM verifiers in `userlist.txt`; the role is kept out by `REVOKE CONNECT` and `pg_hba`), its own `userlist.txt` entry and `pool_size`; keep the sum of pools below Postgres `max_connections`.
 
 ## 3. Secrets and recovery
 

@@ -128,6 +128,24 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   are visible in the host's process list, a file is not. The token is staged on tmpfs and removed even when the plan fails. The checks
   are `pg_isready` on PostgreSQL and PgBouncer, the pgBackRest TLS port and the data disk; an unreadable disk is a failure so a broken
   check cannot look healthy. The address the checks use is asked, not assumed, because the services may listen only on the tailnet address.
+- **The DB host is configured by Ansible over the tailnet from `tag:ci`, in two stages.** The container has no tailnet or deploy user
+  when it is born, so a root bootstrap over the LAN (users, sshd, pinned Tailscale, join with a `tag:db` key from the environment)
+  precedes the `db-host` workflow. The cost: `tag:ci`, which xstockstrat's deploys also use, can SSH to the DB host as a user with
+  passwordless sudo. `tag:deploy` would narrow it. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
+  PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
+- **Archiving and backups are off until the stanza exists.** `archive_command` against a missing stanza fails forever and WAL fills the
+  data disk, so `db_archive_enabled` and `pgbackrest_backups_enabled` are flipped by a PR after `stanza-create` on the edge.
+- **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
+  server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
+  pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.
+- **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
+  the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
+- **PgBouncer pools are 5 per database, not the 20 in the build guide.** DigitalOcean's pools for the same six services run at 5; 20 per
+  database would take 40 of 100 connections before the direct services. Raise it after measuring.
+- **Traps:** a Debian LXC without a UTF-8 locale creates a `SQL_ASCII` cluster, so `createcluster.d` forces `--encoding=UTF8`;
+  PostgreSQL and PgBouncer bind the tailnet address, which tailscaled brings up after boot, so their units wait for it
+  (`wait-tailnet-ip`); a `postgres` login with `ALTER ROLE … PASSWORD` can log the statement on error, so it sets
+  `log_min_error_statement = panic` first.
 - **Kernel pin changes are followed by `proxmox-boot-tool refresh`.** The Proxmox Host Bootloader page says the ESPs must be
   synchronised after setting or clearing a pin on systems that use proxmox-boot-tool; the runbook's 5.4 steps leave it out, so
   the toolkit's `update` note includes it.

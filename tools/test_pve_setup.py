@@ -1766,5 +1766,66 @@ class DBHeartbeat(Isolated):
         self.assertIn("not installed in that container", r.output)
 
 
+class LxcCreate(Isolated):
+    TEMPLATES = "VOLID SIZE\nlocal:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst 120M\n"
+    ZFS = {"/storage/local-lvm": {"type": "zfspool", "pool": "rpool/data"}}
+    # template storage, template, id, hostname, root storage, root size, cores, memory, swap, bridge, DHCP, docker
+    BASE = "\n\n\ndb\n\n8G\n2\n3072\n0\n\ny\nn\n"
+
+    def run_create(self, answers, sh=None, dry=True):
+        key = Path(tempfile.mkdtemp()) / "k.pub"
+        key.write_text("ssh-ed25519 AAAA test\n")
+        with Env(sh={**self.ZFS, **(sh or {})}) as env, mock.patch.object(pve, "capture", lambda argv: self.TEMPLATES), \
+                mock.patch.object(pve, "ask_pubkey_file", lambda: str(key)):
+            r = env.run(["lxc-create"], answers, dry=dry)
+        return r, env
+
+    def test_plain_container_keeps_the_old_shape_and_sets_swap(self):
+        r, _ = self.run_create(self.BASE + "n\nn\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("--swap 0", r.output)
+        self.assertIn("--rootfs local-lvm:8", r.output)
+        self.assertNotIn("--mp0", r.output)
+        self.assertNotIn("zfs set", r.output)
+        self.assertNotIn("in /etc/pve/lxc/", r.output)
+        self.assertIn("pct start 102", r.output)
+
+    def test_data_volume_on_zfs_is_a_mount_point_and_is_tuned_before_start(self):
+        r, _ = self.run_create(self.BASE + "y\n\n64G\n\ny\nn\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("--mp0 local-lvm:64,mp=/var/lib/postgresql,backup=1", r.output)
+        self.assertIn("zfs set recordsize=16K compression=lz4 atime=off rpool/data/subvol-102-disk-1", r.output)
+        self.assertLess(r.output.index("zfs set"), r.output.index("pct start"))
+
+    def test_data_volume_off_zfs_is_not_tuned_and_not_asked(self):
+        r, _ = self.run_create(self.BASE + "y\n\n64G\n\nn\n", sh={"/storage/local-lvm": {"type": "lvmthin"}})
+        self.assertIn("--mp0 local-lvm:64,mp=/var/lib/postgresql,backup=1", r.output)
+        self.assertNotIn("Tune the data dataset", r.output)
+        self.assertNotIn("zfs set", r.output)
+
+    def test_data_volume_size_must_be_whole_gib_and_path_absolute(self):
+        r, _ = self.run_create(self.BASE + "y\n\n512M\n64G\nrelative\n/srv/pg\nn\nn\n")
+        self.assertIn("whole GiB only", r.output)
+        self.assertIn("an absolute path", r.output)
+        self.assertIn("mp=/srv/pg,backup=1", r.output)
+
+    def test_tun_is_a_step_before_start(self):
+        r, _ = self.run_create(self.BASE + "n\ny\n")
+        self.assertIn("allow /dev/net/tun in /etc/pve/lxc/102.conf", r.output)
+        self.assertLess(r.output.index("/dev/net/tun"), r.output.index("pct start"))
+
+    def test_tun_lines_are_added_once_in_place(self):
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d) / "102.conf"
+            conf.write_text("arch: amd64\nhostname: db")
+            real_path = pve.Path
+            with mock.patch.object(pve, "Path", lambda p: conf if str(p) == "/etc/pve/lxc/102.conf" else real_path(p)):
+                self.assertTrue(pve.lxc_allow_tun("102"))
+                self.assertTrue(pve.lxc_allow_tun("102"))
+            lines = conf.read_text().splitlines()
+        self.assertEqual(lines[:2], ["arch: amd64", "hostname: db"])
+        self.assertEqual(lines[2:], pve.LXC_TUN_LINES)
+
+
 if __name__ == "__main__":
     unittest.main()

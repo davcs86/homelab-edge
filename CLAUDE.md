@@ -30,7 +30,8 @@ Read only the row that matches the task.
 | Rotate the deSEC ACME token | `docs/runbooks/acme-token.md` |
 | Restore headscale; edge unreachable (break glass); stack down after reboot | `docs/runbooks/recovery.md` |
 | Alert setup (healthchecks.io email, ntfy on the phone) | `docs/runbooks/alerts.md` |
-| Backup host, Proxmox heartbeat, app VM, DB host | `docs/runbooks/home-side.md` |
+| Backup host, Proxmox heartbeat, app VM | `docs/runbooks/home-side.md` |
+| Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | `docs/runbooks/db-host.md`, `playbooks/db.yml` |
 | Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
 | Bumping or adding a pin | `docs/versions.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |

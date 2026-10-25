@@ -1,0 +1,16 @@
+SELECT format('CREATE ROLE %I LOGIN', r) FROM (VALUES ('admin'){% for w in db_workloads %}, ('{{ w.role }}'){% endfor %}) AS v(r)
+  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) \gexec
+
+ALTER ROLE admin NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT {{ db_admin_connection_limit }};
+GRANT pg_monitor, pg_read_all_data TO admin;
+{% for w in db_workloads %}
+
+ALTER ROLE "{{ w.role }}" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT {{ w.connection_limit }};
+{% for key, value in (w.settings | default({})).items() %}
+ALTER ROLE "{{ w.role }}" SET {{ key }} = {{ value }};
+{% endfor %}
+SELECT format('CREATE DATABASE %I OWNER %I TEMPLATE template0 ENCODING ''UTF8'' LOCALE %L', '{{ w.database }}', '{{ w.role }}', '{{ db_workload_locale }}')
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ w.database }}') \gexec
+REVOKE CONNECT ON DATABASE "{{ w.database }}" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "{{ w.database }}" TO "{{ w.role }}", admin;
+{% endfor %}

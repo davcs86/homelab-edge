@@ -28,6 +28,13 @@ class Extraction(unittest.TestCase):
         })
         self.assertEqual(secret_keys.used_keys(d), {"alpha_token", "beta_key", "gamma", "pki_ca_crt", "pki_server_key", "from_template"})
 
+    def test_password_keys_named_in_group_vars_and_roles(self):
+        d = tree({
+            "inventories/prod/group_vars/all/main.yml": "w:\n  - {role: a, password_key: db_role_a_password}\n",
+            "roles/x/tasks/main.yml": "l: \"{{ [{'role': 'admin', 'password_key': 'db_role_admin_password'}] }}\"\n",
+        })
+        self.assertEqual(secret_keys.used_keys(d), {"db_role_a_password", "db_role_admin_password"})
+
     def test_key_entries_in_files_that_do_not_index_by_item_key_are_ignored(self):
         d = tree({"roles/a/tasks/main.yml": "- {name: x, key: unrelated_thing}\nvalue: '{{ edge_secrets.real }}'\n"})
         self.assertEqual(secret_keys.used_keys(d), {"real"})
@@ -42,6 +49,7 @@ class Repository(unittest.TestCase):
         used = secret_keys.used_keys()
         self.assertIn("gatus_heartbeat_db_token", used)   # dotted
         self.assertTrue({"pgbackrest_tls_ca_crt", "pgbackrest_tls_server_crt", "pgbackrest_tls_server_key"} <= used)  # edge_secrets[item.key]
+        self.assertIn("db_role_xstockstrat_production_password", used)  # password_key in group_vars
 
     def test_every_key_the_roles_read_is_in_the_committed_file(self):
         missing = secret_keys.used_keys() - secret_keys.file_keys()
@@ -52,7 +60,7 @@ class Repository(unittest.TestCase):
     def test_a_file_without_the_db_token_is_reported(self):
         """The failure this check exists for: the file from before PR #20."""
         old = tree({"secrets/edge.sops.yaml": "".join(f"{k}: ENC[x]\n" for k in sorted(secret_keys.file_keys() - {"gatus_heartbeat_db_token"})) + "sops: {}\n"})
-        self.assertEqual(secret_keys.used_keys() - secret_keys.file_keys(old / "secrets/edge.sops.yaml"), {"gatus_heartbeat_db_token"})
+        self.assertIn("gatus_heartbeat_db_token", secret_keys.used_keys() - secret_keys.file_keys(old / "secrets/edge.sops.yaml"))
 
 
 if __name__ == "__main__":

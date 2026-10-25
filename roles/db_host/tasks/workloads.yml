@@ -1,0 +1,66 @@
+---
+# Everything here runs as the postgres OS user over the local socket (peer); no secret is ever on a command line.
+- name: Roles and databases
+  ansible.builtin.command: psql -X -v ON_ERROR_STOP=1 -d postgres -f -
+  args:
+    stdin: "{{ lookup('ansible.builtin.template', 'roles-databases.sql.j2') }}"
+  become: true
+  become_user: postgres
+  register: _roles_sql
+  changed_when: "'CREATE ' in _roles_sql.stdout"
+
+- name: Extension and schema privileges in each database
+  ansible.builtin.command: "psql -X -v ON_ERROR_STOP=1 -d {{ item.database | quote }} -f -"
+  args:
+    stdin: |
+      CREATE EXTENSION IF NOT EXISTS timescaledb;
+      REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+  become: true
+  become_user: postgres
+  loop: "{{ db_workloads }}"
+  loop_control:
+    label: "{{ item.database }}"
+  register: _ext_sql
+  changed_when: "'already exists' not in _ext_sql.stderr"
+
+- name: Can each role log in with its password
+  ansible.builtin.command: >-
+    psql -X -tA -h 127.0.0.1 -U {{ item.role | quote }} -d {{ item.database | quote }} -c 'SELECT 1'
+  environment:
+    PGPASSWORD: "{{ edge_secrets[item.password_key] }}"
+    PGSSLMODE: prefer
+  loop: "{{ db_workloads + [{'role': 'admin', 'database': 'postgres', 'password_key': 'db_role_admin_password'}] }}"
+  loop_control:
+    label: "{{ item.role }}"
+  register: _logins
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# Runs only for a role whose password is missing or no longer matches the one in SOPS.
+- name: Set the password
+  ansible.builtin.command: psql -X -v ON_ERROR_STOP=1 -d postgres -f -
+  args:
+    stdin: |
+      SET log_min_error_statement = 'panic';
+      ALTER ROLE "{{ item.item.role }}" PASSWORD '{{ edge_secrets[item.item.password_key] }}';
+  become: true
+  become_user: postgres
+  loop: "{{ _logins.results }}"
+  loop_control:
+    label: "{{ item.item.role }}"
+  when: item.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: SCRAM verifiers of the pooled roles
+  ansible.builtin.command: psql -X -tA -F ' ' -d postgres -f -
+  args:
+    stdin: >-
+      SELECT rolname, rolpassword FROM pg_authid
+      WHERE rolname IN ({% for w in db_workloads %}'{{ w.role }}'{{ ', ' if not loop.last }}{% endfor %}) ORDER BY 1;
+  become: true
+  become_user: postgres
+  register: _verifiers
+  changed_when: false
+  no_log: true

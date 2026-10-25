@@ -88,6 +88,46 @@ pgbackrest_tls_port: 8432
 pgbackrest_stanza: main
 pgbackrest_repo_path: /var/lib/pgbackrest
 pgbackrest_client_cn: db-pgbackrest                     # CN on the database host's client cert
+pgbackrest_edge_client_cn: edge-pgbackrest              # CN on the edge's client cert (the edge pulls backups)
+pgbackrest_retention_full: 2
+pgbackrest_retention_diff: 6
+# Off until the stanza exists on the edge (docs/runbooks/db-host.md); then flip and deploy.
+pgbackrest_backups_enabled: false
+# TODO(ask): schedules are not stated by the owner; the build guide asks for a weekly full and a daily differential.
+pgbackrest_full_schedule: "Sun *-*-* 02:30:00 UTC"
+pgbackrest_diff_schedule: "Mon..Sat *-*-* 02:30:00 UTC"
+
+# ---------- Database host (tag:db) ----------
+db_tailnet_hostname: db
+db_tailnet_host: "{{ db_tailnet_hostname }}.{{ magicdns_base_domain }}"
+db_postgres_major: 18
+db_data_dir: "/var/lib/postgresql/{{ db_postgres_major }}/main"
+# Off until the stanza exists on the edge; with it on and no stanza, WAL piles up on the data disk.
+db_archive_enabled: false
+# TODO(ask): match DigitalOcean's datcollate before restoring a dump (SELECT datcollate FROM pg_database).
+db_cluster_locale: C.UTF-8
+db_workload_locale: C.UTF-8
+db_pgbouncer_pool_size: 5               # per database; the size DigitalOcean's pools run at
+# Tailnet names of admin devices allowed to log in as `admin` (hostssl); empty = ssh in and use the local socket.
+db_admin_tailnet_hosts: []
+db_admin_connection_limit: 5
+# One database and owner role per workload (never shared across environments); the PgBouncer pool is named after the database.
+# connection_limit: 8 direct pools doubled by a rolling deploy, the migrator, and one pool of db_pgbouncer_pool_size.
+db_workloads:
+  - env: production
+    database: xstockstrat-production
+    role: xstockstrat_production
+    password_key: db_role_xstockstrat_production_password
+    tailnet_host: "{{ app_tailnet_host.split('.')[0] }}"
+    connection_limit: 25
+    settings: {}
+  - env: staging
+    database: xstockstrat-staging
+    role: xstockstrat_staging
+    password_key: db_role_xstockstrat_staging_password
+    tailnet_host: "{{ staging_tailnet_host.split('.')[0] }}"
+    connection_limit: 25
+    settings: {}
 
 # ---------- Paths ----------
 edge_root: /opt/edge

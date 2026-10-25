@@ -1,0 +1,17 @@
+---
+db_tls_dir: "/etc/postgresql/{{ db_postgres_major }}/main/tls"
+db_pg_service: "postgresql@{{ db_postgres_major }}-main"
+# Starting values for a 3 GiB container with swap off; tune after measuring.
+# max_locks_per_transaction: the 400-day OHLCV bars scan exhausts the stock 64 (xstockstrat ohlcv-lock-budget-tuning).
+db_pg_settings:
+  shared_buffers: 768MB
+  effective_cache_size: 1536MB
+  work_mem: 8MB
+  maintenance_work_mem: 256MB
+  max_connections: 100
+  max_locks_per_transaction: 1024
+  wal_compression: "on"
+  checkpoint_timeout: 15min
+  max_wal_size: 4GB
+  timezone: "'UTC'"
+  log_timezone: "'UTC'"

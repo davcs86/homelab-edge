@@ -1,0 +1,74 @@
+---
+- name: PGDG apt key
+  ansible.builtin.get_url:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    dest: /etc/apt/keyrings/pgdg.asc
+    mode: "0644"
+
+- name: PGDG apt source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pgdg.sources
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://apt.postgresql.org/pub/repos/apt
+      Suites: {{ ansible_facts.distribution_release }}-pgdg
+      Components: main
+      Signed-By: /etc/apt/keyrings/pgdg.asc
+  register: _pgdg
+
+- name: Timescale apt key
+  ansible.builtin.get_url:
+    url: https://packagecloud.io/timescale/timescaledb/gpgkey
+    dest: /etc/apt/keyrings/timescaledb.asc
+    mode: "0644"
+
+- name: Timescale apt source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/timescaledb.sources
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://packagecloud.io/timescale/timescaledb/debian
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: main
+      Signed-By: /etc/apt/keyrings/timescaledb.asc
+  register: _timescale
+
+# The cluster is created by the postgresql package; UTF-8 is not negotiable, the locale is a TODO(ask) variable.
+- name: Directory for cluster creation options
+  ansible.builtin.file:
+    path: /etc/postgresql-common/createcluster.d
+    state: directory
+    mode: "0755"
+
+- name: Cluster creation options
+  ansible.builtin.copy:
+    dest: /etc/postgresql-common/createcluster.d/10-xs.conf
+    mode: "0644"
+    content: |
+      initdb_options = '--encoding=UTF8 --locale={{ db_cluster_locale }}'
+
+- name: Pinned PostgreSQL, TimescaleDB, PgBouncer, pgBackRest
+  ansible.builtin.apt:
+    name:
+      - "postgresql-{{ db_postgres_major }}={{ db_postgresql_package_version }}"
+      - "postgresql-client-{{ db_postgres_major }}={{ db_postgresql_package_version }}"
+      - "timescaledb-2-oss-{{ db_timescaledb_version }}-postgresql-{{ db_postgres_major }}={{ db_timescaledb_package_version }}"
+      - "timescaledb-2-loader-postgresql-{{ db_postgres_major }}={{ db_timescaledb_package_version }}"
+      - "pgbouncer={{ db_pgbouncer_package_version }}"
+      - "pgbackrest={{ db_pgbackrest_package_version }}"
+    update_cache: "{{ _pgdg is changed or _timescale is changed }}"
+    allow_downgrade: true
+
+- name: Hold the pinned packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - "postgresql-{{ db_postgres_major }}"
+    - "postgresql-client-{{ db_postgres_major }}"
+    - "timescaledb-2-oss-{{ db_timescaledb_version }}-postgresql-{{ db_postgres_major }}"
+    - "timescaledb-2-loader-postgresql-{{ db_postgres_major }}"
+    - pgbouncer
+    - pgbackrest

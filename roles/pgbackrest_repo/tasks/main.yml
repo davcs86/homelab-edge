@@ -1,6 +1,5 @@
 ---
-# Offsite pgBackRest repository, served only on the tailnet address with mutual TLS.
-# TODO(ask): database host details (PG major version, data dir) are needed before scheduling backups here.
+# Offsite pgBackRest repository, served only on the tailnet address with mutual TLS; it also pulls backups from the database host.
 - name: PGDG apt key
   ansible.builtin.get_url:
     url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
@@ -63,6 +62,8 @@
     - {name: ca.crt, key: pgbackrest_tls_ca_crt, mode: "0644"}
     - {name: server.crt, key: pgbackrest_tls_server_crt, mode: "0644"}
     - {name: server.key, key: pgbackrest_tls_server_key, mode: "0600"}
+    - {name: client.crt, key: pgbackrest_edge_client_crt, mode: "0644"}
+    - {name: client.key, key: pgbackrest_edge_client_key, mode: "0600"}
   loop_control:
     label: "{{ item.name }}"
   no_log: true
@@ -86,6 +87,17 @@
       tls-server-key-file=/etc/pgbackrest/tls/server.key
       # Only the database host's client certificate, and only for its stanza.
       tls-server-auth={{ pgbackrest_client_cn }}={{ pgbackrest_stanza }}
+      repo1-retention-full={{ pgbackrest_retention_full }}
+      repo1-retention-diff={{ pgbackrest_retention_diff }}
+
+      [{{ pgbackrest_stanza }}]
+      pg1-host={{ db_tailnet_host }}
+      pg1-host-type=tls
+      pg1-host-port={{ pgbackrest_tls_port }}
+      pg1-host-ca-file=/etc/pgbackrest/tls/ca.crt
+      pg1-host-cert-file=/etc/pgbackrest/tls/client.crt
+      pg1-host-key-file=/etc/pgbackrest/tls/client.key
+      pg1-path={{ db_data_dir }}
   notify: Restart pgbackrest server
 
 - name: TLS server unit
@@ -123,3 +135,58 @@
     enabled: true
     state: started
     daemon_reload: true
+
+- name: Backup service (instance is the backup type)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pgbackrest-backup@.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=pgBackRest %i backup of the database host
+      After=network-online.target tailscaled.service
+      Wants=network-online.target
+      OnFailure=edge-notify@%n.service
+
+      [Service]
+      Type=oneshot
+      User=pgbackrest
+      Group=pgbackrest
+      ExecStart=/usr/bin/pgbackrest --stanza={{ pgbackrest_stanza }} backup --type=%i
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths={{ pgbackrest_repo_path }} /var/log/pgbackrest /tmp
+      ProtectHome=true
+      PrivateTmp=true
+  notify: Reload systemd
+
+- name: Backup timers
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/pgbackrest-backup-{{ item.type }}.timer"
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=pgBackRest {{ item.type }} backup schedule
+
+      [Timer]
+      OnCalendar={{ item.schedule }}
+      Persistent=true
+      Unit=pgbackrest-backup@{{ item.type }}.service
+
+      [Install]
+      WantedBy=timers.target
+  loop:
+    - {type: full, schedule: "{{ pgbackrest_full_schedule }}"}
+    - {type: diff, schedule: "{{ pgbackrest_diff_schedule }}"}
+  loop_control:
+    label: "{{ item.type }}"
+  notify: Reload systemd
+
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Backup timers enabled only once the stanza exists
+  ansible.builtin.systemd_service:
+    name: "pgbackrest-backup-{{ item }}.timer"
+    enabled: "{{ pgbackrest_backups_enabled }}"
+    state: "{{ 'started' if pgbackrest_backups_enabled else 'stopped' }}"
+  loop: [full, diff]

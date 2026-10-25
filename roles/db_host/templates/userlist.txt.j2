@@ -1,0 +1,3 @@
+{% for line in _verifiers.stdout_lines %}
+"{{ line.split(' ', 1)[0] }}" "{{ line.split(' ', 1)[1] }}"
+{% endfor %}
