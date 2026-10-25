@@ -1595,5 +1595,176 @@ class ServiceCheck(Isolated):
         self.assertIn("FAIL  sshd.service", r.output)
 
 
+DB_ANSWERS = "\nstatus.ts.example.test\n\n\n\n/var/lib/postgresql/18/main\nDB-TOKEN\n100.64.0.1\n"
+DB_DIR = "/var/lib/postgresql/18/main"
+DB_PROBES = {**{f"pct exec 110 -- sh -c command -v {t}": f"/usr/bin/{t}\n" for t in pve.DBHB_TOOLS}, f"pct exec 110 -- test -d {DB_DIR}": ""}
+
+
+class DBHeartbeatScript(unittest.TestCase):
+    """Runs the generated script under bash with fake pg_isready, df and curl, and a real listening socket for the pgBackRest port."""
+
+    def run_script(self, failing_ports=(), pcent="40%", listening=True):
+        import socket
+        d = Path(tempfile.mkdtemp())
+        bindir = d / "bin"
+        bindir.mkdir()
+        log = d / "curl.log"
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        br_port = srv.getsockname()[1]
+        if not listening:
+            srv.close()
+        (bindir / "pg_isready").write_text('#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -p ] && port=$2; shift; done\n'
+                                           f'case " {" ".join(str(x) for x in failing_ports)} " in *" $port "*) exit 2;; esac\nexit 0\n')
+        (bindir / "df").write_text(f'#!/bin/sh\n[ -n "{pcent}" ] && printf "Use%%\\n %s\\n" "{pcent}"\nexit 0\n')
+        (bindir / "curl").write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {log}\n')
+        for f in bindir.iterdir():
+            f.chmod(0o755)
+        env_file, curl_file = d / "db.env", d / "db.curl"
+        env_file.write_text(f"STATUS_HOST=status.example.test\nENDPOINT=home_db-heartbeat\nCHECK_HOST=127.0.0.1\nDATA_DIR=/data\n"
+                            f"PG_PORT=5432\nPGB_PORT=6432\nBR_PORT={br_port}\n")
+        script = d / "db.sh"
+        script.write_text(pve.DBHB_SCRIPT_TEXT.replace("/etc/db-heartbeat.env", str(env_file)).replace("/etc/db-heartbeat.curl", str(curl_file)))
+        try:
+            r = subprocess.run(["bash", str(script)], env={"PATH": f"{bindir}:/usr/bin:/bin"}, capture_output=True, text=True, check=False)
+        finally:
+            srv.close()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return log.read_text().split("\n")
+
+    def test_all_checks_passing_pushes_success(self):
+        argv = self.run_script()
+        self.assertIn("success=true", argv)
+        self.assertNotIn("error=", " ".join(argv))
+        self.assertIn("https://status.example.test/api/v1/endpoints/home_db-heartbeat/external", argv)
+        self.assertNotIn("Bearer", " ".join(argv))
+
+    def test_each_failed_check_is_named(self):
+        self.assertIn("error=postgres", self.run_script(failing_ports=(5432,)))
+        self.assertIn("error=pgbouncer", self.run_script(failing_ports=(6432,)))
+        self.assertIn("error=pgbackrest", self.run_script(listening=False))
+        self.assertIn("error=disk-full", self.run_script(pcent="91%"))
+        self.assertIn("success=false", self.run_script(pcent="85%"))
+        self.assertIn("success=true", self.run_script(pcent="84%"))
+
+    def test_an_unreadable_data_disk_is_a_failure_not_a_pass(self):
+        self.assertIn("error=disk-unreadable", self.run_script(pcent=""))
+
+    def test_several_failures_are_listed_together(self):
+        self.assertIn("error=postgres pgbouncer", self.run_script(failing_ports=(5432, 6432)))
+
+
+class DBHeartbeat(Isolated):
+    def run_task(self, answers=DB_ANSWERS, soft=None, texts=None, resources=None, dry=True, args=("db-heartbeat",)):
+        sh = {"/cluster/resources": resources} if resources is not None else {}
+        with Env(sh=sh, soft={**DB_PROBES, **(soft or {})}, texts=texts) as env:
+            r = env.run(list(args), answers, dry=dry)
+            self.steps = env.steps
+        return r
+
+    def desired(self):
+        return pve.db_heartbeat_files("status.ts.example.test", "home_db-heartbeat", 300, "DB-TOKEN", "100.64.0.1", "127.0.0.1", DB_DIR)
+
+    def test_fresh_install_stages_privately_pushes_each_file_and_enables_the_timer(self):
+        r = self.run_task()
+        self.assertEqual(r.exit_code, 0, r.output)
+        out = r.output
+        self.assertNotIn("DB-TOKEN", out)
+        self.assertIn("install -d -m 0700 /run/pve-setup-dbhb", out)
+        self.assertIn("pct push 110 /run/pve-setup-dbhb/db-heartbeat.curl /etc/db-heartbeat.curl --perms 0600", out)
+        self.assertIn("pct push 110 /run/pve-setup-dbhb/db-heartbeat /usr/local/sbin/db-heartbeat --perms 0750", out)
+        order = [out.index(x) for x in ("install -d -m 0700", "pct push 110", "remove the staging directory", "systemctl daemon-reload",
+                                        "systemctl enable --now db-heartbeat.timer", "systemctl start db-heartbeat.service")]
+        self.assertEqual(order, sorted(order), out)
+
+    def test_the_environment_file_carries_the_answers_and_the_documented_ports(self):
+        env = self.desired()[pve.DBHB_ENV][0]
+        for line in ("STATUS_HOST=status.ts.example.test", "ENDPOINT=home_db-heartbeat", "CHECK_HOST=127.0.0.1", f"DATA_DIR={DB_DIR}",
+                     "PG_PORT=5432", "PGB_PORT=6432", "BR_PORT=8432"):
+            self.assertIn(line, env)
+        self.assertIn("OnUnitActiveSec=300", self.desired()[pve.DBHB_TIMER][0])
+        curl = self.desired()[pve.DBHB_CURL][0]
+        self.assertIn('resolve = "status.ts.example.test:443:100.64.0.1"', curl)
+
+    def test_a_missing_tool_stops_before_anything_is_planned(self):
+        r = self.run_task(soft={"pct exec 110 -- sh -c command -v pg_isready": None})
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("lacks: pg_isready", r.output)
+        self.assertNotIn("== Install", r.output)
+
+    def test_a_stopped_container_is_refused(self):
+        res = [{**RES[2], "status": "stopped"}]
+        r = self.run_task(resources=res)
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("start it first", r.output)
+
+    def test_a_data_directory_that_does_not_exist_is_refused(self):
+        r = self.run_task(soft={f"pct exec 110 -- test -d {DB_DIR}": None})
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("is not a directory inside container 110", r.output)
+
+    def test_unsafe_paths_and_addresses_are_refused(self):
+        for bad in ("relative/path", "/var/lib/post gres", "/data;rm -rf /"):
+            r = self.run_task(answers=DB_ANSWERS.replace(DB_DIR, bad))
+            self.assertEqual(r.exit_code, 1, bad)
+        r = self.run_task(answers="\nstatus.ts.example.test\n\n\nhost;reboot\n")
+        self.assertEqual(r.exit_code, 1)
+
+    def test_no_lxc_means_an_error_not_an_empty_menu(self):
+        r = self.run_task(resources=[RES[0], RES[1]])
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("no LXC containers", r.output)
+
+    def test_unchanged_install_does_nothing(self):
+        soft = {f"pct exec 110 -- cat {path}": content for path, (content, _, _) in self.desired().items()}
+        soft.update({"pct exec 110 -- systemctl is-enabled db-heartbeat.timer": "enabled\n", "pct exec 110 -- systemctl is-active db-heartbeat.timer": "active\n"})
+        r = self.run_task(soft=soft)
+        self.assertIn("Nothing to do", r.output)
+        self.assertNotIn("pct push", r.output)
+
+    def test_only_the_changed_file_is_pushed(self):
+        soft = {f"pct exec 110 -- cat {path}": content for path, (content, _, _) in self.desired().items()}
+        soft[f"pct exec 110 -- cat {pve.DBHB_CURL}"] = 'header = "Authorization: Bearer OLD"\n'
+        soft.update({"pct exec 110 -- systemctl is-enabled db-heartbeat.timer": "enabled\n", "pct exec 110 -- systemctl is-active db-heartbeat.timer": "active\n"})
+        r = self.run_task(soft=soft)
+        self.assertEqual(r.output.count("pct push"), 1, r.output)
+        self.assertIn("/etc/db-heartbeat.curl", r.output)
+        self.assertNotIn("daemon-reload", r.output)
+        self.assertNotIn("DB-TOKEN", r.output)
+        self.assertNotIn("OLD", r.output)
+
+    def test_the_staged_token_file_is_removed_even_when_the_plan_fails(self):
+        with Env(soft=DB_PROBES) as env, mock.patch.object(pve, "run_step", lambda step: not isinstance(step, pve.Cmd) or "push" not in step.argv), \
+                mock.patch.object(pve.os.path, "exists", lambda p: True), mock.patch.object(pve.os, "unlink") as unlink:
+            r = env.run(["db-heartbeat"], DB_ANSWERS + "y\nn\n")
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertIn("Nothing was changed that needs rolling back", r.output)  # the push really failed
+        self.assertIn(mock.call("/run/pve-setup-dbhb/db-heartbeat.curl"), unlink.mock_calls)
+
+    def test_remove_needs_the_typed_word_and_only_removes_what_is_there(self):
+        present = {f"pct exec 110 -- test -e {p}": "" for p in (pve.DBHB_SCRIPT, pve.DBHB_TIMER)}
+        script = {f"pct exec 110 -- cat {pve.DBHB_SCRIPT}": pve.DBHB_SCRIPT_TEXT}
+        with Env(soft={**present, **script}) as env:
+            env.run(["db-heartbeat-remove"], "\nno\n")
+            self.assertEqual(env.cmds(), [])
+            env.run(["db-heartbeat-remove"], "\ndb-heartbeat\ny\n")
+            cmds = env.cmds()
+        self.assertIn("pct exec 110 -- systemctl disable --now db-heartbeat.timer", cmds)
+        self.assertIn(f"pct exec 110 -- rm -f {pve.DBHB_SCRIPT} {pve.DBHB_TIMER}", cmds)
+
+    def test_remove_refuses_a_script_this_toolkit_did_not_write(self):
+        soft = {f"pct exec 110 -- test -e {pve.DBHB_SCRIPT}": "", f"pct exec 110 -- cat {pve.DBHB_SCRIPT}": "#!/bin/sh\necho mine\n"}
+        with Env(soft=soft) as env:
+            r = env.run(["db-heartbeat-remove"], "\n")
+        self.assertEqual(r.exit_code, 1)
+        self.assertIn("was not written by this toolkit", r.output)
+
+    def test_remove_when_nothing_is_installed(self):
+        with Env() as env:
+            r = env.run(["db-heartbeat-remove"], "\n")
+        self.assertIn("not installed in that container", r.output)
+
+
 if __name__ == "__main__":
     unittest.main()
