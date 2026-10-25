@@ -123,6 +123,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The Proxmox heartbeat reports health, not liveness.** It pushes `success=false&error=…` when `zpool status -x`, the NVMe SMART
   status or pool capacity (≥ 85%) fail, and an unreadable pool counts as a failure, so a check that stops working cannot look
   healthy. The token is in a 0600 curl `-K` file because argv is world-readable in `/proc`.
+- **The DB heartbeat is installed into the container with `pct`, and reports health, not just liveness.** The host that must be
+  watched is a guest, so the Proxmox toolkit pushes the script, units and a 0600 token file in with `pct push`: `pct exec` arguments
+  are visible in the host's process list, a file is not. The token is staged on tmpfs and removed even when the plan fails. The checks
+  are `pg_isready` on PostgreSQL and PgBouncer, the pgBackRest TLS port and the data disk; an unreadable disk is a failure so a broken
+  check cannot look healthy. The address the checks use is asked, not assumed, because the services may listen only on the tailnet address.
 - **Kernel pin changes are followed by `proxmox-boot-tool refresh`.** The Proxmox Host Bootloader page says the ESPs must be
   synchronised after setting or clearing a pin on systems that use proxmox-boot-tool; the runbook's 5.4 steps leave it out, so
   the toolkit's `update` note includes it.

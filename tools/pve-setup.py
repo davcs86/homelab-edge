@@ -699,6 +699,142 @@ def legacy_heartbeat_removal(state: dict) -> list[Step]:
     return [*steps, Cmd(["systemctl", "daemon-reload"])]
 
 
+# ---------- DB host heartbeat (pushed into an LXC) ----------
+DBHB_DIR = "/run/pve-setup-dbhb"  # staging on the Proxmox host (tmpfs); the token file is removed after the push
+DBHB_CURL, DBHB_ENV, DBHB_SCRIPT = "/etc/db-heartbeat.curl", "/etc/db-heartbeat.env", "/usr/local/sbin/db-heartbeat"
+DBHB_UNIT, DBHB_TIMER = "/etc/systemd/system/db-heartbeat.service", "/etc/systemd/system/db-heartbeat.timer"
+DBHB_FILES = (DBHB_CURL, DBHB_ENV, DBHB_SCRIPT, DBHB_UNIT, DBHB_TIMER)
+DBHB_TOOLS = ("bash", "curl", "df", "pg_isready", "timeout")
+DBHB_SCRIPT_TEXT = """#!/usr/bin/env bash
+# Pushes DB host health to Gatus; written by pve-setup.
+set -u
+. /etc/db-heartbeat.env
+ok=true
+why=""
+pg_isready -q -h "$CHECK_HOST" -p "$PG_PORT" || { ok=false; why="postgres"; }
+pg_isready -q -h "$CHECK_HOST" -p "$PGB_PORT" || { ok=false; why="$why pgbouncer"; }
+# shellcheck disable=SC2016  # the single-quoted bash -c script takes its host and port as $0 and $1
+timeout 5 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$CHECK_HOST" "$BR_PORT" 2>/dev/null || { ok=false; why="$why pgbackrest"; }
+used=$(df --output=pcent "$DATA_DIR" 2>/dev/null | tail -n1 | tr -dc 0-9)
+if [ -z "$used" ]; then ok=false; why="$why disk-unreadable"; elif [ "$used" -ge 85 ]; then ok=false; why="$why disk-full"; fi
+args=(--url-query "success=$ok")
+[ "$ok" = true ] || args+=(--url-query "error=${why# }")
+exec curl -fsS --max-time 15 -X POST -K /etc/db-heartbeat.curl "${args[@]}" "https://$STATUS_HOST/api/v1/endpoints/$ENDPOINT/external" >/dev/null
+"""
+
+
+def db_heartbeat_files(host: str, endpoint: str, seconds: int, token: str, edge_ip: str, check_host: str,
+                       data_dir: str) -> dict[str, tuple[str, int, bool]]:
+    unit = """[Unit]
+Description=Push DB host health to Gatus
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/db-heartbeat
+"""
+    timer = f"""[Unit]
+Description=DB host heartbeat every {seconds}s
+
+[Timer]
+OnBootSec={seconds}
+OnUnitActiveSec={seconds}
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+"""
+    env = (f"STATUS_HOST={shlex.quote(host)}\nENDPOINT={shlex.quote(endpoint)}\nCHECK_HOST={shlex.quote(check_host)}\n"
+           f"DATA_DIR={shlex.quote(data_dir)}\nPG_PORT=5432\nPGB_PORT=6432\nBR_PORT=8432\n")
+    curl = f'header = "Authorization: Bearer {token}"\n' + (f'resolve = "{host}:443:{edge_ip}"\n' if edge_ip else "")
+    return {DBHB_CURL: (curl, 0o600, True), DBHB_ENV: (env, 0o644, False), DBHB_SCRIPT: (DBHB_SCRIPT_TEXT, 0o750, False),
+            DBHB_UNIT: (unit, 0o644, False), DBHB_TIMER: (timer, 0o644, False)}
+
+
+def pct_soft(vmid: int | str, *argv: str) -> str | None:
+    return soft(["pct", "exec", str(vmid), "--", *argv])
+
+
+def choose_lxc(prompt: str) -> dict:
+    lxcs = [g for g in guests() if g["type"] == "lxc" and not g["template"]]
+    if not lxcs:
+        raise typer.Exit(fail("no LXC containers on this host; this task installs into one"))
+    vmid = choose(prompt, [(str(g["vmid"]), f"{g['vmid']} {g['name']} ({g['status']})") for g in lxcs])
+    return next(g for g in lxcs if str(g["vmid"]) == vmid)
+
+
+def db_heartbeat() -> None:
+    """Install the DB host heartbeat into an LXC: pg_isready on PostgreSQL and PgBouncer, pgBackRest port, data disk; pushed to Gatus."""
+    ct = choose_lxc("Container that runs PostgreSQL")
+    vmid = ct["vmid"]
+    host = typer.prompt("Gatus host, e.g. status.ts.<domain>")
+    endpoint = typer.prompt("Gatus external endpoint key (<group>_<name>)", default="home_db-heartbeat")
+    seconds = ask_int("Push every N seconds", 10, 3600, 300)
+    check_host = typer.prompt("Address the local checks connect to (where PostgreSQL, PgBouncer and pgBackRest listen)", default="127.0.0.1").strip()
+    if not re.fullmatch(r"[A-Za-z0-9.:-]+", check_host):
+        raise typer.Exit(fail("the address must be an IP address or a host name"))
+    data_dir = typer.prompt("PostgreSQL data directory (absolute path; its filesystem is checked at 85%)").strip()
+    if not re.fullmatch(r"/[A-Za-z0-9._/-]*", data_dir):
+        raise typer.Exit(fail("the data directory must be an absolute path without spaces or special characters"))
+    token = typer.prompt("Heartbeat token (gatus_heartbeat_db_token)", hide_input=True)
+    edge_ip = ask_edge_ip()
+    if ct["status"] != "running":
+        raise typer.Exit(fail(f"container {vmid} is {ct['status'] or 'not running'}; start it first"))
+    missing = [t for t in DBHB_TOOLS if pct_soft(vmid, "sh", "-c", f"command -v {t}") is None]
+    if missing:
+        raise typer.Exit(fail(f"container {vmid} lacks: {', '.join(missing)} (pg_isready is in the PostgreSQL client package)"))
+    if pct_soft(vmid, "test", "-d", data_dir) is None:
+        raise typer.Exit(fail(f"{data_dir} is not a directory inside container {vmid}"))
+    wanted = db_heartbeat_files(host, endpoint, seconds, token, edge_ip, check_host, data_dir)
+    differing = [path for path, (content, _, _) in wanted.items() if pct_soft(vmid, "cat", path) != content]
+    enabled = (pct_soft(vmid, "systemctl", "is-enabled", "db-heartbeat.timer") or "").strip()
+    active = (pct_soft(vmid, "systemctl", "is-active", "db-heartbeat.timer") or "").strip()
+    steps: list[Step] = []
+    staged: list[str] = []
+    if differing:
+        steps.append(Cmd(["install", "-d", "-m", "0700", DBHB_DIR]))
+    for path in differing:
+        content, mode, secret = wanted[path]
+        tmp = f"{DBHB_DIR}/{Path(path).name}"
+        staged.append(tmp)
+        steps += [Write(tmp, content, 0o600 if secret else mode, secret),
+                  Cmd(["pct", "push", str(vmid), tmp, path, "--perms", f"{mode:04o}"])]
+    if differing:
+        steps.append(Do("remove the staging directory on this host", lambda: (shutil.rmtree(DBHB_DIR, ignore_errors=True), True)[1]))
+    if any(path in (DBHB_UNIT, DBHB_TIMER) for path in differing):
+        steps.append(Cmd(["pct", "exec", str(vmid), "--", "systemctl", "daemon-reload"]))
+    if differing or enabled != "enabled" or active != "active":
+        steps += [Cmd(["pct", "exec", str(vmid), "--", "systemctl", "enable", "--now", "db-heartbeat.timer"]),
+                  Cmd(["pct", "exec", str(vmid), "--", "systemctl", "start", "db-heartbeat.service"]),
+                  Cmd(["pct", "exec", str(vmid), "--", "systemctl", "status", "--no-pager", "db-heartbeat.service"])]
+    if differing:
+        typer.echo("Changed files: " + ", ".join(differing) + " (secret contents are never shown)")
+    execute(Plan(f"Install the DB heartbeat into container {vmid} ({ct['name']})", steps, cleanup=staged))
+
+
+def db_heartbeat_remove() -> None:
+    """Remove the DB host heartbeat (timer, script, units, token file) from an LXC."""
+    ct = choose_lxc("Container to remove the DB heartbeat from")
+    vmid = ct["vmid"]
+    if ct["status"] != "running":
+        raise typer.Exit(fail(f"container {vmid} is {ct['status'] or 'not running'}; start it first"))
+    script = pct_soft(vmid, "cat", DBHB_SCRIPT)
+    present = [path for path in DBHB_FILES if pct_soft(vmid, "test", "-e", path) is not None]
+    if not present:
+        typer.echo("The DB heartbeat is not installed in that container.")
+        return
+    if script is not None and "written by pve-setup" not in script:
+        raise typer.Exit(fail(f"{DBHB_SCRIPT} in container {vmid} was not written by this toolkit; remove it by hand"))
+    if not confirm_typed("db-heartbeat", "Gatus will alert once the DB heartbeat has been silent for its interval."):
+        typer.echo("Cancelled.")
+        return
+    base = ["pct", "exec", str(vmid), "--"]
+    execute(Plan(f"Remove the DB heartbeat from container {vmid}", [
+        Cmd([*base, "systemctl", "disable", "--now", "db-heartbeat.timer"]), Cmd([*base, "rm", "-f", *present]),
+        Cmd([*base, "systemctl", "daemon-reload"])]))
+
+
 # ---------- guests ----------
 def vm_template() -> None:
     """Turn a checksum-verified cloud image into a cloud-init VM template."""
@@ -2303,7 +2439,8 @@ def status_command(as_json: bool = typer.Option(False, "--json", help="Machine-r
 
 SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
     ("Set up", [("tailscale-install", "Install Tailscale (pinned)", tailscale_install), ("tailscale-join", "Join the tailnet", tailscale_join),
-                ("heartbeat", "Install the Gatus heartbeat timer", heartbeat), ("vm-template", "Build a cloud-init VM template", vm_template),
+                ("heartbeat", "Install the Gatus heartbeat timer", heartbeat),
+                ("db-heartbeat", "Install the DB host heartbeat into an LXC", db_heartbeat), ("vm-template", "Build a cloud-init VM template", vm_template),
                 ("vm-create", "Clone a VM", vm_create), ("lxc-create", "Create an LXC container", lxc_create),
                 ("storage-add", "Add storage", storage_add), ("backup-job", "Create or update a backup job", backup_job),
                 ("api-token", "Create an API user and token", api_token)]),
@@ -2319,6 +2456,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str, Callable[[], None]]]]] = [
                  ("service-check", "State and recent errors of the services this host depends on", service_check_menu)]),
     ("Undo (only things this toolkit created)", [
         ("tailscale-leave", "Leave the tailnet / uninstall Tailscale", tailscale_leave), ("heartbeat-remove", "Remove the heartbeat", heartbeat_remove),
+        ("db-heartbeat-remove", "Remove the DB host heartbeat from an LXC", db_heartbeat_remove),
         ("vm-destroy", "Destroy a VM, template or container", vm_destroy), ("storage-remove", "Remove a storage definition", storage_remove),
         ("backup-job-remove", "Remove a backup job", backup_job_remove), ("api-token-revoke", "Revoke a token or delete a user", api_token_revoke),
         ("ssh-harden-remove", "Remove the SSH hardening drop-in", ssh_harden_remove),
