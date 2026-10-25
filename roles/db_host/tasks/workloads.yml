@@ -29,7 +29,8 @@
   environment:
     PGPASSWORD: "{{ edge_secrets[item.password_key] }}"
     PGSSLMODE: prefer
-  loop: "{{ db_workloads + [{'role': 'admin', 'database': 'postgres', 'password_key': 'db_role_admin_password'}] }}"
+  loop: "{{ db_workloads + [{'role': 'admin', 'database': 'postgres', 'password_key': 'db_role_admin_password'},
+    {'role': 'superadmin', 'database': 'postgres', 'password_key': 'db_role_superadmin_password'}] }}"
   loop_control:
     label: "{{ item.role }}"
   register: _logins

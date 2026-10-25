@@ -25,7 +25,7 @@ OLD = {  # what the 2026-10-15 file held: no gatus_heartbeat_db_token
     "gatus_heartbeat_pve_token": "pve-OLD", "gatus_heartbeat_backup_token": "backup-OLD",
     **{k: PEM for k in init_secrets.PKI_KEYS},
 }
-OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_xstockstrat_production_password": "prod-OLD",
+OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password": "sup-OLD", "db_role_xstockstrat_production_password": "prod-OLD",
        "db_role_xstockstrat_staging_password": "stg-OLD", **{k: PEM for k in init_secrets.DB_TLS_KEYS + init_secrets.PGBACKREST_DB_KEYS}}
 
 
@@ -121,7 +121,7 @@ class FillMissing(unittest.TestCase):
         got = self.read()
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
-                         {"gatus_heartbeat_db_token", "db_role_admin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
+                         {"gatus_heartbeat_db_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
                           *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")

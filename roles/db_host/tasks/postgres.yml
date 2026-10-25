@@ -1,8 +1,10 @@
 ---
 - name: Require every connection limit to fit under max_connections (3 are reserved for superusers)
   ansible.builtin.assert:
-    that: (db_workloads | map(attribute='connection_limit') | sum) + db_admin_connection_limit + 3 <= db_pg_settings.max_connections
-    fail_msg: the role connection limits plus admin and the reserved slots exceed max_connections
+    that: >-
+      (db_workloads | map(attribute='connection_limit') | sum) + db_admin_connection_limit + db_superadmin_connection_limit + 3
+      <= db_pg_settings.max_connections
+    fail_msg: the role connection limits plus admin, superadmin and the reserved slots exceed max_connections
 
 - name: Wait-for-tailnet-address helper
   ansible.builtin.copy:
@@ -61,7 +63,7 @@
 
 - name: Resolve the app and admin devices on the tailnet
   ansible.builtin.command: "tailscale ip -4 {{ item }}"
-  loop: "{{ (db_workloads | map(attribute='tailnet_host') | list) + db_admin_tailnet_hosts }}"
+  loop: "{{ ((db_workloads | map(attribute='tailnet_host') | list) + db_admin_tailnet_hosts + db_superadmin_tailnet_hosts) | unique }}"
   register: _peer_ips
   changed_when: false
   failed_when: false

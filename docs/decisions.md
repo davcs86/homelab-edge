@@ -138,12 +138,16 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
   server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
   pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.
+- **Two administrative roles: `admin` is read-only, `superadmin` is a superuser.** Routine inspection and automation should not be able to drop
+  production data, but manual repairs and restores need a superuser. `superadmin` is reachable only by `hostssl` from named devices, has no
+  PgBouncer entry and 3 connections; it is a network-reachable superuser guarded by a password and a source address, which the owner chose
+  over `ssh` + `sudo -u postgres psql` alone. Leave `db_superadmin_tailnet_hosts` empty to keep it local-only.
 - **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
   the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
 - **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
   config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 5 = 23, so each role is limited to 25.
-  Both environments deploy together (the daily promotion): 2 x 25 + admin 5 + 3 superuser slots = 58, so `max_connections` is 60 (the playbook
-  asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
+  Both environments deploy together (the daily promotion): 2 x 25 + admin 3 + superadmin 3 + 3 reserved slots = 59, so `max_connections` is 60 (the
+  playbook asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
   60 x 26 MB + 768 MB of `shared_buffers` is about 2.3 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
   at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool stays 5 per database: xstockstrat bounds
   `max_concurrent_bars_fetches` to [1, 5] with the marketdata PgBouncer pool as the ceiling, so a smaller pool queues work it allows, and 5 is

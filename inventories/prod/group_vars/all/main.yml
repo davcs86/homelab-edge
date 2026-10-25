@@ -108,9 +108,11 @@ db_archive_enabled: false
 db_cluster_locale: C.UTF-8
 db_workload_locale: C.UTF-8
 db_pgbouncer_pool_size: 5               # per database; xstockstrat's bars-fetch ceiling is this pool size
-# Tailnet names of admin devices allowed to log in as `admin` (hostssl); empty = ssh in and use the local socket.
+# Tailnet names of devices allowed to log in as `admin` (read-only) and as `superadmin` (hostssl); empty = ssh in, `sudo -u postgres psql`.
 db_admin_tailnet_hosts: []
-db_admin_connection_limit: 5
+db_superadmin_tailnet_hosts: []
+db_admin_connection_limit: 3
+db_superadmin_connection_limit: 3
 # One database and owner role per workload (never shared across environments); the PgBouncer pool is named after the database.
 # connection_limit: 8 direct pools doubled by a rolling deploy, 2 migrator, 1 pool of db_pgbouncer_pool_size (23).
 db_workloads:

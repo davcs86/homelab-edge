@@ -46,6 +46,7 @@ GENERATED = {
     "gatus_heartbeat_backup_token": lambda: secrets.token_urlsafe(32),
     "gatus_heartbeat_db_token": lambda: secrets.token_urlsafe(32),
     "db_role_admin_password": lambda: secrets.token_urlsafe(32),
+    "db_role_superadmin_password": lambda: secrets.token_urlsafe(32),
     "db_role_xstockstrat_production_password": lambda: secrets.token_urlsafe(32),
     "db_role_xstockstrat_staging_password": lambda: secrets.token_urlsafe(32),
 }

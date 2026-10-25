@@ -1,8 +1,9 @@
-SELECT format('CREATE ROLE %I LOGIN', r) FROM (VALUES ('admin'){% for w in db_workloads %}, ('{{ w.role }}'){% endfor %}) AS v(r)
+SELECT format('CREATE ROLE %I LOGIN', r) FROM (VALUES ('admin'), ('superadmin'){% for w in db_workloads %}, ('{{ w.role }}'){% endfor %}) AS v(r)
   WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) \gexec
 
 ALTER ROLE admin NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT {{ db_admin_connection_limit }};
 GRANT pg_monitor, pg_read_all_data TO admin;
+ALTER ROLE superadmin SUPERUSER NOREPLICATION CONNECTION LIMIT {{ db_superadmin_connection_limit }};
 {% for w in db_workloads %}
 
 ALTER ROLE "{{ w.role }}" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT {{ w.connection_limit }};

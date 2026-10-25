@@ -12,7 +12,10 @@ One Debian 13 LXC (`db`) runs PostgreSQL 18 with TimescaleDB (Apache build), PgB
 
 Per workload (`db_workloads` in `group_vars/all/main.yml`): database `xstockstrat-<env>`, owner role `xstockstrat_<env>`, a
 `CONNECT` grant for that role and `admin` only, a `hostssl` line for that workload's tailnet IP, a PgBouncer pool named after the
-database. `admin` is read-only (`pg_monitor`, `pg_read_all_data`). Passwords live in `secrets/edge.sops.yaml`.
+database. `admin` is read-only (`pg_monitor`, `pg_read_all_data`) and is what automation and routine inspection use. `superadmin` is a PostgreSQL
+superuser for manual work: it can log in only over TLS from the devices in `db_superadmin_tailnet_hosts` (empty until you name them), is never
+in PgBouncer, and is limited to 3 connections. Without a listed device, manual work is `ssh` to the container and `sudo -u postgres psql`.
+Passwords live in `secrets/edge.sops.yaml` (`fill_missing` adds `db_role_superadmin_password`).
 
 ## First build
 
