@@ -25,10 +25,12 @@ x-public: &public
     # Public resolver: tests what the internet sees, not the tailnet split-horizon answer.
     dns-resolver: tcp://1.1.1.1:53
     timeout: 10s
+# A followed login redirect answers 200 HTML; probes must see the redirect itself.
 x-tailnet: &tailnet
   client:
     dns-resolver: udp://100.100.100.100:53
     timeout: 10s
+    ignore-redirect: true
 
 endpoints:
   - name: headscale
@@ -74,11 +76,12 @@ endpoints:
 
   - name: xstockstrat-ui
     group: home
-    url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/api/health
+    url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
+      - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
   - name: xstockstrat-agent
@@ -88,15 +91,17 @@ endpoints:
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
+      - "[BODY].resource == https://{{ public_app_hostname }}/agent"
     alerts: [{type: ntfy}]
 
   - name: xstockstrat-staging-ui
     group: home
-    url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/api/health
+    url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
+      - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
   - name: xstockstrat-staging-agent
@@ -106,6 +111,7 @@ endpoints:
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
+      - "[BODY].resource == https://{{ staging_ui_hostname }}:{{ staging_edge_port }}/agent"
     alerts: [{type: ntfy}]
 
   - name: proxmox

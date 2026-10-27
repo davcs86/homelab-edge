@@ -13,6 +13,8 @@ caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
 gatus_image: "twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e"
 ntfy_image: "binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da"
+# Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
+db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
 docker_packages:
   docker-ce: "5:29.8.2-1~ubuntu.26.04~resolute"

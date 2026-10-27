@@ -48,14 +48,26 @@ class Gatus(unittest.TestCase):
 
     def test_prod_and_staging_probe_their_own_node_on_the_same_ports(self):
         d = V["magicdns_base_domain"]
-        self.assertEqual(ENDPOINTS["xstockstrat-ui"]["url"], f"http://xstockstrat.{d}:3000/api/health")
-        self.assertEqual(ENDPOINTS["xstockstrat-staging-ui"]["url"], f"http://xstockstrat-staging.{d}:3000/api/health")
+        self.assertEqual(ENDPOINTS["xstockstrat-ui"]["url"], f"http://xstockstrat.{d}:3000/trader/api/health")
+        self.assertEqual(ENDPOINTS["xstockstrat-staging-ui"]["url"], f"http://xstockstrat-staging.{d}:3000/trader/api/health")
         self.assertTrue(ENDPOINTS["xstockstrat-agent"]["url"].startswith(f"http://xstockstrat.{d}:9000/"))
         self.assertTrue(ENDPOINTS["xstockstrat-staging-agent"]["url"].startswith(f"http://xstockstrat-staging.{d}:9000/"))
 
     def test_staging_is_probed_over_the_tailnet_resolver_like_prod(self):
         for name in ("xstockstrat-ui", "xstockstrat-staging-ui", "xstockstrat-agent", "xstockstrat-staging-agent"):
             self.assertEqual(ENDPOINTS[name]["client"]["dns-resolver"], "udp://100.100.100.100:53", name)
+
+    def test_ui_probes_require_the_health_json_and_never_follow_a_login_redirect(self):
+        for name in ("xstockstrat-ui", "xstockstrat-staging-ui"):
+            self.assertIs(ENDPOINTS[name]["client"].get("ignore-redirect"), True, name)
+            self.assertIn("[STATUS] == 200", ENDPOINTS[name]["conditions"], name)
+            self.assertIn("[BODY].status == ok", ENDPOINTS[name]["conditions"], name)
+
+    def test_agent_probes_pin_each_environments_public_resource_url(self):
+        self.assertIn(f"[BODY].resource == https://{V['public_app_hostname']}/agent",
+                      ENDPOINTS["xstockstrat-agent"]["conditions"])
+        self.assertIn(f"[BODY].resource == https://{V['staging_ui_hostname']}:{V['staging_edge_port']}/agent",
+                      ENDPOINTS["xstockstrat-staging-agent"]["conditions"])
 
     def test_every_polled_endpoint_alerts_through_ntfy(self):
         for name, e in ENDPOINTS.items():

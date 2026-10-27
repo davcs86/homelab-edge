@@ -14,6 +14,7 @@ cat >"$work/bin/docker" <<EOT
 echo "docker \$* [cfg=\${DOCKER_CONFIG:-none}]" >>"$work/log"
 [[ "\$*" == *login* ]] && cat >/dev/null
 [[ -n "\${FAIL_ON:-}" && "\$*" == *"\$FAIL_ON"*"up -d"* ]] && exit 1
+[[ -n "\${FAIL_CONFIG:-}" && "\$*" == *" config -q"* ]] && { echo 'line 3: unexpected character "!" in variable name "BAD!KEY=SECRETPROBE"' >&2; echo 'required variable DB_PASSWORD is missing a value' >&2; exit 15; }
 exit 0
 EOT
 chmod +x "$work/bin/docker"
@@ -44,6 +45,42 @@ check "unhealthy release is rolled back" "$(release 8)" "$(basename "$(readlink 
 
 check "registry token never reaches docker argv or env" 0 "$(grep -c tok "$work/log" || true)"
 check "every up avoids pulling" 0 "$(grep 'up -d' "$work/log" | grep -vc -- '--pull never' || true)"
+
+check "default wait timeout is 120s" 0 "$(grep 'up -d' "$work/log" | grep -vc -- '--wait-timeout 120' || true)"
+r10="$(release 10)"
+echo x | SSH_ORIGINAL_COMMAND="put $r10 compose.yml" bash "$gate_script" "$app" myapp 300
+echo y | SSH_ORIGINAL_COMMAND="put $r10 .env" bash "$gate_script" "$app" myapp 300
+echo tok | SSH_ORIGINAL_COMMAND="deploy $r10 octo" bash "$gate_script" "$app" myapp 300 >/dev/null
+check "third argument sets the wait timeout" 1 "$(grep "$r10" "$work/log" | grep -c -- '--wait-timeout 300' || true)"
+rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp 5 >/dev/null 2>&1 || rc=$?
+check "wait timeout below 30s is rejected" 2 "$rc"
+rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp '1;id' >/dev/null 2>&1 || rc=$?
+check "non-numeric wait timeout is rejected" 2 "$rc"
+for w in 090 08; do
+  rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp "$w" >/dev/null 2>&1 || rc=$?
+  check "leading-zero wait timeout $w is rejected" 2 "$rc"
+done
+
+r11="$(release 11)"
+echo x | gate put "$r11" compose.yml
+echo y | gate put "$r11" .env
+rc=0
+out="$(echo tok | FAIL_CONFIG=1 gate deploy "$r11" octo 2>&1)" || rc=$?
+check "a release that does not render is refused" 2 "$rc"
+check "a render error never echoes .env content" 0 "$(grep -c SECRETPROBE <<<"$out" || true)"
+check "a missing variable is still named" 1 "$(grep -c 'required variable DB_PASSWORD is missing a value' <<<"$out" || true)"
+check "a refused render leaves current alone" "$(release 10)" "$(basename "$(readlink "$app/current")")"
+check "a refused render never pulls" 0 "$(grep "$r11" "$work/log" | grep -c ' pull' || true)"
+check "a refused release is removed" no "$([[ -d "$app/releases/$r11" ]] && echo yes || echo no)"
+
+r12="$(release 12)"
+echo x | gate put "$r12" compose.yml
+echo y | gate put "$r12" .env
+rc=0
+out="$(FAIL_CONFIG=1 gate rollback "$r12" 2>&1)" || rc=$?
+check "rollback to a release that does not render is refused" 2 "$rc"
+check "a refused rollback never echoes .env content" 0 "$(grep -c SECRETPROBE <<<"$out" || true)"
+check "a refused rollback leaves current alone" "$(release 10)" "$(basename "$(readlink "$app/current")")"
 
 rc=0; gate put ../etc/passwd compose.yml </dev/null 2>/dev/null || rc=$?
 check "path-like release is rejected" 2 "$rc"
