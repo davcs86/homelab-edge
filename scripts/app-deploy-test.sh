@@ -56,6 +56,10 @@ rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp 5 >/dev/null 
 check "wait timeout below 30s is rejected" 2 "$rc"
 rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp '1;id' >/dev/null 2>&1 || rc=$?
 check "non-numeric wait timeout is rejected" 2 "$rc"
+for w in 090 08; do
+  rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp "$w" >/dev/null 2>&1 || rc=$?
+  check "leading-zero wait timeout $w is rejected" 2 "$rc"
+done
 
 r11="$(release 11)"
 echo x | gate put "$r11" compose.yml
@@ -67,6 +71,16 @@ check "a render error never echoes .env content" 0 "$(grep -c SECRETPROBE <<<"$o
 check "a missing variable is still named" 1 "$(grep -c 'required variable DB_PASSWORD is missing a value' <<<"$out" || true)"
 check "a refused render leaves current alone" "$(release 10)" "$(basename "$(readlink "$app/current")")"
 check "a refused render never pulls" 0 "$(grep "$r11" "$work/log" | grep -c ' pull' || true)"
+check "a refused release is removed" no "$([[ -d "$app/releases/$r11" ]] && echo yes || echo no)"
+
+r12="$(release 12)"
+echo x | gate put "$r12" compose.yml
+echo y | gate put "$r12" .env
+rc=0
+out="$(FAIL_CONFIG=1 gate rollback "$r12" 2>&1)" || rc=$?
+check "rollback to a release that does not render is refused" 2 "$rc"
+check "a refused rollback never echoes .env content" 0 "$(grep -c SECRETPROBE <<<"$out" || true)"
+check "a refused rollback leaves current alone" "$(release 10)" "$(basename "$(readlink "$app/current")")"
 
 rc=0; gate put ../etc/passwd compose.yml </dev/null 2>/dev/null || rc=$?
 check "path-like release is rejected" 2 "$rc"

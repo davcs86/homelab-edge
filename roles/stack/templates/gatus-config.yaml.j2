@@ -25,12 +25,8 @@ x-public: &public
     # Public resolver: tests what the internet sees, not the tailnet split-horizon answer.
     dns-resolver: tcp://1.1.1.1:53
     timeout: 10s
+# A followed login redirect answers 200 HTML; probes must see the redirect itself.
 x-tailnet: &tailnet
-  client:
-    dns-resolver: udp://100.100.100.100:53
-    timeout: 10s
-# A followed login redirect answers 200 HTML; app health probes must see the redirect itself.
-x-tailnet-noredirect: &tailnet-noredirect
   client:
     dns-resolver: udp://100.100.100.100:53
     timeout: 10s
@@ -82,10 +78,9 @@ endpoints:
     group: home
     url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
-    <<: *tailnet-noredirect
+    <<: *tailnet
     conditions:
       - "[STATUS] == 200"
-      # Public only through xstockstrat feature 271's exact PUBLIC_HEALTH_PATHS; red (307) until it deploys.
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
@@ -103,10 +98,9 @@ endpoints:
     group: home
     url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
-    <<: *tailnet-noredirect
+    <<: *tailnet
     conditions:
       - "[STATUS] == 200"
-      # Public only through xstockstrat feature 271's exact PUBLIC_HEALTH_PATHS; red (307) until it deploys.
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 

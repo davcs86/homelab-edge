@@ -130,9 +130,10 @@ both ports from the VM (a user-defined network resolves tailnet names the way th
 
 ```sh
 read -rs PGPASSWORD && export PGPASSWORD   # the role password, typed, not on the command line
+img='<db_probe_image from inventories/prod/group_vars/all/versions.yml>'
 docker network create dbprobe
 for port in 5432 6432; do
-  docker run --rm --network dbprobe -e PGPASSWORD postgres:16-alpine \
+  docker run --rm --network dbprobe -e PGPASSWORD "$img" \
     psql "host=db.ts.natanddavehouse.com port=$port user=xstockstrat_<env> dbname=xstockstrat-<env> sslmode=require" -c 'select 1'
 done
 docker network rm dbprobe; unset PGPASSWORD

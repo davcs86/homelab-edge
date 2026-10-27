@@ -9,10 +9,17 @@ wait_seconds="${3:-120}"
 keep=5
 
 die() { echo "app-deploy: $*" >&2; exit 2; }
-if ! [[ "$wait_seconds" =~ ^[0-9]{1,3}$ ]] || (( wait_seconds < 30 || wait_seconds > 900 )); then
+if ! [[ "$wait_seconds" =~ ^[1-9][0-9]{1,2}$ ]] || (( wait_seconds < 30 || wait_seconds > 900 )); then
   die "wait seconds must be 30-900"
 fi
 compose() { local d="$1"; shift; docker compose --project-name "$project" --env-file "$d/.env" -f "$d/compose.yml" "$@"; }
+# A dotenv parse error quotes .env content; only missing-variable names may reach the job log.
+renders() {
+  local err
+  err="$(compose "$1" config -q 2>&1 >/dev/null)" && return 0
+  grep -oE 'required variable [A-Za-z0-9_]+ is missing a value' <<<"$err" >&2 || true
+  return 1
+}
 
 read -r -a cmd <<<"${SSH_ORIGINAL_COMMAND:-}"
 action="${cmd[0]:-}"
@@ -39,9 +46,8 @@ case "$action" in
     [[ -f "$rel/compose.yml" && -f "$rel/.env" ]] || die "release $release is incomplete"
     IFS= read -r token
     previous="$(readlink -f "$app_dir/current" 2>/dev/null || true)"
-    # A dotenv parse error quotes .env content; only missing-variable names may reach the job log.
-    if ! err="$(compose "$rel" config -q 2>&1 >/dev/null)"; then
-      grep -oE 'required variable [A-Za-z0-9_]+ is missing a value' <<<"$err" >&2 || true
+    if ! renders "$rel"; then
+      [[ "$(readlink -f "$rel")" == "$previous" ]] || rm -rf -- "$rel"
       die "release $release does not render (details suppressed; an admin can run compose config on the VM)"
     fi
 
@@ -71,6 +77,7 @@ case "$action" in
 
   rollback)
     [[ -f "$rel/compose.yml" && -f "$rel/.env" ]] || die "release $release is not on this host"
+    renders "$rel" || die "release $release does not render (details suppressed; an admin can run compose config on the VM)"
     switch_to "$rel"
     compose "$rel" up -d --pull never --remove-orphans --wait --wait-timeout "$wait_seconds"
     ;;

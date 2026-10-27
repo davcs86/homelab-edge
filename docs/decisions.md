@@ -95,7 +95,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The gate never prints a failed `compose config`.** compose-go quotes the offending `.env` line in a dotenv parse error, and
   that output reached the job log; the gate prints only `required variable … is missing a value` lines and a fixed message.
 - **Gatus follows redirects unless `ignore-redirect: true`.** A UI probe behind an auth redirect reported the login page's 200;
-  the xstockstrat UI probes set it, hit `/trader/api/health`, and also check `[BODY].status == ok`.
+  every tailnet probe sets it; the xstockstrat UI probes hit `/trader/api/health` and also check `[BODY].status == ok`.
 - **The Proxmox toolkit only touches what it marked.** Guests carry the `pve-setup` tag, backup jobs the `pve-setup-` id
   prefix, users the comment `created by pve-setup`; status shows them and undo removes only them, behind a typed
   confirmation. Config restore applies only the files the toolkit itself wrote: cluster config, network and fstab
