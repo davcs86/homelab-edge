@@ -69,6 +69,30 @@
   no_log: true
   notify: Restart pgbackrest server
 
+- name: Database host node, as headscale knows it
+  ansible.builtin.command: "docker compose -f {{ edge_root }}/compose.yml exec -T headscale headscale nodes list -o json"
+  register: _hs_nodes
+  changed_when: false
+
+- name: Tailnet address of the database host
+  ansible.builtin.set_fact:
+    _db_ipv4: >-
+      {{ _hs_nodes.stdout | from_json | selectattr('given_name', 'equalto', db_tailnet_hostname)
+         | map(attribute='ip_addresses') | first | default([]) | select('search', '^[0-9.]+$') | first | default('') }}
+
+# The edge runs with --accept-dns=false, so pg1-host cannot resolve through MagicDNS.
+- name: The edge resolves the database host's name locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ db_tailnet_host | regex_escape }}$'
+    line: "{{ _db_ipv4 }} {{ db_tailnet_host }}"
+  when: _db_ipv4 | length > 0
+
+- name: Say why the database host has no local name yet
+  ansible.builtin.debug:
+    msg: "{{ db_tailnet_hostname }} is not a tailnet node yet; pgBackRest cannot reach it until it joins and deploy runs again"
+  when: _db_ipv4 | length == 0
+
 - name: Pgbackrest.conf
   ansible.builtin.copy:
     dest: /etc/pgbackrest/pgbackrest.conf
