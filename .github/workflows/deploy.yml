@@ -111,7 +111,7 @@ jobs:
       - name: Converge DO resources and the edge over the tailnet
         if: inputs.mode == 'tailnet'
         run: >-
-          ansible-playbook playbooks/provision.yml playbooks/site.yml
+          ansible-playbook playbooks/provision.yml playbooks/bootstrap-users.yml playbooks/site.yml
           -e edge_tailnet_address=${{ steps.ts.outputs.edge_ip }}
           -e rotate_deploy_key=${{ inputs.rotate_deploy_key }}
 

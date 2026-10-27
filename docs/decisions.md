@@ -171,3 +171,6 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
   when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
   `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).
+- **A tailnet deploy re-applies the users role.** `bootstrap-users.yml` probes the `deploy` user and falls back to root only when
+  it cannot log in, so it is safe on a configured edge. Without it in the tailnet run, a rotated `admin_console_password_hash`
+  never reached the host and `david_admin` could not `sudo` (the first rotation, #34, had no effect).

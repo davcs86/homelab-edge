@@ -48,7 +48,7 @@ The staging app is served only on the tailnet at `:8443` (not in the cloud firew
 | Path | What |
 |---|---|
 | `playbooks/provision.yml` | DO droplet, reserved IPv4, Cloud Firewall (API via `uri`) |
-| `playbooks/bootstrap-users.yml` | first contact as root: admin + deploy users |
+| `playbooks/bootstrap-users.yml` | admin + deploy users (as root on a fresh droplet; every tailnet deploy re-applies them) |
 | `playbooks/site.yml` | everything on the host: hardening, Docker, stack, tailscale, alerts, backups, pgBackRest repo, deploy key |
 | `playbooks/verify-tailnet.yml` | ephemeral `tag:ci` test node: join, list, extra-record DNS, removal when offline |
 | `playbooks/backup-now.yml` | run backup + restore drill now |
