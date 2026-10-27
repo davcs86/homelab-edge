@@ -178,3 +178,6 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   applies `listen_addr` was a handler, which runs at the end of the play, after `verify.yml` had already failed on
   `<tailnet IP>:6432`. A failed run drops its notified handlers and the next run sees an unchanged file, so a plain re-run failed
   the same way. `pgbouncer.yml` now checks the tailnet listener itself (a closed port notifies the restart, so a host already in that state heals on the next run) and ends with `flush_handlers`.
+- **The edge resolves the database host through `/etc/hosts`.** The edge runs `--accept-dns=false`, so `pg1-host` (the name on the
+  database host's pgBackRest certificate) did not resolve and `stanza-create` aborted. The pgbackrest_repo role reads `db`'s tailnet
+  IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.
