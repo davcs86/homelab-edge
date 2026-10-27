@@ -83,35 +83,60 @@ Once you trust the 1Password path, delete the GitHub copies; the fallback is the
 
 ## 4.1 xstockstrat
 
-The app repo already carries this; it differs from the template in four ways.
+The app repo already carries this; it differs from the template in five ways.
+
+> **Production is live trading.** The homelab `production` stack runs `TRADING_MODE=live` against the same broker
+> accounts as the DigitalOcean production app, in parallel with it. Both place real orders; enable it knowingly.
 
 - **Pipeline:** `.github/workflows/deploy-homelab.yml`, called by `deploy-dev.yml` (push to `main-dev` → `staging`) and
   `deploy-prod.yml` (push to `main` → `production`) next to the DigitalOcean deploy, from the same `docker-build.yml`
   images. It runs only while the repository variable `HOMELAB_DEPLOY_ENABLED` is `true`; a manual run takes an environment and an
-  already-built short SHA.
+  already-built short SHA. On the `production` environment also set **Deployment branches** to `main` only.
 - **Images:** 13 (12 services + `xstockstrat-db-migrator`). Each `:<short sha>` tag is resolved to a digest and written as
   `IMAGE_<SERVICE>=…@sha256:…` instead of one `APP_IMAGE`.
-- **Compose file:** `deploy/homelab/compose.yml` (a root `compose.yml` would shadow local dev's `docker-compose.yml`).
-  `db-migrator` runs on every deploy before anything else starts, so a failed migration fails the release and rolls it back. A
-  rollback restores images, not schema.
-- **Gate wait:** pin the key with `… /opt/xstockstrat xstockstrat 300`; twelve services start in dependency order.
+- **Compose file:** `deploy/homelab/compose.yml` (a root `compose.yml` would shadow local dev's `docker-compose.yml`). It needs
+  Docker Compose ≥ v2.17.0 on the VM (a one-shot `service_completed_successfully` dependency counts toward `--wait`); install
+  the edge's pins (`versions.yml`). `db-migrator` runs on every deploy before anything else starts, so a failed migration
+  fails the release and rolls it back.
+- **Rollback restores images, not schema;** migrations must stay backward compatible. A rolled-back migrator that finds the
+  database clean and *ahead* of its own migrations skips that schema; dirty and ahead, it refuses and the rollback fails
+  closed (fix by hand, `recovery.md`). This path is tested offline only, not yet against a real rollback.
+- **Gate wait:** pin the key with `… /opt/xstockstrat xstockstrat 300`; twelve services start in dependency order. After any
+  change to `app-deploy.sh` (here: a release that does not render prints only the missing variable names) re-install it on the VM.
 
 Extra inputs per environment, both in GitHub (environment secret) and 1Password (item in the same vault):
 
 | GitHub | 1Password item | Value |
 |---|---|---|
 | `MTLS_CA` | `mtls-ca` (Secure Note, body) | base64 `{ca_cert, ca_key}` of this environment's own CA; leaves are minted per deploy |
-| `APP_ENV` | `app-env` | `APPLICATION_ENV` (`production`, or `development` for staging), `DB_PASSWORD`, `JWT_SECRET`, `BROKER_ACCOUNTS_ENCRYPTION_KEY`, `CONFIG_SECRETS_ENCRYPTION_KEY`, `SEED_USER_ID`, `APP_URL` (see `home-side.md`); optional `SLACK_WEBHOOK_URL`, `SENDGRID_API_KEY`, `VAPID_*` |
+| `APP_ENV` | `app-env` | `DB_PASSWORD`, `JWT_SECRET`, `BROKER_ACCOUNTS_ENCRYPTION_KEY`, `CONFIG_SECRETS_ENCRYPTION_KEY`, `SEED_USER_ID`, `APP_URL`; optional `SLACK_WEBHOOK_URL`, `SENDGRID_API_KEY`, `VAPID_*`. One single-line `KEY=value` per line |
 
 Create `mtls-ca` with the other four items: one missing item sends every secret to the GitHub fallback.
+
+- `DB_PASSWORD` is the role's SOPS value, `sops decrypt --extract '["db_role_xstockstrat_<env>_password"]' secrets/edge.sops.yaml`.
+  It must be URL- and dotenv-safe: no `$`, `@`, `:`, `/` or `#` (hex is).
+- `APP_URL` is `https://xstockstrat.natanddavehouse.com` (production) or `https://xstockstrat-staging-ui.ts.natanddavehouse.com:8443`
+  (staging). `AGENT_PUBLIC_URL` and `UI_BASE_URL` are derived from it; do not set them.
+- The pipeline appends `DB_HOST=db.ts.natanddavehouse.com`, `DB_NAME`/`DB_USER` (`xstockstrat-production`/`xstockstrat_production`
+  or `xstockstrat-staging`/`xstockstrat_staging`, as in `db-host.md`), `APPLICATION_ENV` (`production`/`development`),
+  `TRADING_MODE` (`live`/`paper`), the image digests and the mTLS leaves after `APP_ENV`, which cannot override them.
+- Six services use PgBouncer (6432), the rest connect directly (5432), all with `sslmode=require`. OTel is off.
 
 New CA for one environment: in the xstockstrat repo,
 `d=$(mktemp -d) && CERTS_DIR=$d CA_CN=xstockstrat-homelab-<env>-ca scripts/gen-dev-certs.sh >/dev/null && python3 -c 'import base64,json,sys; d=sys.argv[1]; print(base64.b64encode(json.dumps({"ca_cert":open(d+"/_ca/ca.pem").read(),"ca_key":open(d+"/_ca/ca-key.pem").read()}).encode()).decode())' "$d"`, then `rm -rf "$d"`.
 
-The pipeline writes `DB_HOST=db.ts.<domain>` and `DB_NAME`/`DB_USER` = `xstockstrat` (production) or `xstockstrat_staging`
-after `APP_ENV`, so `APP_ENV` cannot override them or the image digests. Six services use PgBouncer (6432), the rest connect directly (5432),
-all with `sslmode=require`; PgBouncer needs a `[databases]` entry with the same name. Values must be URL- and dotenv-safe: no `$`,
-`@`, `:` or `/` in `DB_PASSWORD` (hex is). OTel is off.
+Before the first deploy: the VM must be on the tailnet **before** the **db-host** run that writes its `hostssl` line. Then prove
+both ports from the VM (a user-defined network resolves tailnet names the way the compose project does):
+
+```sh
+read -rs PGPASSWORD && export PGPASSWORD   # the role password, typed, not on the command line
+docker network create dbprobe
+for port in 5432 6432; do
+  docker run --rm --network dbprobe -e PGPASSWORD postgres:16-alpine \
+    psql "host=db.ts.natanddavehouse.com port=$port user=xstockstrat_<env> dbname=xstockstrat-<env> sslmode=require" -c 'select 1'
+done
+docker network rm dbprobe; unset PGPASSWORD
+```
 
 ## 5. Operating it
 
@@ -132,6 +157,9 @@ all with `sslmode=require`; PgBouncer needs a `[databases]` entry with the same 
 | 1Password unreachable, token expired or revoked, or an item missing | the job warns and uses the GitHub secrets where they exist (see the run summary); with none, it fails naming the secret | fix the vault or token (3.1), or restore the GitHub secret |
 | GHCR unavailable | build or pull fails before anything changes | re-run the job |
 | New release unhealthy | automatic rollback, job fails | read the container logs on the VM |
+| Release does not render | the gate exits 2 before pulling; the log names only missing variables | add the variable to `APP_ENV`; anything else, run `docker compose config` on the VM as an admin |
+| xstockstrat: Gatus UI probe red with 307 | `/trader/api/health` redirects to login | the app's public-health exemption (feature 271) is not deployed yet |
+| xstockstrat: Gatus agent probe red with a 200 | `[BODY].resource` differs from the expected URL | `APP_URL` in `APP_ENV` is wrong for this environment |
 | Job killed mid-deploy | `current` may point at a release that is not up | re-run, or `rollback <previous release>` |
 
 ## 7. Self-hosted runner instead

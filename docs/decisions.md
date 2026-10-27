@@ -90,6 +90,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The gate's rollback restores images, not schema.** A one-shot migrator that others depend on with
   `service_completed_successfully` counts toward `up --wait` (compose `getDependencyCondition`), so a failed migration
   rolls the release back; a migration that succeeded stays applied, so migrations must work with the previous release.
+  xstockstrat's migrator skips a schema that is clean and ahead of its own migrations (the rolled-back image), and refuses
+  one that is dirty and ahead, so such a rollback fails closed instead of migrating down.
+- **The gate never prints a failed `compose config`.** compose-go quotes the offending `.env` line in a dotenv parse error, and
+  that output reached the job log; the gate prints only `required variable … is missing a value` lines and a fixed message.
+- **Gatus follows redirects unless `ignore-redirect: true`.** A UI probe behind an auth redirect reported the login page's 200;
+  the xstockstrat UI probes set it, hit `/trader/api/health`, and also check `[BODY].status == ok`.
 - **The Proxmox toolkit only touches what it marked.** Guests carry the `pve-setup` tag, backup jobs the `pve-setup-` id
   prefix, users the comment `created by pve-setup`; status shows them and undo removes only them, behind a typed
   confirmation. Config restore applies only the files the toolkit itself wrote: cluster config, network and fstab

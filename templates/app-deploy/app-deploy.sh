@@ -39,7 +39,11 @@ case "$action" in
     [[ -f "$rel/compose.yml" && -f "$rel/.env" ]] || die "release $release is incomplete"
     IFS= read -r token
     previous="$(readlink -f "$app_dir/current" 2>/dev/null || true)"
-    compose "$rel" config -q
+    # A dotenv parse error quotes .env content; only missing-variable names may reach the job log.
+    if ! err="$(compose "$rel" config -q 2>&1 >/dev/null)"; then
+      grep -oE 'required variable [A-Za-z0-9_]+ is missing a value' <<<"$err" >&2 || true
+      die "release $release does not render (details suppressed; an admin can run compose config on the VM)"
+    fi
 
     # Credentials live in a throwaway Docker config; nothing persists on the VM.
     cfg="$(mktemp -d)"

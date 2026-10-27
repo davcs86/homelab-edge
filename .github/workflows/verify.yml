@@ -65,7 +65,7 @@ jobs:
           a="$(code -X POST "$u/agent")"; echo "POST /agent -> $a (401 = app up and demanding OAuth, 502 = app offline)"
           [ "$a" != 404 ]
           m="$(curl -fsS "$u/agent/.well-known/oauth-protected-resource" || true)"; echo "metadata: ${m:-<app offline>}"
-          for p in / /anything-else /agent/api/tools /trader /api/health; do
+          for p in / /anything-else /agent/api/tools /trader /trader/api/health /api/health; do
             c="$(code "$u$p")"; echo "GET $p -> $c"; [ "$c" = 404 ]
           done
           codes=""; for _ in 1 2 3 4 5 6 7; do codes+="$(code -X POST -H 'content-type: application/json' -d '{}' "$u/api/auth/login") "; done

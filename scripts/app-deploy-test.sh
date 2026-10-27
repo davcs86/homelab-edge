@@ -14,6 +14,7 @@ cat >"$work/bin/docker" <<EOT
 echo "docker \$* [cfg=\${DOCKER_CONFIG:-none}]" >>"$work/log"
 [[ "\$*" == *login* ]] && cat >/dev/null
 [[ -n "\${FAIL_ON:-}" && "\$*" == *"\$FAIL_ON"*"up -d"* ]] && exit 1
+[[ -n "\${FAIL_CONFIG:-}" && "\$*" == *" config -q"* ]] && { echo 'line 3: unexpected character "!" in variable name "BAD!KEY=SECRETPROBE"' >&2; echo 'required variable DB_PASSWORD is missing a value' >&2; exit 15; }
 exit 0
 EOT
 chmod +x "$work/bin/docker"
@@ -55,6 +56,17 @@ rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp 5 >/dev/null 
 check "wait timeout below 30s is rejected" 2 "$rc"
 rc=0; SSH_ORIGINAL_COMMAND=status bash "$gate_script" "$app" myapp '1;id' >/dev/null 2>&1 || rc=$?
 check "non-numeric wait timeout is rejected" 2 "$rc"
+
+r11="$(release 11)"
+echo x | gate put "$r11" compose.yml
+echo y | gate put "$r11" .env
+rc=0
+out="$(echo tok | FAIL_CONFIG=1 gate deploy "$r11" octo 2>&1)" || rc=$?
+check "a release that does not render is refused" 2 "$rc"
+check "a render error never echoes .env content" 0 "$(grep -c SECRETPROBE <<<"$out" || true)"
+check "a missing variable is still named" 1 "$(grep -c 'required variable DB_PASSWORD is missing a value' <<<"$out" || true)"
+check "a refused render leaves current alone" "$(release 10)" "$(basename "$(readlink "$app/current")")"
+check "a refused render never pulls" 0 "$(grep "$r11" "$work/log" | grep -c ' pull' || true)"
 
 rc=0; gate put ../etc/passwd compose.yml </dev/null 2>/dev/null || rc=$?
 check "path-like release is rejected" 2 "$rc"
