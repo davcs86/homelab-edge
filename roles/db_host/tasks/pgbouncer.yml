@@ -24,5 +24,13 @@
     enabled: true
     state: started
 
+# A failed run drops its notified restart and the next run finds the file unchanged, so the listener itself decides.
+- name: PgBouncer answers on the tailnet address
+  ansible.builtin.command: "pg_isready -h {{ db_tailnet_ipv4 }} -p 6432"
+  register: _pgb_tailnet
+  changed_when: _pgb_tailnet.rc != 0
+  failed_when: false
+  notify: Restart pgbouncer
+
 - name: Apply the restart and reload now
   ansible.builtin.meta: flush_handlers
