@@ -40,18 +40,18 @@
   changed_when: false
   failed_when: false
 
-# The key comes from the environment (a tag:db pre-auth key), never from the repo or a command line.
-- name: Join the tailnet as tag:db
+# The key comes from the environment (a pre-auth key for this host's tag), never from the repo or a command line.
+- name: Join the tailnet as {{ tailnet_host_tag }}
   ansible.builtin.command:
     argv:
       - tailscale
       - up
       - --login-server=https://{{ headscale_hostname }}
-      - --auth-key={{ lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') }}
-      - --hostname={{ db_tailnet_hostname }}
+      - --auth-key={{ lookup('ansible.builtin.env', tailnet_host_authkey_env) }}
+      - --hostname={{ tailnet_host_hostname }}
       - --accept-dns=true
       - --accept-routes=false
-  when: _ts_up.rc != 0 and (lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') | length > 0)
+  when: _ts_up.rc != 0 and (lookup('ansible.builtin.env', tailnet_host_authkey_env) | length > 0)
   changed_when: true
   no_log: true
 
@@ -60,12 +60,12 @@
   register: _ts_check
   changed_when: false
   failed_when: _ts_check.rc != 0
-  when: db_stage != 'bootstrap'
+  when: tailnet_host_stage != 'bootstrap'
 
 - name: Say what is left to do after the bootstrap stage
   ansible.builtin.debug:
     msg: >-
-      Bootstrap done. {{ 'Join the tailnet: export DB_TAILSCALE_AUTHKEY (a tag:db pre-auth key) and run again.'
-      if _ts_up.rc != 0 and (lookup('ansible.builtin.env', 'DB_TAILSCALE_AUTHKEY') | length == 0)
-      else 'The node is on the tailnet; approve it if needed, add its tag, then run the db-host workflow.' }}
-  when: db_stage == 'bootstrap'
+      Bootstrap done. {{ 'Join the tailnet: export ' ~ tailnet_host_authkey_env ~ ' (a ' ~ tailnet_host_tag ~ ' pre-auth key) and run again.'
+      if _ts_up.rc != 0 and (lookup('ansible.builtin.env', tailnet_host_authkey_env) | length == 0)
+      else 'The node is on the tailnet; approve it if needed, add its tag, then run the ' ~ tailnet_host_workflow ~ ' workflow.' }}
+  when: tailnet_host_stage == 'bootstrap'

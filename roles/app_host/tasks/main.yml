@@ -1,0 +1,48 @@
+---
+- name: The gate key is in SOPS and is one ed25519 public key
+  ansible.builtin.assert:
+    that:
+      - edge_secrets[gate_sops_key] is defined
+      - edge_secrets[gate_sops_key] is match('^ssh-ed25519 [A-Za-z0-9+/=]+( \S+)?$')
+    fail_msg: >-
+      secrets/edge.sops.yaml lacks {{ gate_sops_key }}, or it is not one ssh-ed25519 public key
+      (docs/runbooks/deploy-compose-app.md section 1)
+    quiet: true
+
+- name: Gate user (docker group, no password; its key runs only app-deploy)
+  ansible.builtin.user:
+    name: "{{ app_gate_user }}"
+    shell: /bin/bash
+    groups: [docker]
+    append: true
+    password: "!"
+    update_password: always
+
+- name: App directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_gate_user }}"
+    group: "{{ app_gate_user }}"
+    mode: "0750"
+  loop:
+    - "{{ app_dir }}"
+    - "{{ app_dir }}/releases"
+
+- name: Gate script (re-run this play after every change to it)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../templates/app-deploy/app-deploy.sh"
+    dest: /usr/local/bin/app-deploy
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The gate key runs only the gate, for this app
+  ansible.posix.authorized_key:
+    user: "{{ app_gate_user }}"
+    key: "{{ edge_secrets[gate_sops_key] }}"
+    key_options: 'restrict,command="/usr/local/bin/app-deploy {{ app_dir }} {{ app_project }} {{ app_wait_seconds }}"'
+    exclusive: true
+
+- name: Verify
+  ansible.builtin.import_tasks: verify.yml

@@ -1,0 +1,56 @@
+---
+name: app-host
+
+# Configures one Compose app VM (Docker, the app-deploy gate) over the tailnet as an ephemeral tag:ci node.
+# First time: docs/runbooks/deploy-compose-app.md section 1 (VM, bootstrap run, gate key). Every run waits for approval on `production`.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: App VM (inventory host in group apps)
+        type: choice
+        options: [xstockstrat-staging, xstockstrat]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-host-${{ inputs.host }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 30
+    env:
+      ANSIBLE_FORCE_COLOR: "1"
+      HOST: ${{ inputs.host }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          tailscale: "true"
+      - name: Credentials (files only, never echoed)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SOPS_KEY: ${{ secrets.SOPS_AGE_SSH_PRIVATE_KEY }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SOPS_KEY" > "$RUNNER_TEMP/sops_key" && chmod 600 "$RUNNER_TEMP/sops_key"
+          echo "SOPS_AGE_SSH_PRIVATE_KEY_FILE=$RUNNER_TEMP/sops_key" >> "$GITHUB_ENV"
+      - name: Join tailnet as ephemeral tag:ci
+        id: ts
+        run: |
+          test -s secrets/ci-authkey.sops.yaml || { echo "::error::no tag:ci key: run node-admin -> mint-ci-key first (24 h)"; exit 1; }
+          scripts/runner-tailnet.sh up ci "$HOST"
+      - name: Converge the app VM
+        env:
+          VM_IP: ${{ steps.ts.outputs.peer_ip }}
+        run: ansible-playbook playbooks/app.yml --limit "$HOST" -e "app_tailnet_address=$VM_IP"
+      - name: Leave tailnet
+        if: always()
+        run: scripts/runner-tailnet.sh down

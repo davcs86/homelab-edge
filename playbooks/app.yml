@@ -1,0 +1,54 @@
+---
+# Compose app VMs (group apps, Debian 13): users, Tailscale, pinned Docker, the app-deploy gate. docs/runbooks/deploy-compose-app.md.
+#   bootstrap  once, by the operator, over the LAN as the cloud-init user:
+#              -e app_stage=bootstrap -e ansible_user=<cloud-init user> -e ansible_host=<LAN IP> --limit <host>
+#   full       from CI over the tailnet (the app-host workflow)
+- name: Configure the app VMs
+  hosts: apps
+  become: "{{ ansible_user | default('root') != 'root' }}"
+  gather_facts: false
+  vars:
+    app_stage: full
+  pre_tasks:
+    - name: Load secrets
+      community.sops.load_vars:
+        file: ../secrets/edge.sops.yaml
+        name: edge_secrets
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Python for Ansible (a fresh image may not ship it)
+      ansible.builtin.raw: >-
+        python3 -c 'import apt' 2>/dev/null || (apt-get update && apt-get install -y python3 python3-apt)
+      register: _python
+      changed_when: "'Setting up python3' in _python.stdout"
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Require Debian 13
+      ansible.builtin.assert:
+        that: ansible_facts.distribution == 'Debian' and ansible_facts.distribution_major_version == '13'
+        fail_msg: the Docker and Tailscale pins for app VMs are Debian 13 (trixie) builds
+  tasks:
+    - name: Users, sshd, Tailscale and (bootstrap) join
+      ansible.builtin.import_role:
+        name: tailnet_host
+      vars:
+        tailnet_host_stage: "{{ app_stage }}"
+        tailnet_host_hostname: "{{ inventory_hostname }}"
+        tailnet_host_authkey_env: APP_TAILSCALE_AUTHKEY
+        tailnet_host_workflow: app-host
+
+    - name: Stop after the bootstrap stage
+      ansible.builtin.meta: end_play
+      when: app_stage == 'bootstrap'
+
+    - name: Pinned Docker
+      ansible.builtin.import_role:
+        name: docker
+
+    - name: App deploy gate
+      ansible.builtin.import_role:
+        name: app_host

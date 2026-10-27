@@ -5,7 +5,7 @@ Template: `templates/app-deploy/` (`deploy.yml`, `app-deploy.sh`, `compose.examp
 ```
 push / dispatch → build job: docker build → push to GHCR → image digest
                 → deploy job: pinned tailscale → join tailnet as ephemeral tag:ci node
-                              → ssh deploy@VM (forced command = app-deploy.sh): put compose.yml, put .env, deploy
+                              → ssh app@VM (forced command = app-deploy.sh): put compose.yml, put .env, deploy
                               → VM: pull by digest → up --wait → healthy: prune old releases / unhealthy: roll back
 ```
 
@@ -21,13 +21,46 @@ credentials, and the digest in `.env` is the exact image that was built.
 
 `deploy.yml` has not run yet; expect to fix small things on the first staging run, and strike the items above as they are done.
 
-## 1. One-time VM prep (as an admin, over the tailnet)
+## 1. One-time VM prep
 
-1. Docker Engine and the compose plugin installed (same pins as the edge, see `docs/versions.md`).
-2. `sudo useradd -m -s /bin/bash deploy && sudo usermod -aG docker deploy`. Docker-group membership is root-equivalent on this VM, which is why the key is forced to the gate script and the VM should run only this app.
-3. `sudo install -d -o deploy -g deploy -m 0750 /opt/<app>/releases`
+The gate user is **`app`**: its key is forced to the gate script. `deploy` stays Ansible's automation user, as on the edge and the
+database host.
+
+### 1.1 VMs in this repo's inventory (group `apps`: `xstockstrat-staging`, `xstockstrat`)
+
+The **app-host** workflow converges them (`playbooks/app.yml`): the `deploy` and admin users, hardened sshd, pinned Tailscale,
+Docker at the edge's releases (Debian 13 builds, `docker_packages_debian13`), the `app` user, `/opt/xstockstrat/releases`, the gate
+script and its forced-command key, then checks: compose ≥ 2.17.0, `app` reaches Docker, the gate runs with the pinned arguments,
+and the database host answers on 5432 and 6432. Re-run it after every change to `app-deploy.sh`.
+
+1. **Gate key.** On your laptop: `ssh-keygen -t ed25519 -N '' -C gha-deploy-xstockstrat-<env> -f gate-<env>`. The private half
+   becomes the app repo's `DEPLOY_SSH_KEY` for that environment (section 3); delete the local copy afterwards. Add the public half
+   to SOPS in a PR (CI fails until both environments' keys are there):
+   `sops set secrets/edge.sops.yaml '["app_gate_xstockstrat_<env>_public_key"]' "\"$(cat gate-<env>.pub)\""`.
+2. **VM.** On the PVE host: `python3 pve-setup.py vm-template` once (a Debian 13 `genericcloud` image and its published SHA-256,
+   cloud-init user of your choice, your key), then `vm-create`: name `xstockstrat-staging` (or `xstockstrat`), **4** cores,
+   **8192** MiB, disk **40G**, start at boot.
+3. **Host key.** The playbook pins it under the VM's name in `inventories/prod/known_hosts`. Read it on the VM's console
+   (`qm terminal <id>`): `cat /etc/ssh/ssh_host_ed25519_key.pub` and `ssh-keygen -lf` of it; add the line
+   `xstockstrat-staging <key>` to `known_hosts` in a PR.
+4. **Bootstrap** (once, from an admin machine with the SOPS key, over the LAN): mint a one-hour key with
+   `--tags tag:xstockstrat-staging` (or `tag:xstockstrat`) (`tailnet-devices.md`), then
+   ```sh
+   export APP_TAILSCALE_AUTHKEY=<the key>
+   ansible-playbook playbooks/app.yml --limit xstockstrat-staging \
+     -e app_stage=bootstrap -e ansible_user=<cloud-init user> -e ansible_host=<LAN IP>
+   ```
+   Check **node-admin → list-devices**: the node carries its tag. Then run **db-host**, which writes the VM's `hostssl` line.
+5. **Converge.** **node-admin → mint-ci-key** (24 h), then **Actions → app-host** with the host.
+6. **`DEPLOY_KNOWN_HOSTS`** for the app repo: the same line as step 3 with the name the app repo pins (`DEPLOY_HOST`).
+
+### 1.2 Any other VM (by hand, as an admin over the tailnet)
+
+1. Docker Engine and the compose plugin installed (same releases as the edge, see `docs/versions.md`).
+2. `sudo useradd -m -s /bin/bash app && sudo usermod -aG docker app`. Docker-group membership is root-equivalent on this VM, which is why the key is forced to the gate script and the VM should run only this app.
+3. `sudo install -d -o app -g app -m 0750 /opt/<app>/releases`
 4. `sudo install -m 0755 templates/app-deploy/app-deploy.sh /usr/local/bin/app-deploy`. Re-install it by hand when the script changes; the deploy key cannot.
-5. Generate a key pair for this app and pin it (public half only on the VM), in `/home/deploy/.ssh/authorized_keys`:
+5. Generate a key pair for this app and pin it (public half only on the VM), in `/home/app/.ssh/authorized_keys`:
    `restrict,command="/usr/local/bin/app-deploy /opt/<app> <app> [wait seconds]" ssh-ed25519 AAAA… gha-deploy-<app>`.
    The optional third argument is how long `up --wait` may take (30–900, default 120); the deploy key cannot change it.
 6. Host key for pinning: from an admin shell on the tailnet, `ssh-keyscan -t ed25519 <vm-hostname> | sed 's/^[^ ]*/<vm-hostname>/'`. Compare the fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the VM, then store the line as `DEPLOY_KNOWN_HOSTS`.
@@ -103,8 +136,8 @@ The app repo already carries this; it differs from the template in five ways.
 - **Rollback restores images, not schema;** migrations must stay backward compatible. A rolled-back migrator that finds the
   database clean and *ahead* of its own migrations skips that schema; dirty and ahead, it refuses and the rollback fails
   closed (fix by hand, `recovery.md`). This path is tested offline only, not yet against a real rollback.
-- **Gate wait:** pin the key with `… /opt/xstockstrat xstockstrat 300`; twelve services start in dependency order. After any
-  change to `app-deploy.sh` (here: a release that does not render prints only the missing variable names) re-install it on the VM.
+- **Gate wait:** 300 s (`app_wait_seconds`, set by **app-host**); twelve services start in dependency order. After any change to
+  `app-deploy.sh`, run **app-host** for each VM.
 
 Extra inputs per environment, both in GitHub (environment secret) and 1Password (item in the same vault):
 
@@ -127,8 +160,8 @@ Create `mtls-ca` with the other four items: one missing item sends every secret 
 New CA for one environment: in the xstockstrat repo,
 `d=$(mktemp -d) && CERTS_DIR=$d CA_CN=xstockstrat-homelab-<env>-ca scripts/gen-dev-certs.sh >/dev/null && python3 -c 'import base64,json,sys; d=sys.argv[1]; print(base64.b64encode(json.dumps({"ca_cert":open(d+"/_ca/ca.pem").read(),"ca_key":open(d+"/_ca/ca-key.pem").read()}).encode()).decode())' "$d"`, then `rm -rf "$d"`.
 
-Before the first deploy: the VM must be on the tailnet **before** the **db-host** run that writes its `hostssl` line. Then prove
-both ports from the VM (a user-defined network resolves tailnet names the way the compose project does):
+Before the first deploy: the VM must be on the tailnet **before** the **db-host** run that writes its `hostssl` line. **app-host**
+checks only that both ports answer; to prove the role can log in, run from the VM (a user-defined network resolves tailnet names the way the compose project does):
 
 ```sh
 read -rs PGPASSWORD && export PGPASSWORD   # the role password, typed, not on the command line
@@ -147,7 +180,7 @@ docker network rm dbprobe; unset PGPASSWORD
 |---|---|
 | Deploy staging | push to `main` |
 | Deploy production | Actions → deploy → Run workflow → `production` (waits for reviewers) |
-| What is running | on the VM: `sudo -u deploy env SSH_ORIGINAL_COMMAND=status /usr/local/bin/app-deploy /opt/<app> <app>` (the forced command ignores shell requests, so there is no interactive login with the deploy key) |
+| What is running | on the VM: `sudo -u app env SSH_ORIGINAL_COMMAND=status /usr/local/bin/app-deploy /opt/<app> <app>` (the forced command ignores shell requests, so there is no interactive login with the deploy key) |
 | Roll back by hand | same, with `SSH_ORIGINAL_COMMAND='rollback <release>'`; releases are the directory names in `/opt/<app>/releases` (last 5 kept) |
 | Unhealthy release | the VM switches back to the previous release itself and the job fails |
 
