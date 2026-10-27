@@ -90,8 +90,10 @@ The app repo already carries this; it differs from the template in five ways.
 
 - **Pipeline:** `.github/workflows/deploy-homelab.yml`, called by `deploy-dev.yml` (push to `main-dev` → `staging`) and
   `deploy-prod.yml` (push to `main` → `production`) next to the DigitalOcean deploy, from the same `docker-build.yml`
-  images. It runs only while the repository variable `HOMELAB_DEPLOY_ENABLED` is `true`; a manual run takes an environment and an
-  already-built short SHA. On the `production` environment also set **Deployment branches** to `main` only.
+  images. Staging runs only while the repository variable `HOMELAB_STAGING_ENABLED` is `true`, production only while
+  `HOMELAB_PRODUCTION_ENABLED` is `true`; enable production last. A manual run takes an environment and an already-built short
+  SHA and deploys that commit's compose file; production runs only from `main`. On the `production` environment also set
+  **Deployment branches** to `main` only.
 - **Images:** 13 (12 services + `xstockstrat-db-migrator`). Each `:<short sha>` tag is resolved to a digest and written as
   `IMAGE_<SERVICE>=…@sha256:…` instead of one `APP_IMAGE`.
 - **Compose file:** `deploy/homelab/compose.yml` (a root `compose.yml` would shadow local dev's `docker-compose.yml`). It needs
