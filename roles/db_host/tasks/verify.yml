@@ -8,6 +8,12 @@
     - {host: "{{ db_tailnet_ipv4 }}", port: 6432}
   changed_when: false
 
+- name: The pgBackRest server answers on the tailnet address
+  ansible.builtin.wait_for:
+    host: "{{ db_tailnet_ipv4 }}"
+    port: 8432
+    timeout: 10
+
 - name: Settings that matter, as the server sees them
   ansible.builtin.command: >-
     psql -X -tA -d postgres -c

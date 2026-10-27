@@ -174,3 +174,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **A tailnet deploy re-applies the users role.** `bootstrap-users.yml` probes the `deploy` user and falls back to root only when
   it cannot log in, so it is safe on a configured edge. Without it in the tailnet run, a rotated `admin_console_password_hash`
   never reached the host and `david_admin` could not `sudo` (the first rotation, #34, had no effect).
+- **PgBouncer is restarted before the verification step.** apt starts it on the package default (loopback only); the restart that
+  applies `listen_addr` was a handler, which runs at the end of the play, after `verify.yml` had already failed on
+  `<tailnet IP>:6432`. A failed run drops its notified handlers and the next run sees an unchanged file, so a plain re-run failed
+  the same way. `pgbouncer.yml` now checks the tailnet listener itself (a closed port notifies the restart, so a host already in that state heals on the next run) and ends with `flush_handlers`.
