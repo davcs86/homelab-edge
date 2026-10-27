@@ -23,3 +23,6 @@
     name: pgbouncer
     enabled: true
     state: started
+
+- name: Apply the restart and reload now
+  ansible.builtin.meta: flush_handlers
