@@ -18,6 +18,21 @@ and dead-man history, and headscale's start/error lines. If the runner cannot jo
 Security updates that need a reboot apply at 04:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
 only when `/var/run/reboot-required` exists.
 
+## After a deploy that failed part-way
+
+Handlers queued by the failed run (reload headscale policy, restart Gatus/Caddy/ntfy) are skipped, and the re-run does not queue them again
+because the files already match. Fix the cause, re-run `deploy` (mode `tailnet`), then apply what the failed run wrote but never loaded. Read
+the failed run's log: every task marked `changed` before the failure names the file.
+
+| Changed task before the failure | Apply after the successful re-run |
+|---|---|
+| Headscale policy | `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml kill -s HUP headscale'` |
+| Headscale config | `... restart headscale` |
+| Gatus config or secrets | the re-run restarts Gatus itself when the env file changes; otherwise `... restart gatus` |
+| Caddy secrets / Caddyfile | `... restart caddy` / the re-run reloads it |
+
+A missing secret key is the most common cause: **init-secrets → `fill_missing`** (see `secrets/README.md`). Then run **verify**.
+
 ## Break glass
 
 If headscale is down, SSH over the tailnet is too. Use the DigitalOcean web console (Droplet → Access → Recovery/Droplet

@@ -1,0 +1,62 @@
+---
+- name: PostgreSQL and PgBouncer answer
+  ansible.builtin.command: "pg_isready -h {{ item.host }} -p {{ item.port }}"
+  loop:
+    - {host: 127.0.0.1, port: 5432}
+    - {host: "{{ db_tailnet_ipv4 }}", port: 5432}
+    - {host: 127.0.0.1, port: 6432}
+    - {host: "{{ db_tailnet_ipv4 }}", port: 6432}
+  changed_when: false
+
+- name: The pgBackRest server answers on the tailnet address
+  ansible.builtin.wait_for:
+    host: "{{ db_tailnet_ipv4 }}"
+    port: 8432
+    timeout: 10
+
+- name: Settings that matter, as the server sees them
+  ansible.builtin.command: >-
+    psql -X -tA -d postgres -c
+    "SELECT current_setting('ssl'), current_setting('max_locks_per_transaction'), current_setting('server_encoding'),
+    (SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL)"
+  become: true
+  become_user: postgres
+  register: _settings
+  changed_when: false
+
+- name: Require TLS on, 1024 locks, UTF8 and a clean pg_hba.conf
+  ansible.builtin.assert:
+    that: _settings.stdout | trim == 'on|1024|UTF8|0'
+    fail_msg: "unexpected server settings (ssl|max_locks_per_transaction|encoding|pg_hba errors): {{ _settings.stdout | trim }}"
+
+- name: TimescaleDB version in each database
+  ansible.builtin.command: "psql -X -tA -d {{ item.database | quote }} -c \"SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'\""
+  become: true
+  become_user: postgres
+  loop: "{{ db_workloads }}"
+  loop_control:
+    label: "{{ item.database }}"
+  register: _ts_versions
+  changed_when: false
+  failed_when: _ts_versions.stdout | trim != db_timescaledb_version
+
+- name: A pooled query as each workload role (userlist, transaction pool and TLS-free loopback path)
+  ansible.builtin.command: >-
+    psql -X -tA -h 127.0.0.1 -p 6432 -U {{ item.role | quote }} -d {{ item.database | quote }} -c 'SELECT 1'
+  environment:
+    PGPASSWORD: "{{ edge_secrets[item.password_key] }}"
+    PGSSLMODE: require
+  loop: "{{ db_workloads }}"
+  loop_control:
+    label: "{{ item.role }}"
+  register: _pooled
+  changed_when: false
+  failed_when: _pooled.stdout | trim != '1'
+  no_log: true
+
+- name: Archiving (only once the stanza exists on the edge)
+  ansible.builtin.command: "pgbackrest --stanza={{ pgbackrest_stanza }} check"
+  become: true
+  become_user: postgres
+  changed_when: false
+  when: db_archive_effective

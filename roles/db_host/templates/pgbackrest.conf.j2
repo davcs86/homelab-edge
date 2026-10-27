@@ -1,0 +1,22 @@
+# Managed by Ansible (roles/db_host). Pushes WAL to the edge's repository and serves the edge's pulls.
+[global]
+repo1-host=edge.{{ magicdns_base_domain }}
+repo1-host-type=tls
+repo1-host-port={{ pgbackrest_tls_port }}
+repo1-host-ca-file=/etc/pgbackrest/tls/ca.crt
+repo1-host-cert-file=/etc/pgbackrest/tls/client.crt
+repo1-host-key-file=/etc/pgbackrest/tls/client.key
+repo1-path={{ pgbackrest_repo_path }}
+log-path=/var/log/pgbackrest
+log-level-console=info
+log-level-file=detail
+tls-server-address={{ db_tailnet_ipv4 }}
+tls-server-port={{ pgbackrest_tls_port }}
+tls-server-ca-file=/etc/pgbackrest/tls/ca.crt
+tls-server-cert-file=/etc/pgbackrest/tls/server.crt
+tls-server-key-file=/etc/pgbackrest/tls/server.key
+# Only the edge's client certificate, and only for this stanza.
+tls-server-auth={{ pgbackrest_edge_client_cn }}={{ pgbackrest_stanza }}
+
+[{{ pgbackrest_stanza }}]
+pg1-path={{ db_data_dir }}

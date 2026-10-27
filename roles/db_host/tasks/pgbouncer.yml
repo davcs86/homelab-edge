@@ -1,0 +1,36 @@
+---
+- name: PgBouncer configuration
+  ansible.builtin.template:
+    src: pgbouncer.ini.j2
+    dest: /etc/pgbouncer/pgbouncer.ini
+    owner: root
+    group: postgres
+    mode: "0640"
+  notify: Restart pgbouncer
+
+- name: PgBouncer user list (SCRAM verifiers read from PostgreSQL)
+  ansible.builtin.template:
+    src: userlist.txt.j2
+    dest: /etc/pgbouncer/userlist.txt
+    owner: root
+    group: postgres
+    mode: "0640"
+  no_log: true
+  notify: Reload pgbouncer
+
+- name: PgBouncer enabled and running
+  ansible.builtin.systemd_service:
+    name: pgbouncer
+    enabled: true
+    state: started
+
+# A failed run drops its notified restart and the next run finds the file unchanged, so the listener itself decides.
+- name: PgBouncer answers on the tailnet address
+  ansible.builtin.command: "pg_isready -h {{ db_tailnet_ipv4 }} -p 6432"
+  register: _pgb_tailnet
+  changed_when: _pgb_tailnet.rc != 0
+  failed_when: false
+  notify: Restart pgbouncer
+
+- name: Apply the restart and reload now
+  ansible.builtin.meta: flush_handlers

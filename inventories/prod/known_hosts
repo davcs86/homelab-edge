@@ -1,2 +1,3 @@
-# Pinned SSH host keys (alias edge-sfo3-01), written by the bootstrap deploy run.
+# Pinned SSH host keys. edge-sfo3-01: written by the bootstrap deploy run. db: added by hand (db-host.md step 4).
 edge-sfo3-01 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIrDsv6GcL1wCdPefViU8Z66MHJn5Sz9lZ8AfNY0HLfZ
+db ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqBsXrwbXd1UNK8E5jQ9RH4HyvUgg1/3JW8omlZkEVq

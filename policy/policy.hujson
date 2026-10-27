@@ -54,9 +54,8 @@
     // Proxmox -> Gatus heartbeat endpoint (dead-man) via Caddy.
     {"src": ["tag:pve"], "dst": ["tag:edge"], "ip": ["tcp:443"]},
 
-    // CI ships to the app VM over SSH only.
-    {"src": ["tag:ci"], "dst": ["tag:xstockstrat"], "ip": ["tcp:22"]},
-    {"src": ["tag:ci"], "dst": ["tag:xstockstrat-staging"], "ip": ["tcp:22"]},
+    // CI ships to the app VMs and configures the database host over SSH only (playbooks/db.yml).
+    {"src": ["tag:ci"], "dst": ["tag:xstockstrat", "tag:xstockstrat-staging", "tag:db"], "ip": ["tcp:22"]},
     // Deploy runners configure this VPS over SSH only.
     {"src": ["tag:deploy"], "dst": ["tag:edge"], "ip": ["tcp:22"]},
 
@@ -69,7 +68,7 @@
   // Executed by `headscale policy check`; a failing test rejects the policy.
   "tests": [
     {"src": "tag:edge",   "accept": ["tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:3000", "tag:db:8432"], "deny": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22", "tag:db:5432", "tag:db:22", "tag:llm:11434"]},
-    {"src": "tag:ci",     "accept": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22"], "deny": ["tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:edge:22", "tag:db:5432", "tag:db:6432"]},
+    {"src": "tag:ci",     "accept": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22", "tag:db:22"], "deny": ["tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:edge:22", "tag:db:5432", "tag:db:6432", "tag:db:8432"]},
     {"src": "tag:deploy", "accept": ["tag:edge:22"], "deny": ["tag:xstockstrat:22", "tag:xstockstrat-staging:22", "tag:edge:443", "tag:edge:8443", "tag:db:5432"]},
     {"src": "tag:agent",  "accept": ["tag:llm:11434", "tag:xstockstrat:9000"], "deny": ["tag:db:5432", "tag:db:6432", "tag:db:22", "tag:db:8432", "tag:xstockstrat:3000", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22", "tag:edge:8443"]},
     {"src": "tag:llm",    "deny": ["tag:db:5432", "tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:3000", "tag:edge:443", "tag:edge:8443", "tag:edge:22"]},

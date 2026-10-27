@@ -28,7 +28,7 @@ on:
         required: false
 
 permissions:
-  contents: write   # mint-ci-key commits secrets/ci-authkey.sops.yaml
+  contents: read
 
 concurrency:
   group: deploy-edge
@@ -40,6 +40,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # the push below uses PUSH_TOKEN, not GITHUB_TOKEN
       - uses: ./.github/actions/setup
         with:
           tailscale: "true"
@@ -80,9 +82,21 @@ jobs:
       - if: always()
         run: scripts/runner-tailnet.sh down
       - name: Commit CI key
+        id: stage
         if: inputs.action == 'mint-ci-key'
         run: |
           git add secrets/ci-authkey.sops.yaml
+          if git diff --cached --quiet; then echo "nothing to commit"; echo "changed=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "chore(tailnet): rotate tag:ci key [run ${{ github.run_id }}]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Push to ${{ github.ref_name }}
+        if: inputs.action == 'mint-ci-key' && steps.stage.outputs.changed == 'true'
+        env:
+          PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+        run: |
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "::error::main only accepts PRs: set the PUSH_TOKEN secret (docs/runbooks/github-push-token.md)"
+            exit 1
+          fi
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

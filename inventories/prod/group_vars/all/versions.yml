@@ -1,5 +1,5 @@
 ---
-# Every pin is a release at least two weeks old on 2026-10-14. Rationale per pin lives in docs/versions.md.
+# Every pin is a release at least two weeks old on 2026-10-14 (database host pins: on 2026-10-25). Rationale per pin lives in docs/versions.md.
 ubuntu_image: ubuntu-26-04-x64
 
 headscale_version: v0.29.4
@@ -28,6 +28,14 @@ tailscale_tgz_amd64_sha256: 52490ce0832b245857e2afef7426d6ae5a4b49fb391412833cc9
 
 # Must equal the pgBackRest version on the database host.
 pgbackrest_package_version: "2.59.2-1.pgdg26.04+1"
+
+# Database host (Debian 13 LXC). The edge is Ubuntu, hence its own pgBackRest suffix; both are upstream 2.59.2.
+db_postgresql_package_version: "18.6-1.pgdg13+2"
+db_pgbouncer_package_version: "1.26.0-4.pgdg13+1"
+db_pgbackrest_package_version: "2.59.2-1.pgdg13+1"
+# Apache-licensed build ("oss"); compression needs the community build and waits for the DigitalOcean cutover.
+db_timescaledb_version: "2.30.2"
+db_timescaledb_package_version: "2.30.2~debian13-1806"
 
 sops_version: v3.13.3
 sops_linux_amd64_sha256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b

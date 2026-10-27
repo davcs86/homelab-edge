@@ -62,6 +62,19 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
   by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
   `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
+- **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
+  and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
+  acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,
+  secrets files included. Mitigations, checked by `scripts/workflow-push-test.py` or required by `docs/runbooks/github-push-token.md`: the
+  token is a secret of the `production` environment restricted to `main`, scoped to this repository with Contents write only, used only
+  when a run has something to commit, and the default `GITHUB_TOKEN` is read-only and no longer kept by the checkout. Not chosen: an App
+  (short-lived per-run tokens, not tied to a person, but more to set up) and a branch plus a hand-opened PR (no standing credential).
+- **A new generated secret is added by `init-secrets` `fill_missing`, never by hand or by regenerating the file.** Regenerating rotates every
+  credential, including the pgBackRest PKI the DB host holds. The mode adds only absent plain credentials, decrypts in memory with the deploy
+  key, and refuses when an operator value or a PKI key is missing. Without it, a release that reads a new key fails the deploy mid-play.
+- **A failed play loses the handlers it had queued.** Ansible skips them, and the re-run finds the files already correct so it never
+  queues them again; a policy file written by the failed run is then never loaded. After a failed deploy, a successful re-run must be
+  followed by the reloads in `docs/runbooks/recovery.md` (headscale policy HUP, and Gatus if its files changed).
 - **Gatus endpoints are named after the workload tag, staging included.** `xstockstrat-ui`, `xstockstrat-staging-agent`, … in group
   `home`, matching the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
   alert like prod, so the staging VM must be registered before the deploy that adds them.
@@ -113,9 +126,61 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The Proxmox heartbeat reports health, not liveness.** It pushes `success=false&error=…` when `zpool status -x`, the NVMe SMART
   status or pool capacity (≥ 85%) fail, and an unreadable pool counts as a failure, so a check that stops working cannot look
   healthy. The token is in a 0600 curl `-K` file because argv is world-readable in `/proc`.
+- **The DB heartbeat is installed into the container with `pct`, and reports health, not just liveness.** The host that must be
+  watched is a guest, so the Proxmox toolkit pushes the script, units and a 0600 token file in with `pct push`: `pct exec` arguments
+  are visible in the host's process list, a file is not. The token is staged on tmpfs and removed even when the plan fails. The checks
+  are `pg_isready` on PostgreSQL and PgBouncer, the pgBackRest TLS port and the data disk; an unreadable disk is a failure so a broken
+  check cannot look healthy. The address the checks use is asked, not assumed, because the services may listen only on the tailnet address.
+- **The DB host is configured by Ansible over the tailnet from `tag:ci`, in two stages.** The container has no tailnet or deploy user
+  when it is born, so a root bootstrap over the LAN (users, sshd, pinned Tailscale, join with a `tag:db` key from the environment)
+  precedes the `db-host` workflow. The cost: `tag:ci`, which xstockstrat's deploys also use, can SSH to the DB host as a user with
+  passwordless sudo. `tag:deploy` would narrow it. The owner's own login (`admin_user`, key only, passwordless sudo because the container has no
+  console password) is created too, so manual work does not depend on the CI key. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
+  PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
+- **Archiving follows the stanza.** `archive_command` against a missing stanza fails forever and WAL fills the data disk, and `stanza-create`
+  needs PostgreSQL running, so the first `db-host` run cannot archive. `archive.yml` asks the edge (`pgbackrest info`, status 1 = missing
+  stanza path) and turns `archive_mode` on only when the stanza exists, so the flags can stay on. The edge's backup service has
+  `ConditionPathExists` on the stanza's backup directory, so the timers are skipped, not failed, until then.
+- **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
+  server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
+  pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.
+- **Two administrative roles: `admin` is read-only, `superadmin` is a superuser.** Routine inspection and automation should not be able to drop
+  production data, but manual repairs and restores need a superuser. `superadmin` is reachable only by `hostssl` from named devices, has no
+  PgBouncer entry and 3 connections; it is a network-reachable superuser guarded by a password and a source address, which the owner chose
+  over `ssh` + `sudo -u postgres psql` alone. Leave `db_superadmin_tailnet_hosts` empty to keep it local-only.
+- **The edge pushes a heartbeat after each pgBackRest backup.** `OnFailure` only fires when the unit runs and fails; a timer that never fires
+  (disabled, edge down, stanza missing) is silent. A Gatus external endpoint (`edge_pgbackrest-backup`, 26 h) turns that silence into an
+  alert, as `nightly-backup` does for headscale. The token is passed to curl on stdin (argv is world-readable) by a root-run `ExecStartPost=+`.
+  A Gatus outage right after a good backup marks the unit failed and notifies; that is the same trade as `edge-backup.service`.
+- **Owner roles get `idle_in_transaction_session_timeout = 10min` and no `statement_timeout`.** A leaked transaction holds locks and pins
+  vacuum, and 60 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
+- **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
+  the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
+- **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
+  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 5 = 23, so each role is limited to 25.
+  Both environments deploy together (the daily promotion): 2 x 25 + admin 3 + superadmin 3 + 3 reserved slots = 59, so `max_connections` is 60 (the
+  playbook asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
+  60 x 26 MB + 768 MB of `shared_buffers` is about 2.3 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
+  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool stays 5 per database: xstockstrat bounds
+  `max_concurrent_bars_fetches` to [1, 5] with the marketdata PgBouncer pool as the ceiling, so a smaller pool queues work it allows, and 5 is
+  already 2 x cores + 1. Raise nothing before measuring.
+- **Traps:** a Debian LXC without a UTF-8 locale creates a `SQL_ASCII` cluster, so `createcluster.d` forces `--encoding=UTF8`;
+  PostgreSQL and PgBouncer bind the tailnet address, which tailscaled brings up after boot, so their units wait for it
+  (`wait-tailnet-ip`); a `postgres` login with `ALTER ROLE … PASSWORD` can log the statement on error, so it sets
+  `log_min_error_statement = panic` first.
 - **Kernel pin changes are followed by `proxmox-boot-tool refresh`.** The Proxmox Host Bootloader page says the ESPs must be
   synchronised after setting or clearing a pin on systems that use proxmox-boot-tool; the runbook's 5.4 steps leave it out, so
   the toolkit's `update` note includes it.
 - **The `op` CLI is preinstalled and pinned.** `load-secrets-action` downloads "latest" from `cache.agilebits.com` with no checksum
   when no `op` is on the runner. The template installs a checksum-pinned `op` first (version and signature recorded in
   `docs/versions.md`), which also makes the action skip its own download. Loaded values stay step outputs (`export-env: false`).
+- **A tailnet deploy re-applies the users role.** `bootstrap-users.yml` probes the `deploy` user and falls back to root only when
+  it cannot log in, so it is safe on a configured edge. Without it in the tailnet run, a rotated `admin_console_password_hash`
+  never reached the host and `david_admin` could not `sudo` (the first rotation, #34, had no effect).
+- **PgBouncer is restarted before the verification step.** apt starts it on the package default (loopback only); the restart that
+  applies `listen_addr` was a handler, which runs at the end of the play, after `verify.yml` had already failed on
+  `<tailnet IP>:6432`. A failed run drops its notified handlers and the next run sees an unchanged file, so a plain re-run failed
+  the same way. `pgbouncer.yml` now checks the tailnet listener itself (a closed port notifies the restart, so a host already in that state heals on the next run) and ends with `flush_handlers`.
+- **The edge resolves the database host through `/etc/hosts`.** The edge runs `--accept-dns=false`, so `pg1-host` (the name on the
+  database host's pgBackRest certificate) did not resolve and `stanza-create` aborted. The pgbackrest_repo role reads `db`'s tailnet
+  IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.

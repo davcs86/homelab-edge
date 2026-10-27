@@ -33,6 +33,10 @@ jobs:
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
       - name: App-deploy template (pins, secret handling, source and report steps)
         run: python3 scripts/app-deploy-template-test.py
+      - name: Workflows that commit to main (App token only when needed, key confined to production)
+        run: python3 scripts/workflow-push-test.py
+      - name: Every secret key the roles read exists in secrets/edge.sops.yaml
+        run: python3 scripts/secrets-keys-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
         run: python3 scripts/gatus-config-test.py
       - name: No plaintext secrets in secrets/
@@ -65,6 +69,16 @@ jobs:
       - name: App deploy gate script against a fake docker
         run: scripts/app-deploy-test.sh
 
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: init-secrets fill-missing (pinned sops, throwaway ssh key)
+        env:
+          INIT_SECRETS_TEST_REQUIRE_SOPS: "1"
+        run: python3 scripts/init-secrets-test.py
+
   caddy:
     runs-on: ubuntu-24.04
     steps:
@@ -91,3 +105,23 @@ jobs:
             caddy validate --config /etc/caddy/Caddyfile
       - name: Routing, rate limits, body caps, tailnet split (offline, mock upstreams)
         run: scripts/caddy-routing-test.sh edge-caddy:ci
+
+  # The only check the `main` ruleset should require; skipped upstream jobs count as passing.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [lint, policy, tools, secrets, caddy]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Evaluate upstream results
+        run: |
+          echo "lint:    ${{ needs.lint.result }}"
+          echo "policy:  ${{ needs.policy.result }}"
+          echo "tools:   ${{ needs.tools.result }}"
+          echo "secrets: ${{ needs.secrets.result }}"
+          echo "caddy:   ${{ needs.caddy.result }}"
+      - name: Fail on upstream failure or cancellation
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::One or more CI jobs failed or were cancelled"
+          exit 1

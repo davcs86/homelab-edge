@@ -48,7 +48,7 @@ The staging app is served only on the tailnet at `:8443` (not in the cloud firew
 | Path | What |
 |---|---|
 | `playbooks/provision.yml` | DO droplet, reserved IPv4, Cloud Firewall (API via `uri`) |
-| `playbooks/bootstrap-users.yml` | first contact as root: admin + deploy users |
+| `playbooks/bootstrap-users.yml` | admin + deploy users (as root on a fresh droplet; every tailnet deploy re-applies them) |
 | `playbooks/site.yml` | everything on the host: hardening, Docker, stack, tailscale, alerts, backups, pgBackRest repo, deploy key |
 | `playbooks/verify-tailnet.yml` | ephemeral `tag:ci` test node: join, list, extra-record DNS, removal when offline |
 | `playbooks/backup-now.yml` | run backup + restore drill now |
@@ -113,6 +113,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
+| Build or change the DB host (PostgreSQL, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | Set up Proxmox by hand (interactive script) | [`docs/runbooks/proxmox-setup.md`](docs/runbooks/proxmox-setup.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |

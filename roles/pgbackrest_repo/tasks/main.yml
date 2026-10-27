@@ -1,6 +1,5 @@
 ---
-# Offsite pgBackRest repository, served only on the tailnet address with mutual TLS.
-# TODO(ask): database host details (PG major version, data dir) are needed before scheduling backups here.
+# Offsite pgBackRest repository, served only on the tailnet address with mutual TLS; it also pulls backups from the database host.
 - name: PGDG apt key
   ansible.builtin.get_url:
     url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
@@ -63,10 +62,36 @@
     - {name: ca.crt, key: pgbackrest_tls_ca_crt, mode: "0644"}
     - {name: server.crt, key: pgbackrest_tls_server_crt, mode: "0644"}
     - {name: server.key, key: pgbackrest_tls_server_key, mode: "0600"}
+    - {name: client.crt, key: pgbackrest_edge_client_crt, mode: "0644"}
+    - {name: client.key, key: pgbackrest_edge_client_key, mode: "0600"}
   loop_control:
     label: "{{ item.name }}"
   no_log: true
   notify: Restart pgbackrest server
+
+- name: Database host node, as headscale knows it
+  ansible.builtin.command: "docker compose -f {{ edge_root }}/compose.yml exec -T headscale headscale nodes list -o json"
+  register: _hs_nodes
+  changed_when: false
+
+- name: Tailnet address of the database host
+  ansible.builtin.set_fact:
+    _db_ipv4: >-
+      {{ _hs_nodes.stdout | from_json | selectattr('given_name', 'equalto', db_tailnet_hostname)
+         | map(attribute='ip_addresses') | first | default([]) | select('search', '^[0-9.]+$') | first | default('') }}
+
+# The edge runs with --accept-dns=false, so pg1-host cannot resolve through MagicDNS.
+- name: The edge resolves the database host's name locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ db_tailnet_host | regex_escape }}$'
+    line: "{{ _db_ipv4 }} {{ db_tailnet_host }}"
+  when: _db_ipv4 | length > 0
+
+- name: Say why the database host has no local name yet
+  ansible.builtin.debug:
+    msg: "{{ db_tailnet_hostname }} is not a tailnet node yet; pgBackRest cannot reach it until it joins and deploy runs again"
+  when: _db_ipv4 | length == 0
 
 - name: Pgbackrest.conf
   ansible.builtin.copy:
@@ -86,6 +111,17 @@
       tls-server-key-file=/etc/pgbackrest/tls/server.key
       # Only the database host's client certificate, and only for its stanza.
       tls-server-auth={{ pgbackrest_client_cn }}={{ pgbackrest_stanza }}
+      repo1-retention-full={{ pgbackrest_retention_full }}
+      repo1-retention-diff={{ pgbackrest_retention_diff }}
+
+      [{{ pgbackrest_stanza }}]
+      pg1-host={{ db_tailnet_host }}
+      pg1-host-type=tls
+      pg1-host-port={{ pgbackrest_tls_port }}
+      pg1-host-ca-file=/etc/pgbackrest/tls/ca.crt
+      pg1-host-cert-file=/etc/pgbackrest/tls/client.crt
+      pg1-host-key-file=/etc/pgbackrest/tls/client.key
+      pg1-path={{ db_data_dir }}
   notify: Restart pgbackrest server
 
 - name: TLS server unit
@@ -123,3 +159,82 @@
     enabled: true
     state: started
     daemon_reload: true
+
+- name: Heartbeat credentials for the backup service
+  ansible.builtin.copy:
+    dest: /etc/edge-pgbackrest-heartbeat.env
+    mode: "0600"
+    content: |
+      GATUS_URL=http://127.0.0.1:{{ gatus_port }}
+      HEARTBEAT_PGBACKREST_TOKEN={{ edge_secrets.gatus_heartbeat_pgbackrest_token }}
+  no_log: true
+
+- name: Heartbeat push script (the token goes in through curl's stdin, never argv)
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/pgbackrest-heartbeat
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Reached only after a backup succeeded; Gatus alerts when this goes quiet.
+      set -euo pipefail
+      . /etc/edge-pgbackrest-heartbeat.env
+      printf 'header = "Authorization: Bearer %s"\n' "$HEARTBEAT_PGBACKREST_TOKEN" |
+        curl -fsS --max-time 10 -K - -X POST "$GATUS_URL/api/v1/endpoints/edge_pgbackrest-backup/external?success=true"
+
+- name: Backup service (instance is the backup type)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/pgbackrest-backup@.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=pgBackRest %i backup of the database host
+      After=network-online.target tailscaled.service
+      Wants=network-online.target
+      OnFailure=edge-notify@%n.service
+      # Silently skipped until stanza-create has run.
+      ConditionPathExists={{ pgbackrest_repo_path }}/backup/{{ pgbackrest_stanza }}
+
+      [Service]
+      Type=oneshot
+      User=pgbackrest
+      Group=pgbackrest
+      ExecStart=/usr/bin/pgbackrest --stanza={{ pgbackrest_stanza }} backup --type=%i
+      ExecStartPost=+/usr/local/sbin/pgbackrest-heartbeat
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths={{ pgbackrest_repo_path }} /var/log/pgbackrest /tmp
+      ProtectHome=true
+      PrivateTmp=true
+  notify: Reload systemd
+
+- name: Backup timers
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/pgbackrest-backup-{{ item.type }}.timer"
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=pgBackRest {{ item.type }} backup schedule
+
+      [Timer]
+      OnCalendar={{ item.schedule }}
+      Persistent=true
+      Unit=pgbackrest-backup@{{ item.type }}.service
+
+      [Install]
+      WantedBy=timers.target
+  loop:
+    - {type: full, schedule: "{{ pgbackrest_full_schedule }}"}
+    - {type: diff, schedule: "{{ pgbackrest_diff_schedule }}"}
+  loop_control:
+    label: "{{ item.type }}"
+  notify: Reload systemd
+
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Backup timers enabled only once the stanza exists
+  ansible.builtin.systemd_service:
+    name: "pgbackrest-backup-{{ item }}.timer"
+    enabled: "{{ pgbackrest_backups_enabled }}"
+    state: "{{ 'started' if pgbackrest_backups_enabled else 'stopped' }}"
+  loop: [full, diff]
