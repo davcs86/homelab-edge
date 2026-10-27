@@ -8,7 +8,7 @@
     - {host: "{{ db_tailnet_ipv4 }}", port: 6432}
   changed_when: false
 
-- name: pgBackRest server answers on the tailnet address
+- name: The pgBackRest server answers on the tailnet address
   ansible.builtin.wait_for:
     host: "{{ db_tailnet_ipv4 }}"
     port: 8432
