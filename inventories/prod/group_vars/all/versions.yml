@@ -22,6 +22,13 @@ docker_packages:
   containerd.io: "2.3.6-1~ubuntu.26.04~resolute"
   docker-buildx-plugin: "0.37.1-1~ubuntu.26.04~resolute"
   docker-compose-plugin: "5.5.1-1~ubuntu.26.04~resolute"
+# Same releases built for Debian 13, for the app VMs (group_vars/apps).
+docker_packages_debian13:
+  docker-ce: "5:29.8.2-1~debian.13~trixie"
+  docker-ce-cli: "5:29.8.2-1~debian.13~trixie"
+  containerd.io: "2.3.6-1~debian.13~trixie"
+  docker-buildx-plugin: "0.37.1-1~debian.13~trixie"
+  docker-compose-plugin: "5.5.1-1~debian.13~trixie"
 
 # Newest client inside headscale v0.29.4's generated capability table (tops out at 1.98).
 tailscale_package_version: "1.98.10"

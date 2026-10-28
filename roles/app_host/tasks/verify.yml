@@ -1,0 +1,37 @@
+---
+- name: Compose version
+  ansible.builtin.command: docker compose version --short
+  register: _compose
+  changed_when: false
+
+# A one-shot dependency (the migrator) counts toward `up --wait` only from compose v2.17.0.
+- name: Compose is new enough for the gate
+  ansible.builtin.assert:
+    that: (_compose.stdout | trim | regex_replace('^v', '')) is version('2.17.0', '>=')
+    fail_msg: "docker compose {{ _compose.stdout | trim }} is older than 2.17.0"
+    quiet: true
+
+- name: The gate user can reach the Docker daemon
+  ansible.builtin.command: docker info --format '{{ "{{" }}.ServerVersion{{ "}}" }}'
+  become: true
+  become_user: "{{ app_gate_user }}"
+  changed_when: false
+
+# Exit 2 with "unknown action" proves the script runs as the gate user and accepted its pinned arguments.
+- name: The gate runs as the gate user with this app's arguments
+  ansible.builtin.command:
+    argv: [/usr/local/bin/app-deploy, "{{ app_dir }}", "{{ app_project }}", "{{ app_wait_seconds }}"]
+  environment:
+    SSH_ORIGINAL_COMMAND: probe
+  become: true
+  become_user: "{{ app_gate_user }}"
+  register: _gate
+  changed_when: false
+  failed_when: _gate.rc != 2 or 'unknown action' not in _gate.stderr
+
+- name: Database host reachable from this VM (both ports)
+  ansible.builtin.wait_for:
+    host: "{{ db_tailnet_host }}"
+    port: "{{ item }}"
+    timeout: 10
+  loop: [5432, 6432]

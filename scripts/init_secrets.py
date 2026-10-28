@@ -53,6 +53,8 @@ GENERATED = {
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
+# Public keys the owner adds with `sops set`; neither mode writes them, and overwrite drops them (add them again).
+HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "production")]
 # Sets that are created whole, never completed: the TLS CA of the database host, and the certs the pull direction adds.
 DB_TLS_KEYS = [f"db_tls_{n}_{k}" for n in ("ca", "server") for k in ("crt", "key")]
 PGBACKREST_DB_KEYS = ["pgbackrest_db_server_crt", "pgbackrest_db_server_key", "pgbackrest_edge_client_crt", "pgbackrest_edge_client_key"]

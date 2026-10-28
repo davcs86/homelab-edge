@@ -1,10 +1,14 @@
 ---
 # Stage `bootstrap` (operator, once, as root over the LAN): users, sshd, Tailscale. Stage `full` (CI, over the tailnet): the rest.
-- name: Base system, deploy user, sshd
-  ansible.builtin.import_tasks: base.yml
-
-- name: Tailscale package and (bootstrap) join
-  ansible.builtin.import_tasks: tailscale.yml
+- name: Base system, users, sshd, Tailscale and (bootstrap) join
+  ansible.builtin.import_role:
+    name: tailnet_host
+  vars:
+    tailnet_host_stage: "{{ db_stage }}"
+    tailnet_host_hostname: "{{ db_tailnet_hostname }}"
+    tailnet_host_tag: tag:db
+    tailnet_host_authkey_env: DB_TAILSCALE_AUTHKEY
+    tailnet_host_workflow: db-host
 
 - name: Stop after the bootstrap stage
   ansible.builtin.meta: end_play

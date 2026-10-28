@@ -1,0 +1,6 @@
+---
+- name: Base system, deploy and admin users, sshd
+  ansible.builtin.import_tasks: base.yml
+
+- name: Tailscale package and (bootstrap) join
+  ansible.builtin.import_tasks: tailscale.yml

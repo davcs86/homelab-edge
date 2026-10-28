@@ -9,8 +9,8 @@ DOTTED = re.compile(r"edge_secrets\.([a-z][a-z_0-9]*)")
 SUBSCRIPT = re.compile(r"edge_secrets\[\s*['\"]([a-z][a-z_0-9]*)['\"]\s*\]")
 INDIRECT = re.compile(r"edge_secrets\[\s*item\.key\s*\]")  # the loop items then carry `key: <name>`
 LOOP_KEY = re.compile(r"\bkey:\s*([a-z][a-z_0-9]*)")
-# group_vars name the SOPS key of each workload's role password; the role reads it as edge_secrets[item.password_key].
-PASSWORD_KEY = re.compile(r"""['"]?\bpassword_key['"]?:\s*['"]?([a-z][a-z_0-9]*)""")
+# The inventory names some SOPS keys indirectly: edge_secrets[item.password_key] (DB roles), edge_secrets[gate_sops_key] (app VMs).
+PASSWORD_KEY = re.compile(r"""['"]?\b(?:password_key|gate_sops_key)['"]?:\s*['"]?([a-z][a-z_0-9]*)""")
 
 
 def used_keys(root: Path = ROOT) -> set[str]:

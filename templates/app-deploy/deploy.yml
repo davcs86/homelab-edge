@@ -180,7 +180,7 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
         run: |
           rel="${GITHUB_SHA::12}-${GITHUB_RUN_ID}"
-          gate() { ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o HostKeyAlias="$DEPLOY_HOST" "deploy@$VM_IP" "$@"; }
+          gate() { ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o HostKeyAlias="$DEPLOY_HOST" "app@$VM_IP" "$@"; }
           gate put "$rel" compose.yml <compose.yml
           { printf 'APP_IMAGE=%s\n' "$IMAGE"; printf '%s\n' "$APP_ENV"; } | gate put "$rel" .env
           printf '%s\n' "$GHCR_TOKEN" | gate deploy "$rel" "$GITHUB_ACTOR"

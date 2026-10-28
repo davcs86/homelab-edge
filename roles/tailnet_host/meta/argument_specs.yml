@@ -1,0 +1,10 @@
+---
+argument_specs:
+  main:
+    short_description: Users, sshd, pinned Tailscale and the bootstrap join for a tailnet host (Debian)
+    options:
+      tailnet_host_stage: {type: str, required: true, choices: [bootstrap, full]}
+      tailnet_host_hostname: {type: str, required: true}
+      tailnet_host_tag: {type: str, required: true}
+      tailnet_host_authkey_env: {type: str, required: true}
+      tailnet_host_workflow: {type: str, required: true}

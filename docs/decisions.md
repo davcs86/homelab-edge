@@ -92,6 +92,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   rolls the release back; a migration that succeeded stays applied, so migrations must work with the previous release.
   xstockstrat's migrator skips a schema that is clean and ahead of its own migrations (the rolled-back image), and refuses
   one that is dirty and ahead, so such a rollback fails closed instead of migrating down.
+- **App VMs reuse the database host's base and Docker at the edge's releases.** `roles/tailnet_host` (users, sshd, pinned Tailscale,
+  bootstrap join) serves both; Docker on the app VMs is the same five releases as the edge, as Debian 13 builds. The gate user is
+  `app`, not `deploy`: `deploy` is Ansible's sudo user on every host here, and one account cannot be both forced and unrestricted.
+  The cost matches the database host's: `tag:ci` reaches the app VMs' sshd, and only this repo's deploy key logs in there.
 - **The gate never prints a failed `compose config`.** compose-go quotes the offending `.env` line in a dotenv parse error, and
   that output reached the job log; the gate prints only `required variable … is missing a value` lines and a fixed message.
 - **Gatus follows redirects unless `ignore-redirect: true`.** A UI probe behind an auth redirect reported the login page's 200;

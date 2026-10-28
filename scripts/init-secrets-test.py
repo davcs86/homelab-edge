@@ -183,7 +183,7 @@ class Registry(unittest.TestCase):
 
     def test_every_secret_the_roles_use_is_generated_or_known(self):
         known = (set(init_secrets.GENERATED) | set(init_secrets.OPERATOR_KEYS) | set(init_secrets.PKI_KEYS)
-                 | set(init_secrets.DB_TLS_KEYS) | set(init_secrets.PGBACKREST_DB_KEYS))
+                 | set(init_secrets.DB_TLS_KEYS) | set(init_secrets.PGBACKREST_DB_KEYS) | set(init_secrets.HAND_KEYS))
         used = secret_keys.used_keys()
         self.assertTrue(used)
         self.assertEqual(used - known, set())

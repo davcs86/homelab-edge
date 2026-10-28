@@ -15,6 +15,7 @@ All pins were at least two weeks old on 2026-10-14; container images are pinned 
 | ntfy | v2.28.0 | v2.29/2.30 under two weeks; 2.28 already has declarative users/ACLs/tokens |
 | Docker CE / CLI | 29.8.2 | 29.9.x under two weeks |
 | containerd.io / compose / buildx | 2.3.6 / 5.5.1 / 0.37.1 | newest ≥ 2 weeks for 26.04 |
+| Docker on the app VMs (Debian 13) | the same five releases, `~debian.13~trixie` builds (`docker_packages_debian13`) | one Docker version across edge and app hosts; all five are in Docker's trixie repository |
 | pgBackRest | 2.59.2 (PGDG) | 2.59.3 under two weeks; **must equal the DB host's version** |
 | PostgreSQL (DB host) | 18.6-1.pgdg13+2 (PGDG, Debian 13) | the newest 18 in PGDG's trixie index on 2026-10-25 and older than two weeks (published 2026-08-13); DigitalOcean runs 18, xstockstrat's CI still runs 16 |
 | `postgres` image for the app-VM DB probe (`db_probe_image`, runbook only) | 18.6-alpine, digest `10a5c69a…` | the DB host's major and minor (18.6, released 2026-08-13); Docker Hub lists only the current digest, the 2026-10-26 rebuild (base-image refresh), so the release is ≥ two weeks old but this digest is not |

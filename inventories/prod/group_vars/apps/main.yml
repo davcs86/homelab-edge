@@ -1,0 +1,7 @@
+---
+docker_packages: "{{ docker_packages_debian13 }}"
+app_project: xstockstrat
+app_dir: "/opt/{{ app_project }}"
+# Owned by app-deploy's forced command; distinct from deploy_user, which Ansible logs in as.
+app_gate_user: app
+app_wait_seconds: 300

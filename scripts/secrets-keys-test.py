@@ -35,6 +35,10 @@ class Extraction(unittest.TestCase):
         })
         self.assertEqual(secret_keys.used_keys(d), {"db_role_a_password", "db_role_admin_password"})
 
+    def test_gate_keys_named_in_the_inventory(self):
+        d = tree({"inventories/prod/hosts.yml": "h:\n  gate_sops_key: app_gate_x_staging_public_key\n"})
+        self.assertEqual(secret_keys.used_keys(d), {"app_gate_x_staging_public_key"})
+
     def test_key_entries_in_files_that_do_not_index_by_item_key_are_ignored(self):
         d = tree({"roles/a/tasks/main.yml": "- {name: x, key: unrelated_thing}\nvalue: '{{ edge_secrets.real }}'\n"})
         self.assertEqual(secret_keys.used_keys(d), {"real"})
