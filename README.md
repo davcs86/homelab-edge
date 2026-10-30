@@ -116,6 +116,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Build or change the DB host (PostgreSQL, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | Set up Proxmox by hand (interactive script) | [`docs/runbooks/proxmox-setup.md`](docs/runbooks/proxmox-setup.md) |
+| What is planned next | [`docs/roadmap.md`](docs/roadmap.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |
 | Design decisions and traps already hit | [`docs/decisions.md`](docs/decisions.md) |
 | Working rules for AI agents in this repo | [`CLAUDE.md`](CLAUDE.md) |
