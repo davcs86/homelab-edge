@@ -26,9 +26,11 @@ jobs:
         id: t
         run: |
           d="$(awk '/^domain:/{print $2}' inventories/prod/group_vars/all/main.yml)"
-          echo "ip=$(awk -F'"' '/^do_reserved_ipv4:/{print $2}' inventories/prod/group_vars/all/generated.yml)" >> "$GITHUB_OUTPUT"
-          echo "hs=hs.$d" >> "$GITHUB_OUTPUT"
-          echo "app=xstockstrat.$d" >> "$GITHUB_OUTPUT"
+          {
+            echo "ip=$(awk -F'"' '/^do_reserved_ipv4:/{print $2}' inventories/prod/group_vars/all/generated.yml)"
+            echo "hs=hs.$d"
+            echo "app=xstockstrat.$d"
+          } >> "$GITHUB_OUTPUT"
       - run: sudo apt-get install -y -q nmap
 
       - name: Declared firewall = exactly 80/tcp, 443/tcp, 3478/udp from anywhere
