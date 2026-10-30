@@ -33,6 +33,7 @@ Read only the row that matches the task.
 | Backup host, Proxmox heartbeat, app VM | `docs/runbooks/home-side.md` |
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | `docs/runbooks/db-host.md`, `playbooks/db.yml` |
 | Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
+| Planned work, and what is not built yet | `docs/roadmap.md` |
 | Bumping or adding a pin | `docs/versions.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
