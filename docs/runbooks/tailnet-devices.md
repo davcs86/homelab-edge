@@ -20,6 +20,7 @@ on the run's **Summary** page.
   re-register to return.
 - **node-admin → `force-reauth`**: forces re-authentication but keeps the record.
 - Lost admin device: also remove its key from `admin_ssh_public_keys` and run **deploy**.
+- New admin device: add its public key to `admin_ssh_public_keys` (keep the others: the list is applied exactly) and run **deploy**. The database host and the app VMs take the change on their next **db-host** / **app-host** run.
 
 ## Create an ephemeral tagged pre-auth key for CI
 
