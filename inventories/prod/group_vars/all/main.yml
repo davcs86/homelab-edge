@@ -27,6 +27,7 @@ deploy_user: deploy                      # used only by GitHub Actions
 # Public halves only; private keys never enter the repo.
 admin_ssh_public_keys:
   - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKApHPR1HHqSoai6FXgCUwxfeeDChmSuhagQGqcsILm/ david_admin@homelab"
+  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGS+hqiCe8p1bBHpacrmWYsupw5vesU8h039/LY3c22u david_admin@laptop"
 deploy_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGOuroREm2DF2lSNSCIX5dUsHdhR2Yk3pPWJ79E45zZR gha_deploy@homelab"
 # Source CIDRs allowed to reach tcp/22 publicly. Empty after bootstrap; deploys go over the tailnet.
 ssh_public_allow_cidrs: []
