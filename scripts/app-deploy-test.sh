@@ -88,5 +88,8 @@ rc=0; gate put "$(release 1)" evil </dev/null 2>/dev/null || rc=$?
 check "unknown file name is rejected" 2 "$rc"
 rc=0; gate "rm -rf /" </dev/null 2>/dev/null || rc=$?
 check "unknown action is rejected" 2 "$rc"
+rc=0; out="$(gate "probe 0000000-0" </dev/null 2>&1)" || rc=$?
+check "the app-host probe exits 2" 2 "$rc"
+check "the app-host probe is reported as an unknown action" 1 "$(grep -c "unknown action 'probe'" <<<"$out" || true)"
 
 exit "$fail"

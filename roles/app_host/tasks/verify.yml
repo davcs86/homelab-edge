@@ -17,12 +17,12 @@
   become_user: "{{ app_gate_user }}"
   changed_when: false
 
-# Exit 2 with "unknown action" proves the script runs as the gate user and accepted its pinned arguments.
+# A well-formed release with an unknown action exits 2 at "unknown action", after the script's own input checks.
 - name: The gate runs as the gate user with this app's arguments
   ansible.builtin.command:
     argv: [/usr/local/bin/app-deploy, "{{ app_dir }}", "{{ app_project }}", "{{ app_wait_seconds }}"]
   environment:
-    SSH_ORIGINAL_COMMAND: probe
+    SSH_ORIGINAL_COMMAND: probe 0000000-0
   become: true
   become_user: "{{ app_gate_user }}"
   register: _gate
