@@ -50,3 +50,12 @@ them into a list variable is a separate change.
 Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on the tailnet-only
 `staging_edge_port` (8443) under the existing `*.ts` certificate, so it needs no new CNAME or public record.
 The name must differ from every node hostname, because MagicDNS answers node names itself. `group:members` may reach 8443.
+
+### Which staging name goes where
+
+| Name (under `ts.<domain>`) | Is | Use for |
+|---|---|---|
+| `xstockstrat-staging` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
+| `xstockstrat-staging-ui:8443` | the edge route (`staging_ui_hostname` + `staging_edge_port`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+
+The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the route name.
