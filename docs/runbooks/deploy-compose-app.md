@@ -79,7 +79,7 @@ Create environments `staging` and `production`; on `production` require reviewer
 
 | Kind | Name | Value |
 |---|---|---|
-| var (per environment) | `DEPLOY_HOST` | the VM's tailnet hostname, e.g. `xstockstrat-staging` |
+| var (per environment) | `DEPLOY_HOST` | the VM's tailnet hostname, e.g. `xstockstrat-staging` (not the `-ui` route name; `onboard-service.md` § Which staging name goes where) |
 | var | `TAILNET_LOGIN_SERVER` | `https://hs.<domain>` |
 | var | `TS_AUTHKEY_EXPIRES` | e.g. `2027-01-20` (the job fails when it is past, warns inside 14 days) |
 | secret | `TS_AUTHKEY` | key from step 2 |
@@ -151,7 +151,7 @@ Create `mtls-ca` with the other four items: one missing item sends every secret 
 - `DB_PASSWORD` is the role's SOPS value, `sops decrypt --extract '["db_role_xstockstrat_<env>_password"]' secrets/edge.sops.yaml`.
   It must be URL- and dotenv-safe: no `$`, `@`, `:`, `/` or `#` (hex is).
 - `APP_URL` is `https://xstockstrat.natanddavehouse.com` (production) or `https://xstockstrat-staging-ui.ts.natanddavehouse.com:8443`
-  (staging). `AGENT_PUBLIC_URL` and `UI_BASE_URL` are derived from it; do not set them.
+  (staging), the edge route and not the VM's node name. `AGENT_PUBLIC_URL` and `UI_BASE_URL` are derived from it; do not set them.
 - The pipeline appends `DB_HOST=db.ts.natanddavehouse.com`, `DB_NAME`/`DB_USER` (`xstockstrat-production`/`xstockstrat_production`
   or `xstockstrat-staging`/`xstockstrat_staging`, as in `db-host.md`), `APPLICATION_ENV` (`production`/`development`),
   `TRADING_MODE` (`live`/`paper`), the image digests and the mTLS leaves after `APP_ENV`, which cannot override them.
