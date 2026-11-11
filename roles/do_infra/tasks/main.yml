@@ -185,6 +185,7 @@
     _fw_public:
       - {protocol: tcp, ports: "80", sources: {addresses: ["0.0.0.0/0", "::/0"]}}
       - {protocol: tcp, ports: "443", sources: {addresses: ["0.0.0.0/0", "::/0"]}}
+      - {protocol: tcp, ports: "{{ staging_edge_port }}", sources: {addresses: ["0.0.0.0/0", "::/0"]}}
       - {protocol: udp, ports: "3478", sources: {addresses: ["0.0.0.0/0", "::/0"]}}
     _fw_ssh: >-
       {{ [{'protocol': 'tcp', 'ports': '22', 'sources': {'addresses': ssh_public_allow_cidrs}}]

@@ -38,10 +38,10 @@ flowchart LR
   backupjob -- "rsync / rrsync" --> backuphost
 ```
 
-Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
+Public exposure is exactly **80/tcp, 443/tcp, 8443/tcp (staging), 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
 (`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint
 and the OAuth login routes; tailnet clients get the whole app through the same name (split-horizon DNS).
-The staging app is served only on the tailnet at `:8443` (not in the cloud firewall).
+The staging app is served at `xstockstrat-staging-ui.ts.<domain>:8443`: the whole app to the internet behind the same per-IP rate limits as prod, and unlimited to the tailnet.
 
 ## Repository map
 
@@ -85,6 +85,7 @@ the VPS waits for approval on the `production` environment.
      | `_acme-challenge.hs` | CNAME | `hs.acme.natanddavehouse.com` |
      | `_acme-challenge.xstockstrat` | CNAME | `xstockstrat.acme.natanddavehouse.com` |
      | `_acme-challenge.ts` | CNAME | `ts.acme.natanddavehouse.com` (wildcard `*.ts…`) |
+     | `xstockstrat-staging-ui.ts` | A | reserved IPv4 (staging, port 8443; tailnet clients get the split-horizon answer) |
 
    - deSEC: create a token that can only write those three TXT RRsets, only from the droplet's egress addresses
      (see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)). Store it as environment secret `DESEC_TOKEN`.

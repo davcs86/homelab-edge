@@ -43,7 +43,7 @@ app_tailnet_host: "xstockstrat.{{ magicdns_base_domain }}"
 staging_tailnet_host: "xstockstrat-staging.{{ magicdns_base_domain }}"
 # Edge-facing name of the staging route; must differ from every node's MagicDNS name.
 staging_ui_hostname: "xstockstrat-staging-ui.{{ magicdns_base_domain }}"
-staging_edge_port: 8443                  # tailnet-only listener; not in the DO firewall
+staging_edge_port: 8443                  # public staging listener; open in the DO firewall
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
 backup_tailnet_host: "backup.{{ magicdns_base_domain }}"
 
@@ -58,7 +58,7 @@ ratelimit:
   register: {events: 10, window: 1h}
   oauth: {events: 30, window: 1m}
   mcp: {events: 120, window: 1m}
-  general: {events: 300, window: 1m}
+  general: {events: 3000, window: 1m}
 body_limits:
   mcp: 1MB
   login: 8KB

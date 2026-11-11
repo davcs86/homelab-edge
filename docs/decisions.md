@@ -62,6 +62,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
   by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
   `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
+- **Staging is public on 8443, by the owner's choice.** A clients-outside-the-tailnet need (MCP/OAuth) outweighed the three-port rule,
+  and a staging name on 443 would reopen the per-port grant problem above. Cost: a fourth public port, and the entire staging UI
+  (not prod's allowlist) is internet-facing behind app auth alone; `/agent/*` outside the MCP/OAuth set is 404 publicly, because the
+  agent's `GET /api/tools` catalog is unauthenticated (every other agent path is bearer-gated) and only the UI's server needs it, over the tailnet. Edge controls: the `public_routes` snippet (per-IP rate limits and
+  body caps, shared with prod so they cannot drift), HTTPS only (no plaintext listener or redirect on 8443), unknown names 404, and
+  public Gatus probes. Open items: `general` is 3000 requests/min per IP (raised from 300 for the full UI; applies to prod too); the UI catch-all has no body cap.
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
   acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,

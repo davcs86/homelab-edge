@@ -83,6 +83,131 @@
 	}
 }
 
+# Internet-facing routes shared by prod (443) and staging (8443): per-IP rate limits, body caps, MCP + OAuth + login.
+# Callers import it inside a non-tailnet `handle` and add their own catch-all after it.
+(public_routes) {
+	rate_limit {
+		zone general {
+			key {remote_host}
+			window {{ ratelimit.general.window }}
+			events {{ ratelimit.general.events }}
+			ipv6_prefix 64
+		}
+		zone mcp {
+			match {
+				path /agent /agent/
+			}
+			key {remote_host}
+			window {{ ratelimit.mcp.window }}
+			events {{ ratelimit.mcp.events }}
+			ipv6_prefix 64
+		}
+		zone oauth {
+			match {
+				path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
+			}
+			key {remote_host}
+			window {{ ratelimit.oauth.window }}
+			events {{ ratelimit.oauth.events }}
+			ipv6_prefix 64
+		}
+		zone register {
+			match {
+				path /agent/oauth/register
+			}
+			key {remote_host}
+			window {{ ratelimit.register.window }}
+			events {{ ratelimit.register.events }}
+			ipv6_prefix 64
+		}
+		# Login has no lockout or MFA upstream; these two zones are the only brute-force control.
+		zone login {
+			match {
+				method POST
+				path /api/auth/login
+			}
+			key {remote_host}
+			window {{ ratelimit.login.window }}
+			events {{ ratelimit.login.events }}
+			ipv6_prefix 64
+		}
+		zone login_hourly {
+			match {
+				method POST
+				path /api/auth/login
+			}
+			key {remote_host}
+			window {{ ratelimit.login_hourly.window }}
+			events {{ ratelimit.login_hourly.events }}
+			ipv6_prefix 64
+		}
+	}
+
+	# TODO(verify): restrict the MCP + token endpoints to Anthropic's egress ranges once published
+	# (sketch in docs/decisions.md).
+
+	@mcp path /agent /agent/
+	handle @mcp {
+		request_body {
+			max_size {{ body_limits.mcp }}
+		}
+		import agent {args[0]}
+	}
+
+	@agent_meta path /agent/.well-known/oauth-protected-resource /agent/.well-known/oauth-authorization-server
+	handle @agent_meta {
+		import agent {args[0]}
+	}
+
+	@agent_register path /agent/oauth/register
+	handle @agent_register {
+		request_body {
+			max_size {{ body_limits.register }}
+		}
+		import agent {args[0]}
+	}
+
+	@agent_oauth path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
+	handle @agent_oauth {
+		request_body {
+			max_size {{ body_limits.default }}
+		}
+		import agent {args[0]}
+	}
+
+	@root_meta path /.well-known/oauth-protected-resource/agent /.well-known/oauth-authorization-server/agent
+	handle @root_meta {
+		import app_ui {args[0]}
+	}
+
+	@login_page {
+		method GET HEAD
+		path /auth/oauth-login
+	}
+	handle @login_page {
+		import app_ui {args[0]}
+	}
+
+	@login_api {
+		method POST
+		path /api/auth/login
+	}
+	handle @login_api {
+		request_body {
+			max_size {{ body_limits.login }}
+		}
+		import app_ui {args[0]}
+	}
+
+	@assets {
+		method GET HEAD
+		path /_next/static/* /sw.js /manifest.webmanifest /icon-192.png /icon-512.png /icon-512-maskable.png /icon.svg
+	}
+	handle @assets {
+		import app_ui {args[0]}
+	}
+}
+
 {{ headscale_hostname }} {
 	import acme hs.{{ acme_zone }}
 	import access_log headscale
@@ -119,126 +244,7 @@
 
 	# Internet: MCP endpoint + Claude.ai OAuth login only. Everything else is 404.
 	handle {
-		rate_limit {
-			zone general {
-				key {remote_host}
-				window {{ ratelimit.general.window }}
-				events {{ ratelimit.general.events }}
-				ipv6_prefix 64
-			}
-			zone mcp {
-				match {
-					path /agent /agent/
-				}
-				key {remote_host}
-				window {{ ratelimit.mcp.window }}
-				events {{ ratelimit.mcp.events }}
-				ipv6_prefix 64
-			}
-			zone oauth {
-				match {
-					path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
-				}
-				key {remote_host}
-				window {{ ratelimit.oauth.window }}
-				events {{ ratelimit.oauth.events }}
-				ipv6_prefix 64
-			}
-			zone register {
-				match {
-					path /agent/oauth/register
-				}
-				key {remote_host}
-				window {{ ratelimit.register.window }}
-				events {{ ratelimit.register.events }}
-				ipv6_prefix 64
-			}
-			# Login has no lockout or MFA upstream; these two zones are the only brute-force control.
-			zone login {
-				match {
-					method POST
-					path /api/auth/login
-				}
-				key {remote_host}
-				window {{ ratelimit.login.window }}
-				events {{ ratelimit.login.events }}
-				ipv6_prefix 64
-			}
-			zone login_hourly {
-				match {
-					method POST
-					path /api/auth/login
-				}
-				key {remote_host}
-				window {{ ratelimit.login_hourly.window }}
-				events {{ ratelimit.login_hourly.events }}
-				ipv6_prefix 64
-			}
-		}
-
-		# TODO(verify): restrict the MCP + token endpoints to Anthropic's egress ranges once published
-		# (sketch in docs/decisions.md).
-
-		@mcp path /agent /agent/
-		handle @mcp {
-			request_body {
-				max_size {{ body_limits.mcp }}
-			}
-			import agent {{ app_tailnet_host }}
-		}
-
-		@agent_meta path /agent/.well-known/oauth-protected-resource /agent/.well-known/oauth-authorization-server
-		handle @agent_meta {
-			import agent {{ app_tailnet_host }}
-		}
-
-		@agent_register path /agent/oauth/register
-		handle @agent_register {
-			request_body {
-				max_size {{ body_limits.register }}
-			}
-			import agent {{ app_tailnet_host }}
-		}
-
-		@agent_oauth path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
-		handle @agent_oauth {
-			request_body {
-				max_size {{ body_limits.default }}
-			}
-			import agent {{ app_tailnet_host }}
-		}
-
-		@root_meta path /.well-known/oauth-protected-resource/agent /.well-known/oauth-authorization-server/agent
-		handle @root_meta {
-			import app_ui {{ app_tailnet_host }}
-		}
-
-		@login_page {
-			method GET HEAD
-			path /auth/oauth-login
-		}
-		handle @login_page {
-			import app_ui {{ app_tailnet_host }}
-		}
-
-		@login_api {
-			method POST
-			path /api/auth/login
-		}
-		handle @login_api {
-			request_body {
-				max_size {{ body_limits.login }}
-			}
-			import app_ui {{ app_tailnet_host }}
-		}
-
-		@assets {
-			method GET HEAD
-			path /_next/static/* /sw.js /manifest.webmanifest /icon-192.png /icon-512.png /icon-512-maskable.png /icon.svg
-		}
-		handle @assets {
-			import app_ui {{ app_tailnet_host }}
-		}
+		import public_routes {{ app_tailnet_host }}
 
 		handle {
 			respond "Not Found" 404
@@ -268,20 +274,35 @@
 	}
 }
 
-# Reachable only on the tailnet (cloud firewall closes the port); same *.ts certificate as above.
+# Public on {{ staging_edge_port }}/tcp (cloud firewall opens it); same *.ts certificate as above. Only the staging name is served.
 *.{{ magicdns_base_domain }}:{{ staging_edge_port }} {
 	import acme ts.{{ acme_zone }}
 	import access_log staging
-	import tailnet_only
 
 	@staging host {{ staging_ui_hostname }}
 	handle @staging {
-		@agent_any path /agent /agent/*
-		handle @agent_any {
-			import agent {{ staging_tailnet_host }}
+		@tailnet remote_ip {{ tailnet_v4_prefix }} {{ tailnet_v6_prefix }}
+		handle @tailnet {
+			@agent_any path /agent /agent/*
+			handle @agent_any {
+				import agent {{ staging_tailnet_host }}
+			}
+			handle {
+				import app_ui {{ staging_tailnet_host }}
+			}
 		}
+
+		# Internet: the whole UI plus the MCP/OAuth set from public_routes. Other /agent paths (incl. the unauthenticated /api/tools) stay tailnet-only.
 		handle {
-			import app_ui {{ staging_tailnet_host }}
+			import public_routes {{ staging_tailnet_host }}
+
+			@agent_rest path /agent /agent/*
+			handle @agent_rest {
+				respond "Not Found" 404
+			}
+			handle {
+				import app_ui {{ staging_tailnet_host }}
+			}
 		}
 	}
 
