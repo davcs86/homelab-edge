@@ -59,9 +59,12 @@ ratelimit:
   register: {events: 10, window: 1h}
   oauth: {events: 30, window: 1m}
   mcp: {events: 120, window: 1m}
+  webhooks_mcp: {events: 120, window: 1m}
   general: {events: 3000, window: 1m}
 body_limits:
   mcp: 1MB
+  webhooks_mcp: 1MB
+  webhooks_ingest: 262144   # bytes; equals the listener's 256 KiB cap
   login: 8KB
   register: 16KB
   default: 64KB
