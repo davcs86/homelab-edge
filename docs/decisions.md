@@ -31,6 +31,18 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 
 ## Known traps
 
+- **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
+  `webhooks_ingest_hostname`, `webhooks.ts.<domain>`) has no auth and must stay tailnet-only. The `*.ts:8443` site is otherwise open to the
+  internet, so the ingest handle there sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new
+  route in that site must not copy the handle without it.
+  - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
+  - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
+    The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
+  - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
+    container would exit at start.
+  - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
+  - The image pin is by digest only, and the digest in `versions.yml` is a placeholder until the first fixed image is published; see `docs/versions.md`.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.

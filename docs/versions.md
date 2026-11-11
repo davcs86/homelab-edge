@@ -13,6 +13,7 @@ All pins were at least two weeks old on 2026-10-14; container images are pinned 
 | mholt/caddy-ratelimit | commit `5625512f` (2026-06-12) | only tag (v0.1.0) is from 2024; HEAD has been quiet for 4 months |
 | Gatus | v5.37.0 | newest ≥ 2 weeks; checks, heartbeats and ntfy alerts are declared in the repo |
 | ntfy | v2.28.0 | v2.29/2.30 under two weeks; 2.28 already has declarative users/ACLs/tokens |
+| webhooks-mcp (`webhooks_mcp_image`) | `ghcr.io/davcs86/webhooks-mcp@sha256:09e1e5f2…`, digest only (commit `64c15cc`, 2026-11-11) | the image is tagged by commit SHA and has no semver tag, so the digest is the pin. Built, smoke-tested and pushed by that repo's CI on merge to `main`; the package is public, so the edge pulls without a credential. To bump: merge in `davcs86/webhooks-mcp`, copy the `sha256:…` digest from the `image` job's push output, replace the digest in `versions.yml`. |
 | Docker CE / CLI | 29.8.2 | 29.9.x under two weeks |
 | containerd.io / compose / buildx | 2.3.6 / 5.5.1 / 0.37.1 | newest ≥ 2 weeks for 26.04 |
 | Docker on the app VMs (Debian 13) | the same five releases, `~debian.13~trixie` builds (`docker_packages_debian13`) | one Docker version across edge and app hosts; all five are in Docker's trixie repository |
