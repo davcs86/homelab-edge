@@ -46,7 +46,7 @@ The DB server is shared, so the tailnet cannot separate databases. `playbooks/db
 Today the edge hardcodes `public_app_hostname` in the Caddyfile, the ACME CNAME delegation, `tls-check`, the Gatus
 config and the tailscale role's split-horizon records. Exposing another workload means editing each of those; generalising
 them into a list variable is a separate change. `webhooks_mcp_hostname` (public, label `webhooks-mcp`) was added that way;
-`webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record.
+`webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its handle in the `*.ts:8443` site must keep `import tailnet_only` (see `docs/decisions.md`).
 
 Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on `staging_edge_port` (8443,
 public in the cloud firewall) under the existing `*.ts` certificate, so it needs no new ACME CNAME, only the Cloudflare A record
