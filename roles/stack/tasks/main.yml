@@ -8,6 +8,7 @@
     - {path: "{{ edge_root }}", mode: "0750"}
     - {path: "{{ edge_root }}/headscale", mode: "0755"}
     - {path: "{{ edge_root }}/caddy", mode: "0750"}
+    - {path: "{{ edge_root }}/caddyfile", mode: "0755"}
     - {path: "{{ edge_root }}/ntfy", mode: "0750"}
     - {path: "{{ edge_root }}/gatus", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
@@ -105,12 +106,17 @@
 - name: Caddyfile
   ansible.builtin.template:
     src: Caddyfile.j2
-    dest: "{{ edge_root }}/caddy/Caddyfile"
+    dest: "{{ edge_root }}/caddyfile/Caddyfile"
     mode: "0644"
     validate: >-
       docker run --rm --network none -e DESEC_TOKEN=validate -v %s:/etc/caddy/Caddyfile:ro
       edge-caddy:{{ caddy_version }}-{{ caddy_ratelimit_commit[:12] }} caddy validate --config /etc/caddy/Caddyfile
   notify: Reload caddy
+
+- name: Remove the Caddyfile from its old single-file mount location
+  ansible.builtin.file:
+    path: "{{ edge_root }}/caddy/Caddyfile"
+    state: absent
 
 # ---------- Compose ----------
 - name: Start the stack
@@ -124,6 +130,37 @@
 
 - name: Flush handlers so config changes apply before verification
   ansible.builtin.meta: flush_handlers
+
+- name: Does the running Caddy read the Caddyfile on disk?
+  ansible.builtin.shell: |
+    set -o pipefail
+    [ "$(docker compose -f {{ edge_root }}/compose.yml exec -T caddy sha256sum /etc/caddy/Caddyfile | cut -d' ' -f1)" \
+      = "$(sha256sum {{ edge_root }}/caddyfile/Caddyfile | cut -d' ' -f1)" ]
+  args:
+    executable: /bin/bash
+  register: _caddy_file
+  changed_when: false
+  failed_when: false
+
+- name: Restart Caddy that still reads a stale Caddyfile inode
+  when: _caddy_file.rc != 0
+  block:
+    - name: Restart Caddy
+      ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml restart caddy
+      changed_when: true
+
+    - name: Caddy now reads the Caddyfile on disk
+      ansible.builtin.shell: |
+        set -o pipefail
+        [ "$(docker compose -f {{ edge_root }}/compose.yml exec -T caddy sha256sum /etc/caddy/Caddyfile | cut -d' ' -f1)" \
+          = "$(sha256sum {{ edge_root }}/caddyfile/Caddyfile | cut -d' ' -f1)" ]
+      args:
+        executable: /bin/bash
+      register: _caddy_file_again
+      until: _caddy_file_again.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
 
 - name: Headscale users
   ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml exec -T headscale headscale users list -o json
