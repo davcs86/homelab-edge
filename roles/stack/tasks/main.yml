@@ -11,6 +11,7 @@
     - {path: "{{ edge_root }}/caddyfile", mode: "0755"}
     - {path: "{{ edge_root }}/ntfy", mode: "0750"}
     - {path: "{{ edge_root }}/gatus", mode: "0750"}
+    - {path: "{{ edge_root }}/webhooks-mcp", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
@@ -91,6 +92,21 @@
     mode: "0600"
   no_log: true
   notify: Restart gatus
+
+# ---------- webhooks-mcp ----------
+# Compose recreates the container when this env file's content changes.
+- name: Webhooks-mcp secrets
+  ansible.builtin.copy:
+    dest: "{{ edge_root }}/webhooks-mcp/webhooks-mcp.env"
+    content: |
+      MCP_AUTH_KEY={{ edge_secrets.webhooks_mcp_auth_key }}
+      INGEST_BASE_URLS={{ _ingest_base_urls | to_json }}
+    mode: "0600"
+  vars:
+    _ingest_base_urls:
+      default: "https://{{ webhooks_ingest_hostname }}"
+      staging: "https://{{ webhooks_ingest_hostname }}:{{ staging_edge_port }}"
+  no_log: true
 
 - name: Compose file
   ansible.builtin.template:

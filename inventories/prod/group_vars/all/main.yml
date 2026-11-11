@@ -69,6 +69,10 @@ body_limits:
 # ---------- Monitoring ----------
 ntfy_alert_topic: homelab-alerts
 gatus_port: 8081
+webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
+webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
+webhooks_mcp_port: 9100
+webhooks_ingest_port: 9101
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success

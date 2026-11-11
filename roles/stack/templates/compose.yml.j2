@@ -86,6 +86,18 @@ services:
       timeout: 5s
       retries: 3
 
+  webhooks-mcp:
+    <<: *hardening
+    image: {{ webhooks_mcp_image }}
+    read_only: true
+    ports:
+      - "127.0.0.1:{{ webhooks_mcp_port }}:9100"
+      - "127.0.0.1:{{ webhooks_ingest_port }}:9101"
+    env_file: [./webhooks-mcp/webhooks-mcp.env]
+    volumes:
+      - webhooks-data:/data
+    mem_limit: 192m
+
 volumes:
   headscale-data:
   headscale-run:
@@ -93,3 +105,4 @@ volumes:
   caddy-config:
   gatus-data:
   ntfy-data:
+  webhooks-data:
