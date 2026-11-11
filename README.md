@@ -84,6 +84,8 @@ the VPS waits for approval on the `production` environment.
      | `xstockstrat` | A | reserved IPv4 |
      | `_acme-challenge.hs` | CNAME | `hs.acme.natanddavehouse.com` |
      | `_acme-challenge.xstockstrat` | CNAME | `xstockstrat.acme.natanddavehouse.com` |
+     | `webhooks-mcp` | A | reserved IPv4 |
+     | `_acme-challenge.webhooks-mcp` | CNAME | `webhooks-mcp.acme.natanddavehouse.com` |
      | `_acme-challenge.ts` | CNAME | `ts.acme.natanddavehouse.com` (wildcard `*.ts…`) |
      | `xstockstrat-staging-ui.ts` | A | reserved IPv4 (staging, port 8443; tailnet clients get the split-horizon answer) |
 
