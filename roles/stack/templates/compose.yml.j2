@@ -46,7 +46,7 @@ services:
     cap_add: [NET_BIND_SERVICE]
     env_file: [./caddy/caddy.env]
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddyfile:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
       - /var/log/caddy:/var/log/caddy
