@@ -248,11 +248,18 @@
       changed_when: false
       failed_when: false
 
+    # Unfiltered on purpose: two failed deploys printed nothing through a grep, so show what the commands return.
     - name: Caddy TLS/ACME log lines
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        docker compose -f {{ edge_root }}/compose.yml logs --no-color --since 30m caddy 2>&1
-        | grep -iE 'acme|challenge|desec|certificate|obtain|solv|error' | tail -n 60
+      ansible.builtin.shell: |
+        set -o pipefail
+        c="docker compose -f {{ edge_root }}/compose.yml"
+        echo "## caddy container"; $c ps --format '{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.State{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}' caddy 2>&1
+        echo "## names in the loaded TLS automation policies"
+        curl -fsS --max-time 5 http://localhost:2019/config/apps/tls/automation/policies 2>&1 \
+          | python3 -c 'import json,sys; [print(" ", p.get("subjects")) for p in json.load(sys.stdin)]' 2>&1
+        echo "## caddy log, last 30 min: $($c logs --no-color --since 30m caddy 2>&1 | wc -l) lines; ACME-related:"
+        $c logs --no-color --since 30m caddy 2>&1 | grep -iE 'acme|challenge|desec|certificate|obtain|solv|error' | tail -n 40
+        echo "## caddy log, last 25 lines unfiltered"; $c logs --no-color --tail 25 caddy 2>&1
       args:
         executable: /bin/bash
       register: _caddy_acme_log
