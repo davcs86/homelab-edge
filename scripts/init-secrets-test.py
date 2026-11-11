@@ -122,7 +122,7 @@ class FillMissing(unittest.TestCase):
         got = self.read()
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
-                         {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
+                         {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password", "webhooks_mcp_auth_key",
                           *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")
