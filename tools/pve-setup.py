@@ -862,7 +862,8 @@ def vm_template() -> None:
     destroy = Cmd(["qm", "destroy", vmid, "--purge", "1", "--destroy-unreferenced-disks", "1"])
     execute(Plan(f"Create template {vmid} ({name})", [
         get,
-        Cmd(["qm", "create", vmid, "--name", name, "--memory", str(mem), "--cores", str(cores), "--net0", f"virtio,bridge={bridge}",
+        # Not the qm default kvm64: it lacks x86-64-v2, which NumPy 2.4 needs to import.
+        Cmd(["qm", "create", vmid, "--name", name, "--memory", str(mem), "--cores", str(cores), "--cpu", "host", "--net0", f"virtio,bridge={bridge}",
              "--scsihw", "virtio-scsi-single", "--ostype", "l26", "--agent", "enabled=1", "--serial0", "socket", "--vga", "serial0",
              "--tags", TAG], undo=destroy, undo_on_fail=True),
         Cmd(["qm", "set", vmid, "--scsi0", f"{storage}:0,import-from={image},discard=on,ssd=1"]),

@@ -270,6 +270,21 @@ class Tailscale(Isolated):
         self.assertEqual(r.exit_code, 1)
 
 
+class VmTemplate(Isolated):
+    def test_template_uses_the_host_cpu_not_the_kvm64_default(self):
+        plans = []
+        with mock.patch.object(pve, "pve_version", return_value=(8, 2)), mock.patch.object(pve, "free_id", return_value="9000"), \
+                mock.patch.object(pve, "ask_name", side_effect=["tpl-cloud", "ops"]), mock.patch.object(pve, "warn_same_name", return_value=True), \
+                mock.patch.object(pve, "storages", lambda c: [("local-lvm", "local-lvm")]), mock.patch.object(pve, "bridges", lambda: [("vmbr0", "vmbr0")]), \
+                mock.patch.object(pve, "choose", side_effect=["local-lvm", "vmbr0"]), mock.patch.object(pve.typer, "prompt", return_value="/var/tmp/x.img"), \
+                mock.patch.object(pve, "ask_sha256", return_value="a" * 64), mock.patch.object(pve, "ask_int", side_effect=[2, 2048]), \
+                mock.patch.object(pve, "ask_size", return_value="32G"), mock.patch.object(pve, "ask_pubkey_file", return_value="/var/tmp/key.pub"), \
+                mock.patch.object(pve, "execute", side_effect=plans.append):
+            pve.vm_template()
+        create = next(s.argv for s in plans[0].steps if isinstance(s, pve.Cmd) and s.argv[:2] == ["qm", "create"])
+        self.assertEqual(create[create.index("--cpu") + 1], "host")
+
+
 class Storage(unittest.TestCase):
     ANSWERS = "1\nbk\nbackup\n/mnt/bk\n"
 

@@ -194,3 +194,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The edge resolves the database host through `/etc/hosts`.** The edge runs `--accept-dns=false`, so `pg1-host` (the name on the
   database host's pgBackRest certificate) did not resolve and `stanza-create` aborted. The pgbackrest_repo role reads `db`'s tailnet
   IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.
+- **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
+  POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
+  xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
+  `pve-setup.py vm-template` now sets `--cpu host`; `host` blocks live migration between different CPUs, which a single node does not need.

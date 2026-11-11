@@ -39,7 +39,9 @@ and the database host answers on 5432 and 6432. Re-run it after every change to 
    `sops set secrets/edge.sops.yaml '["app_gate_xstockstrat_<env>_public_key"]' "\"$(cat gate-<env>.pub)\""`.
 2. **VM.** On the PVE host: `python3 pve-setup.py vm-template` once (a Debian 13 `genericcloud` image and its published SHA-256,
    cloud-init user of your choice, your key), then `vm-create`: name `xstockstrat-staging` (or `xstockstrat`), **4** cores,
-   **8192** MiB, disk **40G**, start at boot.
+   **8192** MiB, disk **40G**, start at boot. The template's CPU type must be `host` (`qm config <id> | grep ^cpu`): the `kvm64`
+   default lacks x86-64-v2 and NumPy 2.4 (indicators, analysis, ingest) will not import. For a template or VM made without it:
+   `qm set <id> --cpu host`, then `qm shutdown <id> && qm start <id>` (a guest reboot does not apply it).
 3. **Host key.** The playbook pins it under the VM's name in `inventories/prod/known_hosts`. Read it on the VM's console
    (`qm terminal <id>`): `cat /etc/ssh/ssh_host_ed25519_key.pub` and `ssh-keygen -lf` of it; add the line
    `xstockstrat-staging <key>` to `known_hosts` in a PR.
@@ -155,7 +157,9 @@ Create `mtls-ca` with the other four items: one missing item sends every secret 
 - The pipeline appends `DB_HOST=db.ts.natanddavehouse.com`, `DB_NAME`/`DB_USER` (`xstockstrat-production`/`xstockstrat_production`
   or `xstockstrat-staging`/`xstockstrat_staging`, as in `db-host.md`), `APPLICATION_ENV` (`production`/`development`),
   `TRADING_MODE` (`live`/`paper`), the image digests and the mTLS leaves after `APP_ENV`, which cannot override them.
-- Six services use PgBouncer (6432), the rest connect directly (5432), all with `sslmode=require`. OTel is off.
+- Six services use PgBouncer (6432), the rest connect directly (5432), all with `sslmode=require`. The direct Node services
+  also verify the server certificate against `db_tls_ca_crt`, which the xstockstrat repo supplies as SOPS `homelab.DB_CA_CERT`
+  (`DATABASE_CA_CERT` in the `.env`); without it they exit at boot. OTel is off.
 
 New CA for one environment: in the xstockstrat repo,
 `d=$(mktemp -d) && CERTS_DIR=$d CA_CN=xstockstrat-homelab-<env>-ca scripts/gen-dev-certs.sh >/dev/null && python3 -c 'import base64,json,sys; d=sys.argv[1]; print(base64.b64encode(json.dumps({"ca_cert":open(d+"/_ca/ca.pem").read(),"ca_key":open(d+"/_ca/ca-key.pem").read()}).encode()).decode())' "$d"`, then `rm -rf "$d"`.
