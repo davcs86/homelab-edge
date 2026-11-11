@@ -47,8 +47,10 @@ Today the edge hardcodes `public_app_hostname` in the Caddyfile, the ACME CNAME 
 config and the tailscale role's split-horizon records. Exposing another workload means editing each of those; generalising
 them into a list variable is a separate change.
 
-Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on the tailnet-only
-`staging_edge_port` (8443) under the existing `*.ts` certificate, so it needs no new CNAME or public record.
+Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on `staging_edge_port` (8443,
+public in the cloud firewall) under the existing `*.ts` certificate, so it needs no new ACME CNAME, only the Cloudflare A record
+`xstockstrat-staging-ui.ts` → reserved IPv4 (DNS-only). The internet gets the whole app through the shared `public_routes`
+rate limits and body caps; the tailnet bypasses them.
 The name must differ from every node hostname, because MagicDNS answers node names itself. `group:members` may reach 8443.
 
 ### Which staging name goes where

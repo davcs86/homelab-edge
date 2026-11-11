@@ -100,7 +100,7 @@ expect "headscale proxied"                     "200 headscale GET /health"      
 expect "headscale API blocked publicly"        "000"                              "$(req "$hs_host" "https://$hs_host/api/v1/node")"
 expect "tailnet-only wildcard aborts publicly" "000"                              "$(req "$status_host" "https://$status_host/")"
 
-# Staging listener: mock upstreams are shared, so only routing and the tailnet gate are asserted.
+# Staging listener (public on staging_port). Mock upstreams are shared, so only routing and limits are asserted.
 sreq() { # <curl args...>
   local code
   code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$staging_host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
@@ -108,10 +108,21 @@ sreq() { # <curl args...>
   printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
 }
 s="https://$staging_host:$staging_port"
-expect "staging aborts outside the tailnet"    "000"                              "$(sreq "$s/")"
+expect "staging public UI"                     "200 ui GET /trader"               "$(sreq "$s/trader")"
+expect "staging public UI root"                "200 ui GET /"                     "$(sreq "$s/")"
+expect "staging public agent, prefix stripped" "200 agent GET /api/tools"         "$(sreq "$s/agent/api/tools")"
+expect "staging MCP endpoint"                  "200 agent POST /"                 "$(sreq -X POST "$s/agent")"
+expect "staging root-inserted metadata"        "200 ui GET /.well-known/oauth-protected-resource/agent" "$(sreq "$s/.well-known/oauth-protected-resource/agent")"
+expect "staging token endpoint"                "200 agent POST /oauth/token"      "$(sreq -X POST "$s/agent/oauth/token")"
 expect "staging UI from the tailnet"           "200 ui GET /trader"               "$(sreq --interface "$tailnet_ip" "$s/trader")"
-expect "staging agent, prefix stripped"        "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
-expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
+expect "staging tailnet agent"                 "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
+expect "staging tailnet bypasses login limit"  "200 ui POST /api/auth/login"     "$(sreq --interface "$tailnet_ip" -X POST -d '{}' "$s/api/auth/login")"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface 127.0.0.4 -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
+expect "staging login rate limit (5/min) 429"  "200 200 200 200 200 429"          "$codes"
+expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
+expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
+expect "staging port does not serve status"    "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
 prod_on_staging="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$app_host:$staging_port:127.0.0.1" "https://$app_host:$staging_port/trader" || true)"
 if [[ "$prod_on_staging" == *ui* || "$prod_on_staging" == *agent* ]]; then
   echo "FAIL  prod name reached an upstream on the staging port: $prod_on_staging"; fail=1
