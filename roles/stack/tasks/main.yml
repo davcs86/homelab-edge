@@ -251,7 +251,7 @@
     - name: Caddy TLS/ACME log lines
       ansible.builtin.shell: >-
         set -o pipefail;
-        docker compose -f {{ edge_root }}/compose.yml logs --no-color --since 30m caddy
+        docker compose -f {{ edge_root }}/compose.yml logs --no-color --since 30m caddy 2>&1
         | grep -iE 'acme|challenge|desec|certificate|obtain|solv|error' | tail -n 60
       args:
         executable: /bin/bash
