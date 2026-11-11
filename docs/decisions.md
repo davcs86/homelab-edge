@@ -74,6 +74,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Caddy mounts the Caddyfile's directory, not the file.** Ansible replaces files by rename, so a single-file bind mount keeps the
   old inode: `caddy reload` exited 0 and Caddy kept the old config (staging's 8443 stayed tailnet-gated after deploy 21, and `unsafe_writes`
   does not help, it renames first). The stack role now also compares the container's hash of the file with the host's and restarts Caddy on a mismatch.
+- **Rate-limit zone names are global across sites.** Two `rate_limit` blocks with a zone called `login` share one counter per client IP, so six prod
+  login attempts left staging answering 429 to its first (verify run 40). `public_routes` prefixes every zone with a per-site label (`prod_`, `staging_`).
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
   acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,

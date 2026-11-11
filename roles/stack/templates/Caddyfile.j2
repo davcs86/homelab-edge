@@ -84,16 +84,16 @@
 }
 
 # Internet-facing routes shared by prod (443) and staging (8443): per-IP rate limits, body caps, MCP + OAuth + login.
-# Callers import it inside a non-tailnet `handle` and add their own catch-all after it.
+# args: upstream host, site label (zone names are global, so each site needs its own).
 (public_routes) {
 	rate_limit {
-		zone general {
+		zone {args[1]}_general {
 			key {remote_host}
 			window {{ ratelimit.general.window }}
 			events {{ ratelimit.general.events }}
 			ipv6_prefix 64
 		}
-		zone mcp {
+		zone {args[1]}_mcp {
 			match {
 				path /agent /agent/
 			}
@@ -102,7 +102,7 @@
 			events {{ ratelimit.mcp.events }}
 			ipv6_prefix 64
 		}
-		zone oauth {
+		zone {args[1]}_oauth {
 			match {
 				path /agent/oauth/authorize /agent/oauth/callback /agent/oauth/token
 			}
@@ -111,7 +111,7 @@
 			events {{ ratelimit.oauth.events }}
 			ipv6_prefix 64
 		}
-		zone register {
+		zone {args[1]}_register {
 			match {
 				path /agent/oauth/register
 			}
@@ -121,7 +121,7 @@
 			ipv6_prefix 64
 		}
 		# Login has no lockout or MFA upstream; these two zones are the only brute-force control.
-		zone login {
+		zone {args[1]}_login {
 			match {
 				method POST
 				path /api/auth/login
@@ -131,7 +131,7 @@
 			events {{ ratelimit.login.events }}
 			ipv6_prefix 64
 		}
-		zone login_hourly {
+		zone {args[1]}_login_hourly {
 			match {
 				method POST
 				path /api/auth/login
@@ -244,7 +244,7 @@
 
 	# Internet: MCP endpoint + Claude.ai OAuth login only. Everything else is 404.
 	handle {
-		import public_routes {{ app_tailnet_host }}
+		import public_routes {{ app_tailnet_host }} prod
 
 		handle {
 			respond "Not Found" 404
@@ -294,7 +294,7 @@
 
 		# Internet: the whole UI plus the MCP/OAuth set from public_routes. Other /agent paths (incl. the unauthenticated /api/tools) stay tailnet-only.
 		handle {
-			import public_routes {{ staging_tailnet_host }}
+			import public_routes {{ staging_tailnet_host }} staging
 
 			@agent_rest path /agent /agent/*
 			handle @agent_rest {
