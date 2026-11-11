@@ -66,7 +66,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   and a staging name on 443 would reopen the per-port grant problem above. Cost: a fourth public port, and the entire staging UI
   (not prod's allowlist) is internet-facing behind app auth alone. Edge controls: the `public_routes` snippet (per-IP rate limits and
   body caps, shared with prod so they cannot drift), HTTPS only (no plaintext listener or redirect on 8443), unknown names 404, and
-  public Gatus probes. Open items: `general` is 300 requests/min per IP and a full Next.js UI may reach it; the unconditional
+  public Gatus probes. Open items: `general` is 3000 requests/min per IP (raised from 300 for the full UI; applies to prod too); the unconditional
   `/agent` and UI catch-alls have no body cap.
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token

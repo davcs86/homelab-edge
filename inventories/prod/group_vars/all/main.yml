@@ -58,7 +58,7 @@ ratelimit:
   register: {events: 10, window: 1h}
   oauth: {events: 30, window: 1m}
   mcp: {events: 120, window: 1m}
-  general: {events: 300, window: 1m}
+  general: {events: 3000, window: 1m}
 body_limits:
   mcp: 1MB
   login: 8KB
