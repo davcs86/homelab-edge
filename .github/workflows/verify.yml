@@ -87,6 +87,7 @@ jobs:
           ! curl -sS --max-time 10 "http://$h:$sp/" -o /dev/null -w '%{http_code}\n' | grep -qx 200
           a="$(code -X POST "$u/agent")"; echo "POST /agent -> $a (401 = app up and demanding OAuth, 502 = app offline)"
           [ "$a" != 404 ]
+          c="$(code "$u/agent/api/tools")"; echo "GET /agent/api/tools -> $c"; [ "$c" = 404 ]
           h="${{ steps.t.outputs.other }}"; sp="${{ steps.t.outputs.sport }}"
           o="$(code --resolve "$h:$sp:${{ steps.t.outputs.ip }}" "https://$h:$sp/")"
           echo "unknown name on the staging port -> $o"; [ "$o" = 404 ] || [ "$o" = 000 ]

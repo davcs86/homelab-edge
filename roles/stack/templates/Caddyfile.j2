@@ -292,13 +292,13 @@
 			}
 		}
 
-		# Internet: the whole staging app, behind the same per-IP limits as prod.
+		# Internet: the whole UI plus the MCP/OAuth set from public_routes. Other /agent paths (incl. the unauthenticated /api/tools) stay tailnet-only.
 		handle {
 			import public_routes {{ staging_tailnet_host }}
 
-			@agent_any path /agent /agent/*
-			handle @agent_any {
-				import agent {{ staging_tailnet_host }}
+			@agent_rest path /agent /agent/*
+			handle @agent_rest {
+				respond "Not Found" 404
 			}
 			handle {
 				import app_ui {{ staging_tailnet_host }}
