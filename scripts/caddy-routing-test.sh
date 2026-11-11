@@ -55,6 +55,7 @@ docker run -d --name caddy-routing-test --network host \
   -v "$work/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$work/logs:/var/log/caddy" "$image" >/dev/null
 head -c 20000 /dev/zero >"$work/big"
 head -c 262145 /dev/zero >"$work/big_ingest"
+head -c 262144 /dev/zero >"$work/at_cap_ingest"
 for _ in $(seq 1 30); do curl -sk --noproxy "*" -o /dev/null --resolve "$app_host:443:127.0.0.1" "https://$app_host/" && break; sleep 1; done
 
 fail=0
@@ -110,14 +111,19 @@ expect "webhooks MCP /healthz is 404"          "404"                            
 expect "webhooks ingest aborts publicly"       "000"                              "$(req "$ingest_host" -X POST -d '{}' "https://$ingest_host/hooks")"
 expect "webhooks ingest from the tailnet"      "200 ingest POST /hooks"           "$(req "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
 expect "webhooks ingest body over 256 KiB"     "413"                              "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host/hooks")"
+expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
+expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
+expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 
 # Staging listener (public on staging_port). Mock upstreams are shared, so only routing and limits are asserted.
-sreq() { # <curl args...>
+wreq() { # <host> <curl args...>: any name on the staging port
+  local host="$1"; shift
   local code
-  code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$staging_host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
+  code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
   printf '%s' "$code"
   printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
 }
+sreq() { wreq "$staging_host" "$@"; } # <curl args...>
 s="https://$staging_host:$staging_port"
 expect "staging public UI"                     "200 ui GET /trader"               "$(sreq "$s/trader")"
 expect "staging public UI root"                "200 ui GET /"                     "$(sreq "$s/")"
@@ -137,15 +143,10 @@ expect "staging login rate limit (5/min) 429"  "200 200 200 200 200 429"        
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
 expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
 expect "staging port does not serve status"    "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
-wreq() { # <host> <curl args...>: any name on the staging port
-  local host="$1"; shift
-  local code
-  code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
-  printf '%s' "$code"
-  printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
-}
 expect "staging ingest aborts publicly"        "000"                              "$(wreq "$ingest_host" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
 expect "staging ingest from the tailnet"       "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
+expect "staging ingest body over 256 KiB"      "413"                              "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host:$staging_port/hooks")"
+expect "staging ingest body at exactly 256 KiB" "200 ingest POST /hooks"          "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host:$staging_port/hooks")"
 wmcp_on_staging="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$wmcp_host:$staging_port:127.0.0.1" -X POST -d '{}' "https://$wmcp_host:$staging_port/mcp" || true)"
 if [[ "$wmcp_on_staging" == *wmcp* ]]; then
   echo "FAIL  webhooks MCP name reached its upstream on the staging port: $wmcp_on_staging"; fail=1
