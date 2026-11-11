@@ -82,14 +82,14 @@ the VPS waits for approval on the `production` environment.
      |---|---|---|
      | `hs` | A | reserved IPv4 |
      | `xstockstrat` | A | reserved IPv4 |
+     | `webhooks-mcp` | A | reserved IPv4 |
      | `_acme-challenge.hs` | CNAME | `hs.acme.natanddavehouse.com` |
      | `_acme-challenge.xstockstrat` | CNAME | `xstockstrat.acme.natanddavehouse.com` |
-     | `webhooks-mcp` | A | reserved IPv4 |
      | `_acme-challenge.webhooks-mcp` | CNAME | `webhooks-mcp.acme.natanddavehouse.com` |
      | `_acme-challenge.ts` | CNAME | `ts.acme.natanddavehouse.com` (wildcard `*.ts…`) |
      | `xstockstrat-staging-ui.ts` | A | reserved IPv4 (staging, port 8443; tailnet clients get the split-horizon answer) |
 
-   - deSEC: create a token that can only write those three TXT RRsets, only from the droplet's egress addresses
+   - deSEC: create a token that can only write those four TXT RRsets (`hs`, `xstockstrat`, `webhooks-mcp`, `ts`), only from the droplet's egress addresses
      (see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)). Store it as environment secret `DESEC_TOKEN`.
    - healthchecks.io: one check, period 5 min, grace 10 min, email to you; ping URL → secret `HC_PING_URL`
      ([`docs/runbooks/alerts.md`](docs/runbooks/alerts.md)).
