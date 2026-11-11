@@ -203,9 +203,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   applies `listen_addr` was a handler, which runs at the end of the play, after `verify.yml` had already failed on
   `<tailnet IP>:6432`. A failed run drops its notified handlers and the next run sees an unchanged file, so a plain re-run failed
   the same way. `pgbouncer.yml` now checks the tailnet listener itself (a closed port notifies the restart, so a host already in that state heals on the next run) and ends with `flush_handlers`.
-- **The edge resolves the database host through `/etc/hosts`.** The edge runs `--accept-dns=false`, so `pg1-host` (the name on the
+- **The edge resolves the database and backup hosts through `/etc/hosts`.** The edge runs `--accept-dns=false`, so `pg1-host` (the name on the
   database host's pgBackRest certificate) did not resolve and `stanza-create` aborted. The pgbackrest_repo role reads `db`'s tailnet
   IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.
+  The backup role does the same for `backup`: the nightly `rsync` over ssh died with "Could not resolve hostname backup.ts…" (verify run 39),
+  and it fails the same way while `backup` is not a registered tailnet node (the deploy then says so).
 - **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.

@@ -48,6 +48,30 @@
     mode: "0600"
     force: "{{ backup_host_known_hosts | default('') | length > 0 }}"
 
+- name: Backup host node, as headscale knows it
+  ansible.builtin.command: "docker compose -f {{ edge_root }}/compose.yml exec -T headscale headscale nodes list -o json"
+  register: _backup_hs_nodes
+  changed_when: false
+
+- name: Tailnet address of the backup host
+  ansible.builtin.set_fact:
+    _backup_ipv4: >-
+      {{ _backup_hs_nodes.stdout | from_json | selectattr('given_name', 'equalto', backup_tailnet_hostname)
+         | map(attribute='ip_addresses') | first | default([]) | select('search', '^[0-9.]+$') | first | default('') }}
+
+# The edge runs with --accept-dns=false, so ssh and rsync cannot resolve the backup host through MagicDNS.
+- name: The edge resolves the backup host's name locally
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ backup_tailnet_host | regex_escape }}$'
+    line: "{{ _backup_ipv4 }} {{ backup_tailnet_host }}"
+  when: _backup_ipv4 | length > 0
+
+- name: Say why the backup host has no local name yet
+  ansible.builtin.debug:
+    msg: "{{ backup_tailnet_hostname }} is not a tailnet node yet; nightly backups fail until it joins and deploy runs again"
+  when: _backup_ipv4 | length == 0
+
 - name: Scripts
   ansible.builtin.template:
     src: "{{ item }}.sh.j2"

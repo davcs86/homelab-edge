@@ -45,7 +45,8 @@ staging_tailnet_host: "xstockstrat-staging.{{ magicdns_base_domain }}"
 staging_ui_hostname: "xstockstrat-staging-ui.{{ magicdns_base_domain }}"
 staging_edge_port: 8443                  # public staging listener; open in the DO firewall
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
-backup_tailnet_host: "backup.{{ magicdns_base_domain }}"
+backup_tailnet_hostname: backup
+backup_tailnet_host: "{{ backup_tailnet_hostname }}.{{ magicdns_base_domain }}"
 
 # ---------- xstockstrat upstreams ----------
 app_ui_port: 3000
