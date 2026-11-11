@@ -252,6 +252,34 @@
 	}
 }
 
+{{ webhooks_mcp_hostname }} {
+	import acme webhooks-mcp.{{ acme_zone }}
+	import access_log webhooks-mcp
+
+	# Only the MCP endpoint is public; the ingest listener on the same container is tailnet-only.
+	@mcp path /mcp
+	handle @mcp {
+		rate_limit {
+			zone webhooks_mcp {
+				key {remote_host}
+				window {{ ratelimit.webhooks_mcp.window }}
+				events {{ ratelimit.webhooks_mcp.events }}
+				ipv6_prefix 64
+			}
+		}
+		request_body {
+			max_size {{ body_limits.webhooks_mcp }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_mcp_port }} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
+
 *.{{ magicdns_base_domain }} {
 	import acme ts.{{ acme_zone }}
 	import access_log tailnet
@@ -267,6 +295,14 @@
 		reverse_proxy 127.0.0.1:2586 {
 			flush_interval -1
 		}
+	}
+
+	@webhooks_ingest host {{ webhooks_ingest_hostname }}
+	handle @webhooks_ingest {
+		request_body {
+			max_size {{ body_limits.webhooks_ingest }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
 	}
 
 	handle {
@@ -304,6 +340,15 @@
 				import app_ui {{ staging_tailnet_host }}
 			}
 		}
+	}
+
+	@webhooks_ingest host {{ webhooks_ingest_hostname }}
+	handle @webhooks_ingest {
+		import tailnet_only
+		request_body {
+			max_size {{ body_limits.webhooks_ingest }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
 	}
 
 	handle {

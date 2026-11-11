@@ -59,9 +59,12 @@ ratelimit:
   register: {events: 10, window: 1h}
   oauth: {events: 30, window: 1m}
   mcp: {events: 120, window: 1m}
+  webhooks_mcp: {events: 120, window: 1m}
   general: {events: 3000, window: 1m}
 body_limits:
   mcp: 1MB
+  webhooks_mcp: 1MB
+  webhooks_ingest: 262144   # bytes; equals the listener's 256 KiB cap
   login: 8KB
   register: 16KB
   default: 64KB
@@ -69,6 +72,10 @@ body_limits:
 # ---------- Monitoring ----------
 ntfy_alert_topic: homelab-alerts
 gatus_port: 8081
+webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
+webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
+webhooks_mcp_port: 9100
+webhooks_ingest_port: 9101
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success

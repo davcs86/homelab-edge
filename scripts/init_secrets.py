@@ -50,6 +50,7 @@ GENERATED = {
     "db_role_superadmin_password": lambda: secrets.token_urlsafe(32),
     "db_role_xstockstrat_production_password": lambda: secrets.token_urlsafe(32),
     "db_role_xstockstrat_staging_password": lambda: secrets.token_urlsafe(32),
+    "webhooks_mcp_auth_key": lambda: secrets.token_urlsafe(36),
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]

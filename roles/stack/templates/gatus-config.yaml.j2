@@ -65,6 +65,26 @@ endpoints:
       - "[STATUS] == 401"
     alerts: [{type: ntfy}]
 
+  - name: webhooks-mcp-requires-auth
+    group: public
+    url: https://{{ webhooks_mcp_hostname }}/mcp
+    method: POST
+    interval: 2m
+    <<: *public
+    conditions:
+      - "[STATUS] == 401"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: webhooks-ingest
+    group: edge
+    url: https://{{ webhooks_ingest_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
   - name: public-default-404
     group: public
     url: https://{{ public_app_hostname }}/
