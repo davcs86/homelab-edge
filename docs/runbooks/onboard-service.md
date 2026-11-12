@@ -48,6 +48,16 @@ config and the tailscale role's split-horizon records. Exposing another workload
 them into a list variable is a separate change. `webhooks_mcp_hostname` (public, label `webhooks-mcp`) was added that way;
 `webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its handle in the `*.ts:8443` site must keep `import tailnet_only` (see `docs/decisions.md`).
 
+A new public hostname with its own certificate also needs three things outside this repo, **all before the deploy**
+that introduces it:
+
+1. Cloudflare, DNS-only: `<label>` A → the reserved IPv4.
+2. Cloudflare, DNS-only: `_acme-challenge.<label>` CNAME → `<label>.acme.<domain>`.
+3. deSEC: a `TXT` write policy for `<label>` on the existing ACME token —
+   [`acme-token.md` § Add a name](acme-token.md#add-a-name-required-before-the-first-deploy-of-a-new-public-hostname).
+
+Skip step 3 and the deploy fails at the certificate check; a `*.ts` name needs none of the three.
+
 Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on `staging_edge_port` (8443,
 public in the cloud firewall) under the existing `*.ts` certificate, so it needs no new ACME CNAME, only the Cloudflare A record
 `xstockstrat-staging-ui.ts` → reserved IPv4 (DNS-only). The internet gets the whole app through the shared `public_routes`

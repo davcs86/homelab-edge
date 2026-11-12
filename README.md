@@ -112,7 +112,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Need | Read |
 |---|---|
 | Add, tag or revoke a device; CI pre-auth keys | [`docs/runbooks/tailnet-devices.md`](docs/runbooks/tailnet-devices.md) |
-| Rotate the deSEC ACME token | [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md) |
+| Rotate the deSEC ACME token; let it issue for a new public hostname | [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md) |
 | Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |

@@ -42,10 +42,16 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
     container would exit at start.
   - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
-  - The image pin is by digest only, and the digest in `versions.yml` is a placeholder until the first fixed image is published; see `docs/versions.md`.
+  - The image pin is by digest only; see `docs/versions.md`.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.
+- **A new public hostname needs its own policy on the deSEC token, before the deploy.** The token may write only
+  the labels it has a policy for, and Caddy reads it from `desec_token` in the SOPS file, not from the GitHub secret:
+  a freshly created token is not on the edge at all. Two deploys failed at the certificate check for
+  `webhooks-mcp` this way. Add the policy to the existing token (`docs/runbooks/acme-token.md` § Add a name).
+- **The deploy's certificate-failure evidence printed no Caddy lines** through a filtered `grep`, with and without
+  `2>&1`; the rescue block now prints Caddy's state, its loaded TLS names and its last log lines unfiltered.
 - **DNS-01 needs `propagation_delay`.** deSEC's anycast nodes converge after Caddy's own check passes; Let's
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. `propagation_delay 2m` / `propagation_timeout 10m` in the `(acme)` snippet fixes it.

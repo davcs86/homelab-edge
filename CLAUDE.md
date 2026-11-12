@@ -27,7 +27,7 @@ Read only the row that matches the task.
 |---|---|
 | Rebuild, first-time setup, GitHub secrets | `README.md` § Rebuild from scratch |
 | Add / approve / tag / revoke a device; CI pre-auth keys | `docs/runbooks/tailnet-devices.md` |
-| Rotate the deSEC ACME token | `docs/runbooks/acme-token.md` |
+| Rotate the deSEC ACME token; let it issue for a new public hostname | `docs/runbooks/acme-token.md` |
 | Restore headscale; edge unreachable (break glass); stack down after reboot | `docs/runbooks/recovery.md` |
 | Alert setup (healthchecks.io email, ntfy on the phone) | `docs/runbooks/alerts.md` |
 | Backup host, Proxmox heartbeat, app VM | `docs/runbooks/home-side.md` |
