@@ -41,9 +41,10 @@ ephemeral_inactivity_timeout: 5m
 # Home nodes as they will be named in MagicDNS (<hostname>.<magicdns_base_domain>). Hostname = workload tag name (tag:xstockstrat -> xstockstrat).
 app_tailnet_host: "xstockstrat.{{ magicdns_base_domain }}"
 staging_tailnet_host: "xstockstrat-staging.{{ magicdns_base_domain }}"
-# Edge-facing name of the staging route; must differ from every node's MagicDNS name.
-staging_ui_hostname: "xstockstrat-staging-ui.{{ magicdns_base_domain }}"
-staging_edge_port: 8443                  # public staging listener; open in the DO firewall
+# Public name of the staging app; differs from the node's MagicDNS name (xstockstrat-staging.ts.<domain>).
+staging_public_hostname: "xstockstrat-staging.{{ domain }}"
+staging_edge_port: 8443                  # tailnet-only listener for the staging webhooks ingest; not in the DO firewall
+staging_vm_ips: []                       # set at deploy from headscale; Caddy keeps these tailnet addresses off every non-staging site
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
 backup_tailnet_hostname: backup
 backup_tailnet_host: "{{ backup_tailnet_hostname }}.{{ magicdns_base_domain }}"
@@ -76,6 +77,14 @@ webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
 webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
 webhooks_mcp_port: 9100
 webhooks_ingest_port: 9101
+
+# Public hostnames served on 443, one certificate each. `name` is the ACME label (CNAME target <name>.<acme_zone>), the
+# access-log name and the rate-limit zone prefix. kind app: OAuth routes + tailnet bypass; bearer_mcp: one path behind a static key.
+edge_sites:
+  - {name: xstockstrat, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}"}
+  - {name: xstockstrat-staging, kind: app, hostname: "{{ staging_public_hostname }}", upstream: "{{ staging_tailnet_host }}",
+     ui_public: true, isolate_staging_vm: false}
+  - {name: webhooks-mcp, kind: bearer_mcp, hostname: "{{ webhooks_mcp_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}", limits: webhooks_mcp}
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success

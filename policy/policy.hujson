@@ -23,7 +23,7 @@
     // Admin devices: full reach, including SSH, Postgres, LLM and Proxmox.
     {"src": ["group:admins"], "dst": ["*"], "ip": ["*"]},
 
-    // Everyday devices: only the edge's HTTPS (split-horizon xstockstrat UI, Gatus, ntfy) and the staging listener.
+    // Everyday devices: only the edge's HTTPS (split-horizon xstockstrat UIs, Gatus, ntfy) and the tailnet-only 8443 ingest listener.
     {"src": ["group:members"], "dst": ["tag:edge"], "ip": ["tcp:443", "tcp:8443"]},
 
     // Edge -> app: only the UI and agent ports (public /agent + OAuth routes, tailnet UI, Gatus probes).
@@ -41,8 +41,9 @@
     // is in Postgres and PgBouncer (docs/runbooks/onboard-service.md).
     {"src": ["tag:xstockstrat"], "dst": ["tag:db"], "ip": ["tcp:5432", "tcp:6432"]},
     {"src": ["tag:xstockstrat-staging"], "dst": ["tag:db"], "ip": ["tcp:5432", "tcp:6432"]},
-    // Staging reaches only the tailnet-only :8443 listener, never prod's 443 site.
-    {"src": ["tag:xstockstrat-staging"], "dst": ["tag:edge"], "ip": ["tcp:8443"]},
+    // Staging: 443 for its own public name (grants are per port, so Caddy's deny_staging_vm keeps it off every other
+    // hostname) and the tailnet-only :8443 listener for its webhooks ingest.
+    {"src": ["tag:xstockstrat-staging"], "dst": ["tag:edge"], "ip": ["tcp:443", "tcp:8443"]},
     // LLM is reachable only by tag:xstockstrat, tag:agent (approved) and admins.
     {"src": ["tag:xstockstrat", "tag:agent"], "dst": ["tag:llm"], "ip": ["tcp:11434"]},
 
@@ -73,7 +74,7 @@
     {"src": "tag:agent",  "accept": ["tag:llm:11434", "tag:xstockstrat:9000"], "deny": ["tag:db:5432", "tag:db:6432", "tag:db:22", "tag:db:8432", "tag:xstockstrat:3000", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22", "tag:edge:8443"]},
     {"src": "tag:llm",    "deny": ["tag:db:5432", "tag:xstockstrat:9000", "tag:xstockstrat:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:3000", "tag:edge:443", "tag:edge:8443", "tag:edge:22"]},
     {"src": "tag:xstockstrat",    "accept": ["tag:db:5432", "tag:db:6432", "tag:llm:11434"], "deny": ["tag:db:22", "tag:edge:22", "tag:edge:8443", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:9000", "tag:xstockstrat-staging:22"]},
-    {"src": "tag:xstockstrat-staging", "accept": ["tag:db:5432", "tag:db:6432", "tag:edge:8443"], "deny": ["tag:db:22", "tag:db:8432", "tag:edge:443", "tag:edge:22", "tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat:22", "tag:llm:11434"]},
+    {"src": "tag:xstockstrat-staging", "accept": ["tag:db:5432", "tag:db:6432", "tag:edge:443", "tag:edge:8443"], "deny": ["tag:db:22", "tag:db:8432", "tag:edge:22", "tag:xstockstrat:3000", "tag:xstockstrat:9000", "tag:xstockstrat:22", "tag:llm:11434"]},
     {"src": "tag:db",     "accept": ["tag:edge:8432", "tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:xstockstrat:3000", "tag:xstockstrat-staging:3000", "tag:xstockstrat-staging:22"]},
     {"src": "tag:pve",    "accept": ["tag:edge:443"], "deny": ["tag:edge:22", "tag:edge:8443", "tag:db:5432", "tag:xstockstrat-staging:3000"]},
     {"src": "david@",     "accept": ["tag:edge:443", "tag:edge:8443"], "deny": ["tag:db:5432", "tag:llm:11434", "tag:xstockstrat:22", "tag:xstockstrat-staging:3000", "tag:edge:22"]},

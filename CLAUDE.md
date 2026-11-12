@@ -7,7 +7,7 @@ public entry point, Gatus, ntfy, nightly age backups, a pgBackRest repo. Human o
 
 1. **Never assume a value the owner has not stated** — provider setting, hostname, version, schedule, home-side
    detail. Ask first. Open `TODO(ask)` markers are the known gaps; resolve them with the owner, never by guessing.
-2. **Public surface is exactly 80/tcp, 443/tcp, 8443/tcp (staging), 3478/udp.** Never open SSH publicly outside `deploy → bootstrap`,
+2. **Public surface is exactly 80/tcp, 443/tcp, 3478/udp.** Never open SSH publicly outside `deploy → bootstrap`,
    which closes it again and proves it; anything else reaches the host over the tailnet.
 3. **No secret in the repo, a log, or a commit message.** Secrets enter only through SOPS (`secrets/`) or GitHub
    secrets; any task that handles one sets `no_log: true`.

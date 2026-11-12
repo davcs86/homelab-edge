@@ -31,7 +31,7 @@ and the roles after `stack` do not run. Creating a new token instead does not he
 
 ## Rotate
 
-The token lives in deSEC, can write only `TXT` at `hs`, `xstockstrat`, `webhooks-mcp`, `ts` in `acme.natanddavehouse.com`, and is
+The token lives in deSEC, can write only `TXT` at `hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts` in `acme.natanddavehouse.com`, and is
 accepted only from the droplet's **egress** addresses. These are not the reserved IP: DigitalOcean sends outbound
 traffic from the droplet's own public IPv4 and IPv6 (the droplet page in the DO console, or `networks` in the DO API;
 not the reserved IP), and desec.io has an AAAA record, so Caddy reaches it over IPv6. Both must be allowed. In the deSEC web UI
@@ -46,7 +46,7 @@ ID=$(echo "$NEW" | jq -r .id); echo "$NEW" | jq -r .token   # -> GitHub secret D
 P="$API/$ID/policies/rrsets/"
 curl -fsS -X POST $P -H "Authorization: Token $T" -H 'Content-Type: application/json' \
   -d '{"domain":null,"subname":null,"type":null,"perm_write":false}'
-for s in hs xstockstrat webhooks-mcp ts; do
+for s in hs xstockstrat xstockstrat-staging webhooks-mcp ts; do
   curl -fsS -X POST $P -H "Authorization: Token $T" -H 'Content-Type: application/json' \
     -d "{\"domain\":\"acme.natanddavehouse.com\",\"subname\":\"$s\",\"type\":\"TXT\",\"perm_write\":true}"
 done

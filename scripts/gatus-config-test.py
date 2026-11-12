@@ -66,11 +66,11 @@ class Gatus(unittest.TestCase):
     def test_agent_probes_pin_each_environments_public_resource_url(self):
         self.assertIn(f"[BODY].resource == https://{V['public_app_hostname']}/agent",
                       ENDPOINTS["xstockstrat-agent"]["conditions"])
-        self.assertIn(f"[BODY].resource == https://{V['staging_ui_hostname']}:{V['staging_edge_port']}/agent",
+        self.assertIn(f"[BODY].resource == https://{V['staging_public_hostname']}/agent",
                       ENDPOINTS["xstockstrat-staging-agent"]["conditions"])
 
     def test_staging_public_route_is_probed_from_the_internet_resolver(self):
-        base = f"https://{V['staging_ui_hostname']}:{V['staging_edge_port']}"
+        base = f"https://{V['staging_public_hostname']}"
         for name in ("staging-mcp-oauth-metadata", "staging-mcp-requires-auth"):
             self.assertEqual(ENDPOINTS[name]["group"], "public", name)
             self.assertEqual(ENDPOINTS[name]["client"]["dns-resolver"], "tcp://1.1.1.1:53", name)
