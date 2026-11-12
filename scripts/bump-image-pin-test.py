@@ -393,10 +393,15 @@ name = os.path.basename(sys.argv[0])
 entry = {"cmd": name, "argv": sys.argv[1:]}
 if "--body-file" in sys.argv:
     entry["body"] = open(sys.argv[sys.argv.index("--body-file") + 1]).read()
+for a in sys.argv:
+    if a.startswith("body=@"):
+        entry["body"] = open(a[len("body=@"):]).read()
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps(entry) + "\\n")
 if name == "gh" and sys.argv[1:3] == ["pr", "list"]:
     print(os.environ.get("FAKE_PR_LIST", "[]"))
+if name == "gh" and sys.argv[1:3] == ["run", "list"]:
+    print(os.environ.get("FAKE_RUN_LIST", "[]"))
 if name == "gh" and sys.argv[1:3] == ["pr", "create"]:
     print("https://github.com/owner/repo/pull/7")
 if name == os.environ.get("FAKE_FAIL_CMD") and os.environ.get("FAKE_FAIL_VERB") in sys.argv:
@@ -404,6 +409,7 @@ if name == os.environ.get("FAKE_FAIL_CMD") and os.environ.get("FAKE_FAIL_VERB") 
 """
 
 SECRET = "ghs_SECRET_TOKEN_VALUE"
+HEAD_SHA = "f" * 40
 
 
 class OpenPrStep(unittest.TestCase):
@@ -416,10 +422,15 @@ class OpenPrStep(unittest.TestCase):
     URL = f"https://x-access-token:{SECRET}@github.com/owner/repo.git"
 
     @staticmethod
-    def pr(state, number, title):
-        return {"state": state, "number": number, "url": f"https://github.com/owner/repo/pull/{number}", "title": title}
+    def pr(state, number, title, fork=False):
+        return {"state": state, "number": number, "url": f"https://github.com/owner/repo/pull/{number}", "title": title,
+                "headRefOid": HEAD_SHA, "isCrossRepository": fork}
 
-    def run_step(self, revision=REV, prs=None, fail=None):
+    @staticmethod
+    def dispatches(calls):
+        return [c["argv"] for c in calls if c["cmd"] == "gh" and c["argv"][:2] == ["workflow", "run"]]
+
+    def run_step(self, revision=REV, prs=None, fail=None, ci_runs=None):
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
                 p = Path(d, n)
@@ -427,7 +438,7 @@ class OpenPrStep(unittest.TestCase):
                 p.chmod(0o755)
             log, summary = Path(d, "log"), Path(d, "summary")
             env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET,
-                   "FAKE_PR_LIST": json.dumps(prs or []), "GITHUB_REPOSITORY": "owner/repo",
+                   "FAKE_PR_LIST": json.dumps(prs or []), "FAKE_RUN_LIST": json.dumps(ci_runs or []), "GITHUB_REPOSITORY": "owner/repo",
                    "SHORT": "abababababab", "NEW_DIGEST": self.NEW_FULL, "PREVIOUS": OLD, "REVISION": revision,
                    "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
             if fail:
@@ -443,7 +454,7 @@ class OpenPrStep(unittest.TestCase):
     def assert_nothing_written(self, calls):
         for verb in ("checkout", "commit", "push"):
             self.assertEqual(self.sub(calls, "git", verb), [], verb)
-        for verb in ("create", "edit", "run"):
+        for verb in ("create", "api"):
             self.assertEqual(self.sub(calls, "gh", verb), [], verb)
 
     def assert_branch_rebuilt_and_ci_started(self, calls):
@@ -453,13 +464,13 @@ class OpenPrStep(unittest.TestCase):
         self.assertIn("github-actions[bot]", " ".join(commits[0]["argv"]))
         self.assertEqual(commits[0]["argv"][commits[0]["argv"].index("-m") + 1], self.TITLE)
         self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")], [["push", "--force", self.URL, f"HEAD:refs/heads/{self.BRANCH}"]])
-        self.assertEqual([c["argv"] for c in self.sub(calls, "gh", "run")], [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        self.assertEqual(self.dispatches(calls), [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
         kinds = [(c["cmd"], c["argv"][0]) for c in calls]
-        self.assertLess(kinds.index(("git", "push")), max(i for i, k in enumerate(kinds) if k == ("gh", "pr")))
+        self.assertLess(kinds.index(("git", "push")), max(i for i, k in enumerate(kinds) if k in (("gh", "pr"), ("gh", "api"))))
 
     def assert_created(self, calls):
         self.assert_branch_rebuilt_and_ci_started(calls)
-        self.assertEqual(self.sub(calls, "gh", "edit"), [])
+        self.assertEqual(self.sub(calls, "gh", "api"), [])
         prs = self.sub(calls, "gh", "create")
         self.assertEqual(len(prs), 1)
         argv = prs[0]["argv"]
@@ -473,7 +484,7 @@ class OpenPrStep(unittest.TestCase):
         argv = self.sub(calls, "gh", "list")[0]["argv"]
         self.assertEqual(argv[argv.index("--head") + 1], self.BRANCH)
         self.assertEqual(argv[argv.index("--state") + 1], "all")
-        self.assertEqual(argv[argv.index("--json") + 1], "state,number,url,title")
+        self.assertEqual(argv[argv.index("--json") + 1], "state,number,url,title,headRefOid,isCrossRepository")
 
     def test_no_pr_yet_gets_one_commit_one_push_one_pr_and_a_ci_dispatch(self):
         r, calls, summary = self.run_step()
@@ -496,23 +507,36 @@ class OpenPrStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("/commit/", self.sub(calls, "gh", "create")[0]["body"])
 
-    def test_open_pr_for_this_digest_means_nothing_to_do(self):
-        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)])
+    def test_open_pr_for_this_digest_with_ci_on_its_head_means_nothing_to_do(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], ci_runs=[{"headSha": HEAD_SHA}])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_nothing_written(calls)
+        self.assertEqual(self.dispatches(calls), [])
         self.assertIn("https://github.com/owner/repo/pull/7", summary)
         self.assertIn("https://github.com/owner/repo/pull/7", r.stdout)
+
+    def test_open_pr_for_this_digest_without_ci_on_its_head_gets_ci_started(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], ci_runs=[{"headSha": "0" * 40}])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertEqual(self.dispatches(calls), [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+
+    def test_fork_prs_on_a_branch_of_the_same_name_are_ignored(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 4, self.OTHER, fork=True), self.pr("CLOSED", 5, self.TITLE, fork=True)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("::warning::", r.stdout)
+        self.assert_created(calls)
 
     def test_open_pr_for_an_older_digest_is_reused_not_duplicated(self):
         r, calls, summary = self.run_step(prs=[self.pr("OPEN", 3, self.OTHER), self.pr("MERGED", 2, "older")])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_branch_rebuilt_and_ci_started(calls)
         self.assertEqual(self.sub(calls, "gh", "create"), [])
-        edits = self.sub(calls, "gh", "edit")
+        edits = self.sub(calls, "gh", "api")
         self.assertEqual(len(edits), 1)
         argv = edits[0]["argv"]
-        self.assertEqual(argv[:3], ["pr", "edit", "3"])
-        self.assertEqual(argv[argv.index("--title") + 1], self.TITLE)
+        self.assertEqual(argv[:4], ["api", "-X", "PATCH", "repos/owner/repo/pulls/3"])
+        self.assertIn(f"title={self.TITLE}", argv)
         self.assertIn(self.NEW_FULL, edits[0]["body"])
         self.assertIn("Updated https://github.com/owner/repo/pull/3", summary)
 
@@ -551,7 +575,7 @@ class OpenPrStep(unittest.TestCase):
     def test_a_failing_push_opens_no_pr_and_starts_no_ci(self):
         r, calls, _ = self.run_step(fail=("git", "push"))
         self.assertNotEqual(r.returncode, 0)
-        for verb in ("create", "edit", "run"):
+        for verb in ("create", "api", "workflow"):
             self.assertEqual(self.sub(calls, "gh", verb), [], verb)
         self.assertNotIn(SECRET, r.stdout + r.stderr)
 

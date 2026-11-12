@@ -53,14 +53,23 @@ jobs:
           branch="bump/webhooks-mcp"
           title="Bump webhooks-mcp to sha256:${SHORT}…"
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          prs="$(gh pr list --head "$branch" --state all --limit 200 --json state,number,url,title)"
+          # --head matches fork branches of the same name too; only this repository's PRs count.
+          prs="$(gh pr list --head "$branch" --state all --limit 200 --json state,number,url,title,headRefOid,isCrossRepository)"
+          prs="$(jq '[.[] | select(.isCrossRepository == false)]' <<<"$prs")"
           open_number="$(jq -r '[.[] | select(.state == "OPEN")][0].number // empty' <<<"$prs")"
           open_url="$(jq -r '[.[] | select(.state == "OPEN")][0].url // empty' <<<"$prs")"
           open_title="$(jq -r '[.[] | select(.state == "OPEN")][0].title // empty' <<<"$prs")"
+          open_head="$(jq -r '[.[] | select(.state == "OPEN")][0].headRefOid // empty' <<<"$prs")"
           rejected="$(jq -r --arg t "$title" '[.[] | select(.state == "CLOSED" and .title == $t)][0].url // empty' <<<"$prs")"
           if [ -n "$open_number" ] && [ "$open_title" = "$title" ]; then
             echo "${NEW_DIGEST} is already proposed: ${open_url}"
             echo "\`${NEW_DIGEST}\` is already proposed: ${open_url}" >> "$GITHUB_STEP_SUMMARY"
+            runs="$(gh run list --workflow ci.yml --branch "$branch" --limit 20 --json headSha)"
+            ran="$(jq -r --arg h "$open_head" '[.[] | select(.headSha == $h)] | length' <<<"$runs")"
+            if [ "$ran" = 0 ]; then
+              echo "No ci run for its head ${open_head}; starting one."
+              gh workflow run ci.yml --ref "$branch"
+            fi
             exit 0
           fi
           if [ -n "$rejected" ]; then
@@ -90,7 +99,7 @@ jobs:
             echo "This branch is rebuilt by that workflow when a newer image is published; commits added to it by hand are lost."
           } > "$RUNNER_TEMP/bump-body.md"
           if [ -n "$open_number" ]; then
-            gh pr edit "$open_number" --title "$title" --body-file "$RUNNER_TEMP/bump-body.md"
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${open_number}" -f title="$title" -F body=@"$RUNNER_TEMP/bump-body.md" >/dev/null
             url="$open_url"
             verb="Updated"
           else
