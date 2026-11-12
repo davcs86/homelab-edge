@@ -32,9 +32,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 ## Known traps
 
 - **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
-  `webhooks_ingest_hostname`, `webhooks.ts.<domain>`) has no auth and must stay tailnet-only. The `*.ts:8443` site is otherwise open to the
-  internet, so the ingest handle there sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new
-  route in that site must not copy the handle without it.
+  `webhooks_ingest_hostname`, `webhooks.ts.<domain>`) has no auth and must stay tailnet-only. The `*.ts:8443` site (the staging environment's
+  ingest) is tailnet-only too and not in the firewall, but its ingest handle still sits behind `import tailnet_only`, and
+  `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in that site must not copy the handle without it.
   - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
     (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
@@ -77,21 +77,25 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Staging shares the DB server; isolation is in Postgres and PgBouncer, not the tailnet.** Grants name `tag:db`
   ports, not databases. Per-workload role, `REVOKE CONNECT`, `pg_hba` and PgBouncer entries are in `onboard-service.md`;
   nothing in this repo verifies them.
-- **Staging reaches the edge on its own port.** A tailnet grant is per `tag:edge:port` and Caddy cannot tell tags apart
-  by source IP, so staging on 443 would also reach prod's `@tailnet` handle. `:8443` serves only
-  `staging_ui_hostname`; the grant is `tag:xstockstrat-staging → tag:edge:8443`, never 443. Members (`david@`) and admins reach 8443 too.
-- **Staging is public on 8443, by the owner's choice.** A clients-outside-the-tailnet need (MCP/OAuth) outweighed the three-port rule,
-  and a staging name on 443 would reopen the per-port grant problem above. Cost: a fourth public port, and the entire staging UI
-  (not prod's allowlist) is internet-facing behind app auth alone; `/agent/*` outside the MCP/OAuth set is 404 publicly, because the
-  agent's `GET /api/tools` catalog is unauthenticated (every other agent path is bearer-gated) and only the UI's server needs it, over the tailnet. Edge controls: the `public_routes` snippet (per-IP rate limits and
-  body caps, shared with prod so they cannot drift), HTTPS only (no plaintext listener or redirect on 8443), unknown names 404, and
-  public Gatus probes. Open items: `general` is 3000 requests/min per IP (raised from 300 for the full UI; applies to prod too); the UI catch-all has no body cap.
-- **A firewall port from a variable needs `| string`.** `ports: "{{ staging_edge_port }}"` renders as an int, and the
+- **Staging is a public name on 443, and Caddy isolates it, not the tailnet.** Claude's connector check reached prod on 443 (it got the 502) but
+  answered "Couldn't reach this address" for staging on 8443, though the edge answered the internet correctly (verify run 40, phone on mobile
+  data, the MCP and OAuth documents). Port, hostname and certificate all differed, so the port is the likely cause, not a proven one. Staging is now
+  `xstockstrat-staging.<domain>`, an `edge_sites` entry like prod, with its own certificate. Tailnet grants are per `tag:edge:port`, so
+  `tag:xstockstrat-staging → tag:edge:443` alone would let the VM reach prod's `@tailnet` handler, the webhooks MCP and the unauthenticated
+  ingest. `deny_staging_vm` aborts the VM's tailnet addresses (read from headscale on each deploy, as the DB host's is) on every site except
+  its own; `caddy-routing-test.sh` pins that. If the VM is not registered yet the rule is empty and the deploy says so (fail-open on a fresh
+  build); a re-registered VM keeps its old address in the rule until the next deploy. Public surface: back to 80, 443 and 3478.
+  Staging keeps `tag:edge:8443`, now only the tailnet-only listener for its webhooks ingest (separate from prod's ingest on 443).
+  Costs: the whole staging UI is internet-facing behind app auth alone, and `/agent/*` outside the MCP/OAuth set is 404 publicly because the
+  agent's `GET /api/tools` catalog is unauthenticated (the UI's server reads it over the tailnet). `general` is 3000 requests/min per IP.
+- **A firewall port from a variable needs `| string`.** `ports: "{{ staging_edge_port }}"` (a rule since removed) rendered as an int, and the
   rule-comparison `json_query` `join()` accepts only strings, so the deploy died in `do_infra` before changing anything (run 20).
   Lint and `--syntax-check` do not render it; only a deploy does.
 - **Caddy mounts the Caddyfile's directory, not the file.** Ansible replaces files by rename, so a single-file bind mount keeps the
   old inode: `caddy reload` exited 0 and Caddy kept the old config (staging's 8443 stayed tailnet-gated after deploy 21, and `unsafe_writes`
   does not help, it renames first). The stack role now also compares the container's hash of the file with the host's and restarts Caddy on a mismatch.
+- **Rate-limit zone names are global across sites.** Two `rate_limit` blocks with a zone called `login` share one counter per client IP, so six prod
+  login attempts left staging answering 429 to its first (verify run 40). `public_routes` prefixes every zone with a per-site label (`prod_`, `staging_`).
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
   acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,

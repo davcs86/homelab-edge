@@ -96,18 +96,18 @@ endpoints:
 
   - name: staging-mcp-oauth-metadata
     group: public
-    url: https://{{ staging_ui_hostname }}:{{ staging_edge_port }}/.well-known/oauth-protected-resource/agent
+    url: https://{{ staging_public_hostname }}/.well-known/oauth-protected-resource/agent
     interval: 2m
     <<: *public
     conditions:
       - "[STATUS] == 200"
-      - "[BODY].resource == https://{{ staging_ui_hostname }}:{{ staging_edge_port }}/agent"
+      - "[BODY].resource == https://{{ staging_public_hostname }}/agent"
       - "[CERTIFICATE_EXPIRATION] > 336h"
     alerts: [{type: ntfy}]
 
   - name: staging-mcp-requires-auth
     group: public
-    url: https://{{ staging_ui_hostname }}:{{ staging_edge_port }}/agent
+    url: https://{{ staging_public_hostname }}/agent
     method: POST
     interval: 2m
     <<: *public
@@ -152,7 +152,7 @@ endpoints:
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
-      - "[BODY].resource == https://{{ staging_ui_hostname }}:{{ staging_edge_port }}/agent"
+      - "[BODY].resource == https://{{ staging_public_hostname }}/agent"
     alerts: [{type: ntfy}]
 
   - name: proxmox

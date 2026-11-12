@@ -43,10 +43,11 @@ The DB server is shared, so the tailnet cannot separate databases. `playbooks/db
 
 ## 4. Edge exposure (only if it needs a public or `*.ts` name)
 
-Today the edge hardcodes `public_app_hostname` in the Caddyfile, the ACME CNAME delegation, `tls-check`, the Gatus
-config and the tailscale role's split-horizon records. Exposing another workload means editing each of those; generalising
-them into a list variable is a separate change. `webhooks_mcp_hostname` (public, label `webhooks-mcp`) was added that way;
-`webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its handle in the `*.ts:8443` site must keep `import tailnet_only` (see `docs/decisions.md`).
+Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/group_vars/all/main.yml`): its Caddy site, `tls-check`
+and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (OAuth routes, tailnet
+bypass; `ui_public` also serves the whole UI), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
+are still written per service. `webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its
+handle in the `*.ts:8443` site (tailnet-only, not in the firewall) must keep `import tailnet_only` (see `docs/decisions.md`).
 
 A new public hostname with its own certificate also needs three things outside this repo, **all before the deploy**
 that introduces it:
@@ -58,17 +59,16 @@ that introduces it:
 
 Skip step 3 and the deploy fails at the certificate check; a `*.ts` name needs none of the three.
 
-Staging is the exception: `staging_ui_hostname` (`xstockstrat-staging-ui.ts.<domain>`) is served on `staging_edge_port` (8443,
-public in the cloud firewall) under the existing `*.ts` certificate, so it needs no new ACME CNAME, only the Cloudflare A record
-`xstockstrat-staging-ui.ts` → reserved IPv4 (DNS-only). The internet gets the whole app through the shared `public_routes`
-rate limits and body caps; the tailnet bypasses them.
-The name must differ from every node hostname, because MagicDNS answers node names itself. `group:members` may reach 8443.
+Staging is `xstockstrat-staging.<domain>` on 443 like any other entry: label `xstockstrat-staging`, the three steps above, then redeploy
+the staging VM with `APP_URL` set to it. Its tailnet address is denied on every other hostname by `deny_staging_vm` (grants are per port,
+so the grant alone cannot do it); Caddy learns the address from headscale on each deploy, so a re-registered VM keeps the old address
+in the rule until the next deploy.
 
 ### Which staging name goes where
 
-| Name (under `ts.<domain>`) | Is | Use for |
+| Name | Is | Use for |
 |---|---|---|
-| `xstockstrat-staging` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
-| `xstockstrat-staging-ui:8443` | the edge route (`staging_ui_hostname` + `staging_edge_port`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+| `xstockstrat-staging.ts.<domain>` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
+| `xstockstrat-staging.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
 
-The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the route name.
+The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the public name.

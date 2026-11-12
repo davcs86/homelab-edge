@@ -7,22 +7,25 @@ image="${1:?caddy image}"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 tailnet_ip=100.64.0.250
+staging_vm_ip=100.64.0.251
 pids=()
 # shellcheck disable=SC2317  # invoked via trap
 cleanup() {
   docker rm -f caddy-routing-test >/dev/null 2>&1 || true
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   sudo ip addr del "$tailnet_ip/32" dev lo 2>/dev/null || true
+  sudo ip addr del "$staging_vm_ip/32" dev lo 2>/dev/null || true
   rm -rf "$work"
 }
 trap cleanup EXIT
 
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template \
   -a "src=roles/stack/templates/Caddyfile.j2 dest=$work/Caddyfile" \
-  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 -e staging_tailnet_host=127.0.0.1 >/dev/null)
+  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 -e staging_tailnet_host=127.0.0.1 \
+  -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_ui_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
 app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host=""
 # shellcheck disable=SC1091
@@ -50,6 +53,7 @@ for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101; do
 done
 
 sudo ip addr replace "$tailnet_ip/32" dev lo
+sudo ip addr replace "$staging_vm_ip/32" dev lo
 mkdir -p "$work/logs"
 docker run -d --name caddy-routing-test --network host \
   -v "$work/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$work/logs:/var/log/caddy" "$image" >/dev/null
@@ -115,7 +119,8 @@ expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"       
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 
-# Staging listener (public on staging_port). Mock upstreams are shared, so only routing and limits are asserted.
+# Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
+# wreq reaches the tailnet-only listener on staging_port (the staging webhooks ingest).
 wreq() { # <host> <curl args...>: any name on the staging port
   local host="$1"; shift
   local code
@@ -123,8 +128,8 @@ wreq() { # <host> <curl args...>: any name on the staging port
   printf '%s' "$code"
   printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
 }
-sreq() { wreq "$staging_host" "$@"; } # <curl args...>
-s="https://$staging_host:$staging_port"
+sreq() { req "$staging_host" "$@"; } # <curl args...>
+s="https://$staging_host"
 expect "staging public UI"                     "200 ui GET /trader"               "$(sreq "$s/trader")"
 expect "staging public UI root"                "200 ui GET /"                     "$(sreq "$s/")"
 expect "staging public tool catalog is private" "404"                             "$(sreq "$s/agent/api/tools")"
@@ -140,9 +145,13 @@ expect "staging tailnet bypasses login limit"  "200 ui POST /api/auth/login"    
 codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface 127.0.0.4 -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
 expect "staging login rate limit (5/min) 429"  "200 200 200 200 200 429"          "$codes"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" --interface 127.0.0.7 -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
+expect "prod login limit trips for a fresh client" "200 200 200 200 200 429" "$codes"
+expect "staging login limit is independent of prod" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.7 -X POST -d '{}' "$s/api/auth/login")"
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
-expect "staging listener 404s other names"     "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
-expect "staging port does not serve status"    "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
+expect "tailnet listener 404s other names"      "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
+expect "tailnet listener does not serve status"   "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
 expect "staging ingest aborts publicly"        "000"                              "$(wreq "$ingest_host" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
 expect "staging ingest from the tailnet"       "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
 expect "staging ingest body over 256 KiB"      "413"                              "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host:$staging_port/hooks")"
@@ -163,6 +172,23 @@ fi
 expect "tailnet sees full UI"                  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
 expect "tailnet reaches agent tools"           "200 agent GET /api/tools"         "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"
 expect "tailnet bypasses login rate limit"     "200 ui POST /api/auth/login"      "$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login")"
+
+# Isolation: tailnet grants are per port, so the staging VM may reach 443; Caddy keeps its address off every site but its own.
+expect "staging VM reaches its own site"       "200 ui GET /trader"               "$(sreq --interface "$staging_vm_ip" "$s/trader")"
+expect "staging VM denied on prod's site"      "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/trader")"
+expect "staging VM denied on prod's agent"     "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/agent/api/tools")"
+expect "staging VM denied on webhooks MCP"     "000"                              "$(req "$wmcp_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w/mcp")"
+expect "staging VM denied on the ingest (443)" "000"                              "$(req "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
+expect "staging VM denied on status"           "000"                              "$(req "$status_host" --interface "$staging_vm_ip" "https://$status_host/")"
+expect "staging VM denied on headscale"        "000"                              "$(req "$hs_host" --interface "$staging_vm_ip" "https://$hs_host/health")"
+expect "staging VM reaches the ingest on 8443" "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
+expect "other tailnet nodes still reach prod"  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
+staging_on_8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$staging_host:$staging_port:127.0.0.1" "https://$staging_host:$staging_port/trader" || true)"
+if [[ "$staging_on_8443" =~ ^(ui|agent|ingest|wmcp)\  ]]; then
+  echo "FAIL  the staging app name reached an upstream on the tailnet-only port: $staging_on_8443"; fail=1
+else
+  echo "PASS  the staging app name reaches no upstream on the tailnet-only port"
+fi
 
 expect "OAuth callback routed"                 "200 agent GET /oauth/callback"   "$(req "$app_host" "$u/agent/oauth/callback?code=SECRETCODE123&state=STATE456")"
 sleep 1

@@ -152,8 +152,8 @@ Create `mtls-ca` with the other four items: one missing item sends every secret 
 
 - `DB_PASSWORD` is the role's SOPS value, `sops decrypt --extract '["db_role_xstockstrat_<env>_password"]' secrets/edge.sops.yaml`.
   It must be URL- and dotenv-safe: no `$`, `@`, `:`, `/` or `#` (hex is).
-- `APP_URL` is `https://xstockstrat.natanddavehouse.com` (production) or `https://xstockstrat-staging-ui.ts.natanddavehouse.com:8443`
-  (staging), the edge route and not the VM's node name. `AGENT_PUBLIC_URL` and `UI_BASE_URL` are derived from it; do not set them.
+- `APP_URL` is `https://xstockstrat.natanddavehouse.com` (production) or `https://xstockstrat-staging.natanddavehouse.com`
+  (staging), the edge name and not the VM's node name. `AGENT_PUBLIC_URL` and `UI_BASE_URL` are derived from it; do not set them.
 - The pipeline appends `DB_HOST=db.ts.natanddavehouse.com`, `DB_NAME`/`DB_USER` (`xstockstrat-production`/`xstockstrat_production`
   or `xstockstrat-staging`/`xstockstrat_staging`, as in `db-host.md`), `APPLICATION_ENV` (`production`/`development`),
   `TRADING_MODE` (`live`/`paper`), the image digests and the mTLS leaves after `APP_ENV`, which cannot override them.
