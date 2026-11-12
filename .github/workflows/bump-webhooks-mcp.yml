@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: bump-webhooks-mcp
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # No environment gate, so the schedule runs unattended; only the workflow token is used.
@@ -50,33 +50,30 @@ jobs:
           PREVIOUS: ${{ steps.bump.outputs.previous }}
           REVISION: ${{ steps.bump.outputs.revision }}
         run: |
-          branch="bump/webhooks-mcp-${SHORT}"
+          branch="bump/webhooks-mcp"
+          title="Bump webhooks-mcp to sha256:${SHORT}…"
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          rc=0; git ls-remote --exit-code --heads "$remote" "$branch" >/dev/null || rc=$?
-          [ "$rc" = 0 ] || [ "$rc" = 2 ] || { echo "::error::git ls-remote failed with exit code ${rc}"; exit 1; }
-          if [ "$rc" = 0 ]; then
-            prs="$(gh pr list --head "$branch" --state all --json state,number,url)"
-            live="$(jq -r '[.[] | select(.state == "OPEN" or .state == "MERGED")][0].url // empty' <<<"$prs")"
-            closed="$(jq -r '[.[] | select(.state == "CLOSED")][0].url // empty' <<<"$prs")"
-            if [ -n "$live" ]; then
-              echo "A bump for ${NEW_DIGEST} already has an open or merged PR: ${live}"
-              echo "A bump for \`${NEW_DIGEST}\` already has an open or merged PR: ${live}" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            elif [ -n "$closed" ]; then
-              echo "::warning::${NEW_DIGEST} was rejected (PR closed without merging: ${closed})."
-              echo "It is not proposed again while branch ${branch} exists."
-              echo "\`${NEW_DIGEST}\` was rejected (PR closed without merging: ${closed})." >> "$GITHUB_STEP_SUMMARY"
-              echo "Not proposed again while branch \`${branch}\` exists." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "Branch ${branch} exists without a PR; opening one."
-          else
-            git checkout -b "$branch"
-            git add inventories/prod/group_vars/all/versions.yml docs/versions.md
-            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "Bump webhooks-mcp to sha256:${SHORT}…"
-            git push "$remote" "HEAD:refs/heads/${branch}"
+          prs="$(gh pr list --head "$branch" --state all --limit 200 --json state,number,url,title)"
+          open_number="$(jq -r '[.[] | select(.state == "OPEN")][0].number // empty' <<<"$prs")"
+          open_url="$(jq -r '[.[] | select(.state == "OPEN")][0].url // empty' <<<"$prs")"
+          open_title="$(jq -r '[.[] | select(.state == "OPEN")][0].title // empty' <<<"$prs")"
+          rejected="$(jq -r --arg t "$title" '[.[] | select(.state == "CLOSED" and .title == $t)][0].url // empty' <<<"$prs")"
+          if [ -n "$open_number" ] && [ "$open_title" = "$title" ]; then
+            echo "${NEW_DIGEST} is already proposed: ${open_url}"
+            echo "\`${NEW_DIGEST}\` is already proposed: ${open_url}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          if [ -n "$rejected" ]; then
+            echo "::warning::${NEW_DIGEST} was rejected (PR closed without merging: ${rejected}); not proposed again."
+            echo "\`${NEW_DIGEST}\` was rejected (PR closed without merging: ${rejected}); not proposed again." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git checkout -B "$branch"
+          git add inventories/prod/group_vars/all/versions.yml docs/versions.md
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "$title"
+          # One branch, rebuilt from main each time: the force push is what lets the open PR be reused.
+          git push --force "$remote" "HEAD:refs/heads/${branch}"
           if [ "$REVISION" = unknown ]; then
             source="Source commit: unknown (this image has no org.opencontainers.image.revision label)."
           else
@@ -90,7 +87,15 @@ jobs:
             echo
             echo "Merging this deploys nothing: run deploy (tailnet) afterwards."
             echo "CI for this PR was started by the bump-webhooks-mcp workflow (PRs opened with the workflow token do not trigger it)."
+            echo "This branch is rebuilt by that workflow when a newer image is published; commits added to it by hand are lost."
           } > "$RUNNER_TEMP/bump-body.md"
-          url="$(gh pr create --base main --head "$branch" --title "Bump webhooks-mcp to sha256:${SHORT}…" --body-file "$RUNNER_TEMP/bump-body.md")"
+          if [ -n "$open_number" ]; then
+            gh pr edit "$open_number" --title "$title" --body-file "$RUNNER_TEMP/bump-body.md"
+            url="$open_url"
+            verb="Updated"
+          else
+            url="$(gh pr create --base main --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/bump-body.md")"
+            verb="Opened"
+          fi
           gh workflow run ci.yml --ref "$branch"
-          echo "Opened ${url}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "${verb} ${url}" | tee -a "$GITHUB_STEP_SUMMARY"

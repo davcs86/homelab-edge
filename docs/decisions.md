@@ -23,6 +23,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
   workflows, so `bump-webhooks-mcp` dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
   `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
+  It keeps one branch and one open PR (force-pushed and retitled for a newer digest), so runs never pile up PRs and a cancelled run heals on the next.
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```

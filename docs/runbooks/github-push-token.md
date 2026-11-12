@@ -6,7 +6,7 @@
 ruleset's bypass list, so they push with a fine-grained personal access token of the repository owner, who can. The error without
 it is `GH013: Changes must be made through a pull request`.
 
-A fourth, `bump-webhooks-mcp`, is not one of them: it pushes a branch (never `main`) with the workflow token.
+A fourth workflow, `bump-webhooks-mcp`, does not commit to `main`: it force-pushes its own branch `bump/webhooks-mcp` with the workflow token.
 
 ## One-time setup (repository owner)
 

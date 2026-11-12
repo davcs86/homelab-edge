@@ -202,7 +202,7 @@ class Lookups(unittest.TestCase):
             with self.assertRaises(bump.BumpError, msg=name):
                 bump.Registry(IMAGE, reg).tag_digest("main")
 
-    def test_manifest_that_is_not_json_is_an_error_for_the_tag_lookup_path_only_via_revision(self):
+    def test_manifest_that_is_not_json_gives_an_unknown_revision(self):
         reg = registry(extra={("GET", M + NEW): (200, {}, b"nope")})
         self.assertEqual(bump.Registry(IMAGE, reg).revision(NEW), "unknown")
 
@@ -340,7 +340,7 @@ class Workflow(unittest.TestCase):
         wf = load_wf()
         self.assertEqual(wf["permissions"], {"contents": "read"})
         self.assertEqual(bump_job()["permissions"], {"contents": "write", "pull-requests": "write", "actions": "write"})
-        self.assertEqual(wf["concurrency"], {"group": "bump-webhooks-mcp", "cancel-in-progress": False})
+        self.assertEqual(wf["concurrency"], {"group": "bump-webhooks-mcp", "cancel-in-progress": True})
         self.assertEqual(list(wf["jobs"]), ["bump"])
 
     def test_no_environment_and_only_the_workflow_token(self):
@@ -395,12 +395,12 @@ if "--body-file" in sys.argv:
     entry["body"] = open(sys.argv[sys.argv.index("--body-file") + 1]).read()
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps(entry) + "\\n")
-if name == "git" and "ls-remote" in sys.argv:
-    sys.exit(int(os.environ.get("FAKE_LS_REMOTE_RC", "2")))
 if name == "gh" and sys.argv[1:3] == ["pr", "list"]:
     print(os.environ.get("FAKE_PR_LIST", "[]"))
 if name == "gh" and sys.argv[1:3] == ["pr", "create"]:
     print("https://github.com/owner/repo/pull/7")
+if name == os.environ.get("FAKE_FAIL_CMD") and os.environ.get("FAKE_FAIL_VERB") in sys.argv:
+    sys.exit(1)
 """
 
 SECRET = "ghs_SECRET_TOKEN_VALUE"
@@ -410,20 +410,28 @@ class OpenPrStep(unittest.TestCase):
     """Runs the PR step with fake git and gh first in PATH."""
 
     NEW_FULL = "sha256:" + "ab" * 32
-    BRANCH = "bump/webhooks-mcp-abababababab"
+    BRANCH = "bump/webhooks-mcp"
+    TITLE = "Bump webhooks-mcp to sha256:abababababab…"
+    OTHER = "Bump webhooks-mcp to sha256:cdcdcdcdcdcd…"
     URL = f"https://x-access-token:{SECRET}@github.com/owner/repo.git"
 
-    def run_step(self, ls_rc="2", revision=REV, prs=None):
+    @staticmethod
+    def pr(state, number, title):
+        return {"state": state, "number": number, "url": f"https://github.com/owner/repo/pull/{number}", "title": title}
+
+    def run_step(self, revision=REV, prs=None, fail=None):
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
                 p = Path(d, n)
                 p.write_text(FAKE)
                 p.chmod(0o755)
             log, summary = Path(d, "log"), Path(d, "summary")
-            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "FAKE_LS_REMOTE_RC": ls_rc, "GH_TOKEN": SECRET,
+            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET,
                    "FAKE_PR_LIST": json.dumps(prs or []), "GITHUB_REPOSITORY": "owner/repo",
                    "SHORT": "abababababab", "NEW_DIGEST": self.NEW_FULL, "PREVIOUS": OLD, "REVISION": revision,
                    "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
+            if fail:
+                env["FAKE_FAIL_CMD"], env["FAKE_FAIL_VERB"] = fail
             r = subprocess.run(["bash", "-e", "-c", pr_step()["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
             calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
             return r, calls, summary.read_text() if summary.exists() else ""
@@ -435,41 +443,50 @@ class OpenPrStep(unittest.TestCase):
     def assert_nothing_written(self, calls):
         for verb in ("checkout", "commit", "push"):
             self.assertEqual(self.sub(calls, "git", verb), [], verb)
-        self.assertEqual(self.sub(calls, "gh", "create"), [])
-        self.assertEqual(self.sub(calls, "gh", "run"), [])
+        for verb in ("create", "edit", "run"):
+            self.assertEqual(self.sub(calls, "gh", verb), [], verb)
 
-    def assert_pr_and_ci(self, calls):
+    def assert_branch_rebuilt_and_ci_started(self, calls):
+        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-B", self.BRANCH])
+        commits = self.sub(calls, "git", "commit")
+        self.assertEqual(len(commits), 1)
+        self.assertIn("github-actions[bot]", " ".join(commits[0]["argv"]))
+        self.assertEqual(commits[0]["argv"][commits[0]["argv"].index("-m") + 1], self.TITLE)
+        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")], [["push", "--force", self.URL, f"HEAD:refs/heads/{self.BRANCH}"]])
+        self.assertEqual([c["argv"] for c in self.sub(calls, "gh", "run")], [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        kinds = [(c["cmd"], c["argv"][0]) for c in calls]
+        self.assertLess(kinds.index(("git", "push")), max(i for i, k in enumerate(kinds) if k == ("gh", "pr")))
+
+    def assert_created(self, calls):
+        self.assert_branch_rebuilt_and_ci_started(calls)
+        self.assertEqual(self.sub(calls, "gh", "edit"), [])
         prs = self.sub(calls, "gh", "create")
         self.assertEqual(len(prs), 1)
         argv = prs[0]["argv"]
         self.assertEqual(argv[argv.index("--base") + 1], "main")
         self.assertEqual(argv[argv.index("--head") + 1], self.BRANCH)
-        self.assertEqual([c["argv"] for c in self.sub(calls, "gh", "run")], [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        self.assertEqual(argv[argv.index("--title") + 1], self.TITLE)
         return prs[0]
 
-    def test_fresh_branch_gets_one_commit_one_push_one_pr_and_a_ci_dispatch(self):
+    def test_pr_lookup_is_for_the_one_bump_branch_in_every_state(self):
+        _, calls, _ = self.run_step()
+        argv = self.sub(calls, "gh", "list")[0]["argv"]
+        self.assertEqual(argv[argv.index("--head") + 1], self.BRANCH)
+        self.assertEqual(argv[argv.index("--state") + 1], "all")
+        self.assertEqual(argv[argv.index("--json") + 1], "state,number,url,title")
+
+    def test_no_pr_yet_gets_one_commit_one_push_one_pr_and_a_ci_dispatch(self):
         r, calls, summary = self.run_step()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-b", self.BRANCH])
-        commits = self.sub(calls, "git", "commit")
-        self.assertEqual(len(commits), 1)
-        self.assertIn("github-actions[bot]", " ".join(commits[0]["argv"]))
-        self.assertEqual(commits[0]["argv"][commits[0]["argv"].index("-m") + 1], "Bump webhooks-mcp to sha256:abababababab…")
-        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")], [["push", self.URL, f"HEAD:refs/heads/{self.BRANCH}"]])
-        pr = self.assert_pr_and_ci(calls)
-        for needle in (OLD, self.NEW_FULL, f"https://github.com/davcs86/webhooks-mcp/commit/{REV}", "deploy", "not verified"):
+        pr = self.assert_created(calls)
+        for needle in (OLD, self.NEW_FULL, f"https://github.com/davcs86/webhooks-mcp/commit/{REV}", "deploy", "not verified", "by hand are lost"):
             self.assertIn(needle, pr["body"])
-        self.assertIn("https://github.com/owner/repo/pull/7", summary)
-        kinds = [(c["cmd"], c["argv"][0]) for c in calls]
-        self.assertLess(kinds.index(("git", "push")), kinds.index(("gh", "pr")))
-        self.assertEqual(self.sub(calls, "gh", "list"), [])
+        self.assertIn("Opened https://github.com/owner/repo/pull/7", summary)
 
-    def test_ls_remote_uses_the_token_url_and_nothing_targets_main_or_leaks_the_token(self):
-        for kw in ({}, {"ls_rc": "0", "prs": []}):
-            r, calls, summary = self.run_step(**kw)
+    def test_nothing_targets_main_or_leaks_the_token(self):
+        for prs in ([], [self.pr("OPEN", 3, self.OTHER)]):
+            r, calls, summary = self.run_step(prs=prs)
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertEqual(self.sub(calls, "git", "ls-remote")[0]["argv"][:3], ["ls-remote", "--exit-code", "--heads"])
-            self.assertIn(self.URL, self.sub(calls, "git", "ls-remote")[0]["argv"])
             for c in self.sub(calls, "git", "push"):
                 self.assertFalse(any(a in ("main", "refs/heads/main", "HEAD:main", "HEAD:refs/heads/main") for a in c["argv"]))
             self.assertNotIn(SECRET, r.stdout + r.stderr + summary)
@@ -479,46 +496,63 @@ class OpenPrStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("/commit/", self.sub(calls, "gh", "create")[0]["body"])
 
-    def test_open_pr_for_the_branch_means_nothing_to_do(self):
-        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "OPEN", "number": 7, "url": "https://github.com/owner/repo/pull/7"}])
+    def test_open_pr_for_this_digest_means_nothing_to_do(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_nothing_written(calls)
         self.assertIn("https://github.com/owner/repo/pull/7", summary)
         self.assertIn("https://github.com/owner/repo/pull/7", r.stdout)
 
-    def test_merged_pr_for_the_branch_means_nothing_to_do(self):
-        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "MERGED", "number": 8, "url": "https://github.com/owner/repo/pull/8"}])
+    def test_open_pr_for_an_older_digest_is_reused_not_duplicated(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 3, self.OTHER), self.pr("MERGED", 2, "older")])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assert_nothing_written(calls)
-        self.assertIn("https://github.com/owner/repo/pull/8", summary)
+        self.assert_branch_rebuilt_and_ci_started(calls)
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        edits = self.sub(calls, "gh", "edit")
+        self.assertEqual(len(edits), 1)
+        argv = edits[0]["argv"]
+        self.assertEqual(argv[:3], ["pr", "edit", "3"])
+        self.assertEqual(argv[argv.index("--title") + 1], self.TITLE)
+        self.assertIn(self.NEW_FULL, edits[0]["body"])
+        self.assertIn("Updated https://github.com/owner/repo/pull/3", summary)
 
-    def test_a_closed_pr_is_a_rejected_digest_and_warns(self):
-        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "CLOSED", "number": 9, "url": "https://github.com/owner/repo/pull/9"}])
+    def test_a_merged_or_closed_pr_for_another_digest_does_not_block_a_new_pr(self):
+        r, calls, _ = self.run_step(prs=[self.pr("MERGED", 8, self.OTHER), self.pr("CLOSED", 9, self.OTHER)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("::warning::", r.stdout)
+        self.assert_created(calls)
+
+    def test_a_closed_pr_for_this_digest_is_a_rejection_and_warns(self):
+        r, calls, summary = self.run_step(prs=[self.pr("CLOSED", 9, self.TITLE)])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_nothing_written(calls)
         self.assertIn("::warning::", r.stdout)
-        self.assertIn("rejected", r.stdout)
         self.assertIn("rejected", summary)
         self.assertIn("https://github.com/owner/repo/pull/9", summary)
 
-    def test_an_open_pr_wins_over_an_older_closed_one(self):
-        r, calls, _ = self.run_step(ls_rc="0", prs=[{"state": "CLOSED", "number": 1, "url": "u1"}, {"state": "OPEN", "number": 2, "url": "u2"}])
+    def test_a_rejected_digest_does_not_overwrite_an_open_pr_for_another(self):
+        r, calls, _ = self.run_step(prs=[self.pr("CLOSED", 9, self.TITLE), self.pr("OPEN", 10, self.OTHER)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertIn("::warning::", r.stdout)
+
+    def test_an_open_pr_for_this_digest_wins_over_its_earlier_rejection(self):
+        r, calls, _ = self.run_step(prs=[self.pr("CLOSED", 1, self.TITLE), self.pr("OPEN", 2, self.TITLE)])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("::warning::", r.stdout)
         self.assert_nothing_written(calls)
 
-    def test_branch_without_a_pr_gets_its_pr_without_a_new_commit_or_push(self):
-        r, calls, summary = self.run_step(ls_rc="0", prs=[])
-        self.assertEqual(r.returncode, 0, r.stderr)
-        for verb in ("checkout", "commit", "push"):
-            self.assertEqual(self.sub(calls, "git", verb), [], verb)
-        self.assert_pr_and_ci(calls)
-        self.assertIn("https://github.com/owner/repo/pull/7", summary)
-
-    def test_a_failing_ls_remote_is_not_mistaken_for_a_missing_branch(self):
-        r, calls, _ = self.run_step(ls_rc="128")
+    def test_a_failing_pr_lookup_stops_before_anything_is_written(self):
+        r, calls, _ = self.run_step(fail=("gh", "list"))
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual(self.sub(calls, "git", "push"), [])
+        self.assert_nothing_written(calls)
+        self.assertNotIn(SECRET, r.stdout + r.stderr)
+
+    def test_a_failing_push_opens_no_pr_and_starts_no_ci(self):
+        r, calls, _ = self.run_step(fail=("git", "push"))
+        self.assertNotEqual(r.returncode, 0)
+        for verb in ("create", "edit", "run"):
+            self.assertEqual(self.sub(calls, "gh", verb), [], verb)
         self.assertNotIn(SECRET, r.stdout + r.stderr)
 
 
