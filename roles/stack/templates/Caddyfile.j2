@@ -211,6 +211,14 @@
 		import app_ui {args[0]}
 	}
 
+	@ui_health {
+		method GET HEAD
+		path /trader/api/health
+	}
+	handle @ui_health {
+		import app_ui {args[0]}
+	}
+
 	@assets {
 		method GET HEAD
 		path /_next/static/* /sw.js /manifest.webmanifest /icon-192.png /icon-512.png /icon-512-maskable.png /icon.svg

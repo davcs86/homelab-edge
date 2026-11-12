@@ -78,6 +78,16 @@ class Gatus(unittest.TestCase):
         self.assertIn(f"[BODY].resource == {base}/agent", ENDPOINTS["staging-mcp-oauth-metadata"]["conditions"])
         self.assertIn("[STATUS] == 401", ENDPOINTS["staging-mcp-requires-auth"]["conditions"])
 
+    def test_each_xstockstrat_ui_is_probed_publicly_for_its_health_body(self):
+        for name, host in (("xstockstrat-ui-public", V["public_app_hostname"]),
+                           ("xstockstrat-staging-ui-public", V["staging_public_hostname"])):
+            e = ENDPOINTS[name]
+            self.assertEqual(e["group"], "public", name)
+            self.assertEqual(e["url"], f"https://{host}/trader/api/health", name)
+            self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53", name)
+            self.assertNotIn("ignore-redirect", e["client"], name)
+            self.assertEqual(e["conditions"], ["[STATUS] == 200", "[BODY].status == ok", "[CERTIFICATE_EXPIRATION] > 336h"], name)
+
     def test_webhooks_mcp_is_probed_publicly_for_401_and_its_ingest_over_the_tailnet(self):
         mcp = ENDPOINTS["webhooks-mcp-requires-auth"]
         self.assertEqual((mcp["group"], mcp["method"], mcp["url"]), ("public", "POST", f"https://{V['webhooks_mcp_hostname']}/mcp"))

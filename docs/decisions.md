@@ -134,6 +134,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   that output reached the job log; the gate prints only `required variable … is missing a value` lines and a fixed message.
 - **Gatus follows redirects unless `ignore-redirect: true`.** A UI probe behind an auth redirect reported the login page's 200;
   every tailnet probe sets it; the xstockstrat UI probes hit `/trader/api/health` and also check `[BODY].status == ok`.
+- **The UI health path is the one UI route public on prod.** Gatus probes `xstockstrat[-staging].<domain>/trader/api/health` from 1.1.1.1 so a
+  Caddy, DNS or certificate fault shows up that the VM-direct (`*.ts.`) probes cannot see. Prod's `public_routes` therefore routes exactly
+  `GET|HEAD /trader/api/health` to the UI; every other `/trader` path stays 404 there (`scripts/caddy-routing-test.sh`).
 - **The Proxmox toolkit only touches what it marked.** Guests carry the `pve-setup` tag, backup jobs the `pve-setup-` id
   prefix, users the comment `created by pve-setup`; status shows them and undo removes only them, behind a typed
   confirmation. Config restore applies only the files the toolkit itself wrote: cluster config, network and fstab
