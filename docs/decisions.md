@@ -19,6 +19,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
+- **The webhooks-mcp bump PR is opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
+  Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
+  workflows, so `bump-webhooks-mcp` dispatches `ci` on the branch instead. Merging still deploys nothing.
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
