@@ -2,6 +2,7 @@
 """Pins the newest published image digest in versions.yml and docs/versions.md; the bump-webhooks-mcp workflow runs it."""
 import argparse
 import datetime
+import http.client
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import urllib.parse
 import urllib.request
 from collections import namedtuple
 
-DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 REVISION_LABEL = "org.opencontainers.image.revision"
 ACCEPT = ", ".join([
     "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -40,12 +41,13 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 def http_fetch(method, url, headers):
     opener = urllib.request.build_opener(SafeRedirect)
     try:
-        with opener.open(urllib.request.Request(url, method=method, headers=headers), timeout=30) as r:
-            return Response(r.status, {k.title(): v for k, v in r.headers.items()}, r.read())
-    except urllib.error.HTTPError as e:
-        return Response(e.code, {k.title(): v for k, v in e.headers.items()}, e.read())
-    except urllib.error.URLError as e:
-        raise BumpError(f"cannot reach {url}: {e.reason}") from e
+        try:
+            with opener.open(urllib.request.Request(url, method=method, headers=headers), timeout=30) as r:
+                return Response(r.status, {k.title(): v for k, v in r.headers.items()}, r.read())
+        except urllib.error.HTTPError as e:
+            return Response(e.code, {k.title(): v for k, v in e.headers.items()}, e.read())
+    except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, resets, InvalidURL
+        raise BumpError(f"cannot reach {url}: {getattr(e, 'reason', e)}") from e
 
 
 class Registry:
@@ -59,15 +61,27 @@ class Registry:
             r = self.fetch("GET", f"https://{self.host}/token?scope=repository:{self.repo}:pull", {})
             if r.status != 200:
                 raise BumpError(f"registry token request failed with HTTP {r.status}")
-            self._token = json.loads(r.body)["token"]
+            self._token = self._parse(r.body, "registry token response").get("token")
+            if not isinstance(self._token, str) or not self._token:
+                raise BumpError("registry token response has no token")
         return self.fetch(method, f"https://{self.host}/v2/{self.repo}/{path}",
                           {"Authorization": f"Bearer {self._token}", "Accept": accept})
+
+    @staticmethod
+    def _parse(body, what):
+        try:
+            doc = json.loads(body)
+        except ValueError as e:
+            raise BumpError(f"{what} is not JSON") from e
+        if not isinstance(doc, dict):
+            raise BumpError(f"{what} is not a JSON object")
+        return doc
 
     def _json(self, path):
         r = self._get("GET", path)
         if r.status != 200:
             raise BumpError(f"registry returned HTTP {r.status} for {path}")
-        return json.loads(r.body)
+        return self._parse(r.body, path)
 
     def tag_digest(self, tag):
         r = self._get("HEAD", f"manifests/{tag}")
@@ -76,28 +90,32 @@ class Registry:
         if r.status != 200:
             raise BumpError(f"registry returned HTTP {r.status} for tag '{tag}'")
         digest = r.headers.get("Docker-Content-Digest", "")
-        if not DIGEST_RE.match(digest):
+        if not DIGEST_RE.fullmatch(digest):
             raise BumpError(f"registry sent no usable Docker-Content-Digest for tag '{tag}'")
         return digest
 
     def verify_digest(self, digest):
-        if not DIGEST_RE.match(digest):
+        if not DIGEST_RE.fullmatch(digest):
             raise BumpError(f"digest must look like sha256:<64 hex>, got '{digest}'")
         if self._get("HEAD", f"manifests/{digest}").status != 200:
             raise BumpError(f"{digest} is not in the registry for {self.host}/{self.repo}")
         return digest
 
     def revision(self, digest):
-        manifest = self._json(f"manifests/{digest}")
-        if "manifests" in manifest:
-            amd64 = [m for m in manifest["manifests"]
-                     if m.get("platform", {}).get("os") == "linux" and m.get("platform", {}).get("architecture") == "amd64"]
-            if not amd64:
-                return "unknown"
-            manifest = self._json(f"manifests/{amd64[0]['digest']}")
-        config = self._json(f"blobs/{manifest['config']['digest']}")
-        label = ((config.get("config") or {}).get("Labels") or {}).get(REVISION_LABEL, "")
-        return label if re.fullmatch(r"[0-9a-f]{40}", label) else "unknown"
+        """The image's revision label, or 'unknown' on any failure: a missing label must not block a bump."""
+        try:
+            manifest = self._json(f"manifests/{digest}")
+            if "manifests" in manifest:
+                amd64 = [m for m in manifest["manifests"]
+                         if m.get("platform", {}).get("os") == "linux" and m.get("platform", {}).get("architecture") == "amd64"]
+                if not amd64:
+                    return "unknown"
+                manifest = self._json(f"manifests/{amd64[0]['digest']}")
+            config = self._json(f"blobs/{manifest['config']['digest']}")
+            label = config["config"]["Labels"][REVISION_LABEL]
+            return label if isinstance(label, str) and re.fullmatch(r"[0-9a-f]{40}", label) else "unknown"
+        except (BumpError, KeyError, TypeError, AttributeError, IndexError):
+            return "unknown"
 
 
 def _pin_lines(text, var):
@@ -163,7 +181,7 @@ def main(argv=None, fetch=http_fetch, today=None):
     except BumpError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    except OSError as e:
+    except (OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     pathlib.Path(a.versions).write_text(new_versions)

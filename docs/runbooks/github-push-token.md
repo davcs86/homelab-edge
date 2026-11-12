@@ -1,10 +1,12 @@
 # Letting workflows commit to main (push token)
 
-`main` only accepts pull requests (a repository ruleset). `bump-webhooks-mcp` is not one of them: it pushes a branch (never `main`) with the workflow token. Three workflows must still commit state they generate:
+`main` only accepts pull requests (a repository ruleset). Three workflows must still commit state they generate:
 `init-secrets` (`secrets/edge.sops.yaml`), `node-admin` → `mint-ci-key` (`secrets/ci-authkey.sops.yaml`) and `deploy`
 (`generated.yml`, `known_hosts`, the rotated `secrets/deploy-authkey.sops.yaml`). The built-in `GITHUB_TOKEN` cannot be put on a
 ruleset's bypass list, so they push with a fine-grained personal access token of the repository owner, who can. The error without
 it is `GH013: Changes must be made through a pull request`.
+
+A fourth, `bump-webhooks-mcp`, is not one of them: it pushes a branch (never `main`) with the workflow token.
 
 ## One-time setup (repository owner)
 

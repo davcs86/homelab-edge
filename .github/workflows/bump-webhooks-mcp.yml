@@ -22,13 +22,17 @@ concurrency:
 jobs:
   # No environment gate, so the schedule runs unattended; only the workflow token is used.
   bump:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false   # git uses GH_TOKEN in the URL, only in the PR step
       - name: Pin the newest image digest
         id: bump
         env:
@@ -47,22 +51,36 @@ jobs:
           REVISION: ${{ steps.bump.outputs.revision }}
         run: |
           branch="bump/webhooks-mcp-${SHORT}"
-          rc=0; git ls-remote --exit-code --heads origin "$branch" >/dev/null || rc=$?
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rc=0; git ls-remote --exit-code --heads "$remote" "$branch" >/dev/null || rc=$?
+          [ "$rc" = 0 ] || [ "$rc" = 2 ] || { echo "::error::git ls-remote failed with exit code ${rc}"; exit 1; }
           if [ "$rc" = 0 ]; then
-            echo "A bump for ${NEW_DIGEST} already exists (branch ${branch})."
-            echo "A bump for \`${NEW_DIGEST}\` is already open or merged (branch \`${branch}\`)." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            prs="$(gh pr list --head "$branch" --state all --json state,number,url)"
+            live="$(jq -r '[.[] | select(.state == "OPEN" or .state == "MERGED")][0].url // empty' <<<"$prs")"
+            closed="$(jq -r '[.[] | select(.state == "CLOSED")][0].url // empty' <<<"$prs")"
+            if [ -n "$live" ]; then
+              echo "A bump for ${NEW_DIGEST} already has an open or merged PR: ${live}"
+              echo "A bump for \`${NEW_DIGEST}\` already has an open or merged PR: ${live}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            elif [ -n "$closed" ]; then
+              echo "::warning::${NEW_DIGEST} was rejected (PR closed without merging: ${closed})."
+              echo "It is not proposed again while branch ${branch} exists."
+              echo "\`${NEW_DIGEST}\` was rejected (PR closed without merging: ${closed})." >> "$GITHUB_STEP_SUMMARY"
+              echo "Not proposed again while branch \`${branch}\` exists." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Branch ${branch} exists without a PR; opening one."
+          else
+            git checkout -b "$branch"
+            git add inventories/prod/group_vars/all/versions.yml docs/versions.md
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Bump webhooks-mcp to sha256:${SHORT}…"
+            git push "$remote" "HEAD:refs/heads/${branch}"
           fi
-          [ "$rc" = 2 ] || { echo "::error::git ls-remote failed with exit code ${rc}"; exit 1; }
-          git checkout -b "$branch"
-          git add inventories/prod/group_vars/all/versions.yml docs/versions.md
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -m "Bump webhooks-mcp to sha256:${SHORT}…"
-          git push origin "$branch"
           if [ "$REVISION" = unknown ]; then
             source="Source commit: unknown (this image has no org.opencontainers.image.revision label)."
           else
-            source="Source commit: https://github.com/davcs86/webhooks-mcp/commit/${REVISION}"
+            source="Source commit, as labelled by the image (not verified): https://github.com/davcs86/webhooks-mcp/commit/${REVISION}"
           fi
           {
             echo "Previous: \`${PREVIOUS}\`"

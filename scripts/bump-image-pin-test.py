@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Checks scripts/bump_image_pin.py (offline, injected registry) and the bump-webhooks-mcp workflow that runs it."""
 import contextlib
+import http.client
 import io
 import json
 import os
@@ -9,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -111,6 +114,16 @@ class Edits(unittest.TestCase):
             bump.replace_docs_row(DOCS + DOCS.splitlines()[-1] + "\n", VAR, IMAGE, NEW, REV, "2026-12-01")
 
 
+class RepoFiles(unittest.TestCase):
+    def test_the_real_docs_and_versions_files_are_accepted_by_the_edits(self):
+        docs = (ROOT / "docs/versions.md").read_text()
+        versions = (ROOT / "inventories/prod/group_vars/all/versions.yml").read_text()
+        old = bump.current_pin(versions, VAR, IMAGE)
+        self.assertNotEqual(bump.replace_docs_row(docs, VAR, IMAGE, NEW, REV, "2026-12-01"), docs)
+        self.assertIn(NEW, bump.replace_pin(versions, VAR, IMAGE, NEW))
+        self.assertNotIn(old, bump.replace_pin(versions, VAR, IMAGE, NEW))
+
+
 class Lookups(unittest.TestCase):
     def test_tag_digest_comes_from_the_header_with_a_bearer_token(self):
         reg = registry()
@@ -146,10 +159,73 @@ class Lookups(unittest.TestCase):
         self.assertEqual(bump.Registry(IMAGE, registry(label="not a sha")).revision(NEW), "unknown")
 
     def test_redirects_must_stay_on_https(self):
-        handler = bump.SafeRedirect()
-        req = type("R", (), {"full_url": "https://ghcr.io/x", "headers": {"Authorization": "Bearer t"}})()
+        req = urllib.request.Request("https://ghcr.io/x", headers={"Authorization": "Bearer t"})
         with self.assertRaises(bump.BumpError):
-            handler.redirect_request(req, None, 302, "Found", {}, "http://evil.test/x")
+            bump.SafeRedirect().redirect_request(req, None, 302, "Found", {}, "http://evil.test/x")
+
+    def test_authorization_is_dropped_on_a_cross_host_redirect_and_kept_on_the_same_host(self):
+        req = urllib.request.Request("https://ghcr.io/x", headers={"Authorization": "Bearer t"})
+        h = bump.SafeRedirect()
+        cross = h.redirect_request(req, None, 302, "Found", {}, "https://pkg-containers.example.test/y")
+        self.assertNotIn("Authorization", cross.headers)
+        same = h.redirect_request(req, None, 302, "Found", {}, "https://ghcr.io/z")
+        self.assertEqual(same.headers["Authorization"], "Bearer t")
+
+    def test_malformed_digest_headers_are_rejected(self):
+        for bad in (NEW + "\n", "sha256:abc", "", "md5:" + "a" * 64):
+            reg = registry(extra={("HEAD", M + "main"): (200, {"Docker-Content-Digest": bad}, b"")})
+            with self.assertRaisesRegex(bump.BumpError, "Docker-Content-Digest"):
+                bump.Registry(IMAGE, reg).tag_digest("main")
+
+    def test_a_trailing_newline_does_not_pass_digest_validation(self):
+        with self.assertRaises(bump.BumpError):
+            bump.Registry(IMAGE, registry()).verify_digest(NEW + "\n")
+
+    def test_index_without_linux_amd64_gives_unknown(self):
+        idx = {"manifests": [{"digest": "sha256:arm", "platform": {"os": "linux", "architecture": "arm64"}}]}
+        reg = registry(extra={("GET", M + NEW): (200, {}, idx)})
+        self.assertEqual(bump.Registry(IMAGE, reg).revision(NEW), "unknown")
+
+    def test_any_failure_reading_the_label_gives_unknown(self):
+        cases = {
+            "manifest without config": {("GET", M + "sha256:amd"): (200, {}, {})},
+            "blob not json": {("GET", B + "sha256:cfg"): (200, {}, b"<html>")},
+            "blob http 500": {("GET", B + "sha256:cfg"): (500, {}, b"")},
+            "labels is a list": {("GET", B + "sha256:cfg"): (200, {}, {"config": {"Labels": []}})},
+        }
+        for name, extra in cases.items():
+            self.assertEqual(bump.Registry(IMAGE, registry(extra=extra)).revision(NEW), "unknown", name)
+
+    def test_token_problems_are_errors(self):
+        for name, resp in {"not json": (200, {}, b"nope"), "no token": (200, {}, {}), "http 503": (503, {}, b"")}.items():
+            reg = registry(extra={("GET", TOKEN_URL): resp})
+            with self.assertRaises(bump.BumpError, msg=name):
+                bump.Registry(IMAGE, reg).tag_digest("main")
+
+    def test_manifest_that_is_not_json_is_an_error_for_the_tag_lookup_path_only_via_revision(self):
+        reg = registry(extra={("GET", M + NEW): (200, {}, b"nope")})
+        self.assertEqual(bump.Registry(IMAGE, reg).revision(NEW), "unknown")
+
+    def test_network_failures_become_bump_errors_with_a_timeout_on_every_call(self):
+        seen = []
+
+        class Opener:
+            def __init__(self, exc):
+                self.exc = exc
+
+            def open(self, request, timeout=None):
+                seen.append(timeout)
+                raise self.exc
+
+        orig = urllib.request.build_opener
+        try:
+            for exc in (urllib.error.URLError("down"), TimeoutError("slow"), http.client.InvalidURL("bad"), ConnectionResetError("reset")):
+                urllib.request.build_opener = lambda *a, e=exc: Opener(e)
+                with self.assertRaises(bump.BumpError, msg=repr(exc)):
+                    bump.http_fetch("GET", "https://ghcr.io/x", {})
+        finally:
+            urllib.request.build_opener = orig
+        self.assertTrue(seen and all(t for t in seen))
 
 
 class Cli(unittest.TestCase):
@@ -216,6 +292,21 @@ class Cli(unittest.TestCase):
         rc, _, err = self.run_cli("--digest", NEW)
         self.assertEqual((rc, self.v.read_text()), (0, VERSIONS.replace(OLD, NEW)))
 
+    def test_a_network_error_is_one_error_line_and_writes_nothing(self):
+        def down(method, url, headers):
+            raise bump.BumpError("cannot reach registry: down")
+
+        rc, _, err = self.run_cli(reg=down)
+        self.assertEqual((rc, self.v.read_text(), self.d.read_text()), (1, VERSIONS, DOCS))
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertFalse(self.out.exists())
+
+    def test_a_failed_label_lookup_does_not_fail_the_bump(self):
+        rc, _, err = self.run_cli(reg=registry(extra={("GET", B + "sha256:cfg"): (500, {}, b"")}))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.outputs()["revision"], "unknown")
+        self.assertIn("(commit `unknown`, 2026-12-01)", self.d.read_text())
+
     def test_unpublished_main_tag_exits_nonzero_with_a_clear_line(self):
         rc, _, err = self.run_cli(reg=registry(extra={("HEAD", M + "main"): (404, {}, b"")}))
         self.assertEqual(rc, 1)
@@ -258,6 +349,15 @@ class Workflow(unittest.TestCase):
         self.assertEqual(set(re.findall(r"secrets\.(\w+)", text)), {"GITHUB_TOKEN"})
         self.assertNotIn("PUSH_TOKEN", text)
 
+    def test_job_runs_only_from_main_and_is_time_boxed(self):
+        self.assertEqual(bump_job()["if"], "github.ref == 'refs/heads/main'")
+        self.assertEqual(bump_job()["timeout-minutes"], 10)
+
+    def test_checkout_keeps_no_credentials_and_the_token_is_never_echoed(self):
+        checkout = next(s for s in bump_job()["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        self.assertNotRegex(pr_step()["run"], r"(echo|printf|set -x)[^\n]*GH_TOKEN")
+
     def test_every_action_is_pinned_to_a_full_sha(self):
         uses = re.findall(r"uses:\s*(\S+)", WF.read_text())
         self.assertTrue(uses)
@@ -297,24 +397,31 @@ with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps(entry) + "\\n")
 if name == "git" and "ls-remote" in sys.argv:
     sys.exit(int(os.environ.get("FAKE_LS_REMOTE_RC", "2")))
+if name == "gh" and sys.argv[1:3] == ["pr", "list"]:
+    print(os.environ.get("FAKE_PR_LIST", "[]"))
 if name == "gh" and sys.argv[1:3] == ["pr", "create"]:
     print("https://github.com/owner/repo/pull/7")
 """
+
+SECRET = "ghs_SECRET_TOKEN_VALUE"
 
 
 class OpenPrStep(unittest.TestCase):
     """Runs the PR step with fake git and gh first in PATH."""
 
     NEW_FULL = "sha256:" + "ab" * 32
+    BRANCH = "bump/webhooks-mcp-abababababab"
+    URL = f"https://x-access-token:{SECRET}@github.com/owner/repo.git"
 
-    def run_step(self, ls_rc="2", revision=REV):
+    def run_step(self, ls_rc="2", revision=REV, prs=None):
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
                 p = Path(d, n)
                 p.write_text(FAKE)
                 p.chmod(0o755)
             log, summary = Path(d, "log"), Path(d, "summary")
-            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "FAKE_LS_REMOTE_RC": ls_rc, "GH_TOKEN": "t",
+            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "FAKE_LS_REMOTE_RC": ls_rc, "GH_TOKEN": SECRET,
+                   "FAKE_PR_LIST": json.dumps(prs or []), "GITHUB_REPOSITORY": "owner/repo",
                    "SHORT": "abababababab", "NEW_DIGEST": self.NEW_FULL, "PREVIOUS": OLD, "REVISION": revision,
                    "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
             r = subprocess.run(["bash", "-e", "-c", pr_step()["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
@@ -325,46 +432,94 @@ class OpenPrStep(unittest.TestCase):
     def sub(calls, cmd, verb):
         return [c for c in calls if c["cmd"] == cmd and verb in c["argv"]]
 
-    def test_opens_one_branch_commit_push_pr_and_ci_dispatch(self):
-        r, calls, summary = self.run_step()
-        self.assertEqual(r.returncode, 0, r.stderr)
-        branch = "bump/webhooks-mcp-abababababab"
-        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-b", branch])
-        commits = self.sub(calls, "git", "commit")
-        self.assertEqual(len(commits), 1)
-        self.assertIn("github-actions[bot]", " ".join(commits[0]["argv"]))
-        self.assertEqual(commits[0]["argv"][commits[0]["argv"].index("-m") + 1], "Bump webhooks-mcp to sha256:abababababab…")
-        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")], [["push", "origin", branch]])
+    def assert_nothing_written(self, calls):
+        for verb in ("checkout", "commit", "push"):
+            self.assertEqual(self.sub(calls, "git", verb), [], verb)
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        self.assertEqual(self.sub(calls, "gh", "run"), [])
+
+    def assert_pr_and_ci(self, calls):
         prs = self.sub(calls, "gh", "create")
         self.assertEqual(len(prs), 1)
         argv = prs[0]["argv"]
         self.assertEqual(argv[argv.index("--base") + 1], "main")
-        self.assertEqual(argv[argv.index("--head") + 1], branch)
-        for needle in (OLD, self.NEW_FULL, f"https://github.com/davcs86/webhooks-mcp/commit/{REV}", "deploy"):
-            self.assertIn(needle, prs[0]["body"])
-        self.assertEqual([c["argv"] for c in self.sub(calls, "gh", "run")], [["workflow", "run", "ci.yml", "--ref", branch]])
+        self.assertEqual(argv[argv.index("--head") + 1], self.BRANCH)
+        self.assertEqual([c["argv"] for c in self.sub(calls, "gh", "run")], [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        return prs[0]
+
+    def test_fresh_branch_gets_one_commit_one_push_one_pr_and_a_ci_dispatch(self):
+        r, calls, summary = self.run_step()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-b", self.BRANCH])
+        commits = self.sub(calls, "git", "commit")
+        self.assertEqual(len(commits), 1)
+        self.assertIn("github-actions[bot]", " ".join(commits[0]["argv"]))
+        self.assertEqual(commits[0]["argv"][commits[0]["argv"].index("-m") + 1], "Bump webhooks-mcp to sha256:abababababab…")
+        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")], [["push", self.URL, f"HEAD:refs/heads/{self.BRANCH}"]])
+        pr = self.assert_pr_and_ci(calls)
+        for needle in (OLD, self.NEW_FULL, f"https://github.com/davcs86/webhooks-mcp/commit/{REV}", "deploy", "not verified"):
+            self.assertIn(needle, pr["body"])
         self.assertIn("https://github.com/owner/repo/pull/7", summary)
-        order = [c["argv"][0] for c in calls if c["cmd"] == "git"] + [c["argv"][0] for c in calls if c["cmd"] == "gh"]
-        self.assertEqual(order.count("push"), 1)
-        self.assertLess([(c["cmd"], c["argv"][0]) for c in calls].index(("git", "push")), [(c["cmd"], c["argv"][0]) for c in calls].index(("gh", "pr")))
+        kinds = [(c["cmd"], c["argv"][0]) for c in calls]
+        self.assertLess(kinds.index(("git", "push")), kinds.index(("gh", "pr")))
+        self.assertEqual(self.sub(calls, "gh", "list"), [])
+
+    def test_ls_remote_uses_the_token_url_and_nothing_targets_main_or_leaks_the_token(self):
+        for kw in ({}, {"ls_rc": "0", "prs": []}):
+            r, calls, summary = self.run_step(**kw)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.sub(calls, "git", "ls-remote")[0]["argv"][:3], ["ls-remote", "--exit-code", "--heads"])
+            self.assertIn(self.URL, self.sub(calls, "git", "ls-remote")[0]["argv"])
+            for c in self.sub(calls, "git", "push"):
+                self.assertFalse(any(a in ("main", "refs/heads/main", "HEAD:main", "HEAD:refs/heads/main") for a in c["argv"]))
+            self.assertNotIn(SECRET, r.stdout + r.stderr + summary)
 
     def test_unknown_revision_has_no_commit_link(self):
         r, calls, _ = self.run_step(revision="unknown")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("/commit/", self.sub(calls, "gh", "create")[0]["body"])
 
-    def test_skips_when_the_branch_already_exists_on_the_remote(self):
-        r, calls, summary = self.run_step(ls_rc="0")
+    def test_open_pr_for_the_branch_means_nothing_to_do(self):
+        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "OPEN", "number": 7, "url": "https://github.com/owner/repo/pull/7"}])
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual([c["cmd"] for c in calls], ["git"])
-        self.assertIn("ls-remote", calls[0]["argv"])
-        self.assertIn("already", r.stdout)
-        self.assertIn("already", summary)
+        self.assert_nothing_written(calls)
+        self.assertIn("https://github.com/owner/repo/pull/7", summary)
+        self.assertIn("https://github.com/owner/repo/pull/7", r.stdout)
+
+    def test_merged_pr_for_the_branch_means_nothing_to_do(self):
+        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "MERGED", "number": 8, "url": "https://github.com/owner/repo/pull/8"}])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertIn("https://github.com/owner/repo/pull/8", summary)
+
+    def test_a_closed_pr_is_a_rejected_digest_and_warns(self):
+        r, calls, summary = self.run_step(ls_rc="0", prs=[{"state": "CLOSED", "number": 9, "url": "https://github.com/owner/repo/pull/9"}])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertIn("::warning::", r.stdout)
+        self.assertIn("rejected", r.stdout)
+        self.assertIn("rejected", summary)
+        self.assertIn("https://github.com/owner/repo/pull/9", summary)
+
+    def test_an_open_pr_wins_over_an_older_closed_one(self):
+        r, calls, _ = self.run_step(ls_rc="0", prs=[{"state": "CLOSED", "number": 1, "url": "u1"}, {"state": "OPEN", "number": 2, "url": "u2"}])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("::warning::", r.stdout)
+        self.assert_nothing_written(calls)
+
+    def test_branch_without_a_pr_gets_its_pr_without_a_new_commit_or_push(self):
+        r, calls, summary = self.run_step(ls_rc="0", prs=[])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for verb in ("checkout", "commit", "push"):
+            self.assertEqual(self.sub(calls, "git", verb), [], verb)
+        self.assert_pr_and_ci(calls)
+        self.assertIn("https://github.com/owner/repo/pull/7", summary)
 
     def test_a_failing_ls_remote_is_not_mistaken_for_a_missing_branch(self):
         r, calls, _ = self.run_step(ls_rc="128")
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.sub(calls, "git", "push"), [])
+        self.assertNotIn(SECRET, r.stdout + r.stderr)
 
 
 class CiWorkflow(unittest.TestCase):
