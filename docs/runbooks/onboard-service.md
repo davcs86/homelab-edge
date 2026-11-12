@@ -15,7 +15,8 @@ Migrating from the old `tag:app`: no node may still carry `tag:app` when the pol
 `node-admin → list-devices`; if one does, re-tag it to `tag:xstockstrat` first.
 The edge's Caddy and Gatus upstreams resolve `xstockstrat.<ts domain>` (and `xstockstrat-staging` for staging): the VM
 must be registered under that hostname before the deploy. Gatus probes each by its tag name (`home_xstockstrat-ui`,
-`home_xstockstrat-agent`, `home_xstockstrat-staging-ui`, `home_xstockstrat-staging-agent`) and alerts through ntfy; a probe for a
+`home_xstockstrat-agent`, `home_xstockstrat-staging-ui`, `home_xstockstrat-staging-agent`) and alerts through ntfy. Each environment's public name is also probed from the internet
+(`public_xstockstrat-ui-public`, `public_xstockstrat-staging-ui-public`: `/trader/api/health`, 200 + `status == ok`); a probe for a
 VM that does not exist yet alerts after 3 failed minutes, so register the node first. Renaming a probe starts a new history;
 the old key stays in Gatus's database and nowhere on the status page.
 

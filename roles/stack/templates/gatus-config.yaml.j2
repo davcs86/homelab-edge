@@ -94,6 +94,28 @@ endpoints:
       - "[STATUS] == 404"
     alerts: [{type: ntfy}]
 
+  - name: xstockstrat-ui-public
+    group: public
+    url: https://{{ public_app_hostname }}/trader/api/health
+    interval: 2m
+    <<: *public
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == ok"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: xstockstrat-staging-ui-public
+    group: public
+    url: https://{{ staging_public_hostname }}/trader/api/health
+    interval: 2m
+    <<: *public
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == ok"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
   - name: staging-mcp-oauth-metadata
     group: public
     url: https://{{ staging_public_hostname }}/.well-known/oauth-protected-resource/agent

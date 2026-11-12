@@ -39,8 +39,8 @@ flowchart LR
 ```
 
 Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
-(`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint
-and the OAuth login routes; tailnet clients get the whole app through the same name (split-horizon DNS).
+(`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint,
+the OAuth login routes and the read-only `GET /trader/api/health` that Gatus probes; tailnet clients get the whole app through the same name (split-horizon DNS).
 The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: the whole app to the internet behind the same per-IP rate limits as prod, and unlimited to the tailnet. Every 443 hostname is an entry in `edge_sites`.
 
 ## Repository map
