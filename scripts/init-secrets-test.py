@@ -63,8 +63,9 @@ class FillMissing(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: v for k, v in got.items() if k in OLD}, OLD)
-        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token"})
+        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key"})
         self.assertRegex(got["gatus_heartbeat_db_token"], r"^[A-Za-z0-9_-]{43}$")
+        self.assertRegex(got["webhooks_mcp_auth_key"], r"^[A-Za-z0-9_-]{48}$")
         self.assertIn("added gatus_heartbeat_db_token", r.stdout)
 
     def test_the_new_value_is_never_printed_or_left_in_plaintext(self):
@@ -121,7 +122,7 @@ class FillMissing(unittest.TestCase):
         got = self.read()
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
-                         {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password",
+                         {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password", "webhooks_mcp_auth_key",
                           *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")
@@ -175,6 +176,9 @@ class Registry(unittest.TestCase):
         full = set(re.findall(r'^        "([a-z_]+)": ', src, re.M))  # operator keys written in main()
         self.assertEqual(full, set(init_secrets.OPERATOR_KEYS))
         self.assertEqual(set(init_secrets.GENERATED) & set(init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS), set())
+
+    def test_the_webhooks_mcp_key_is_48_url_safe_characters(self):
+        self.assertRegex(init_secrets.GENERATED["webhooks_mcp_auth_key"](), r"^[A-Za-z0-9_-]{48}$")
 
     def test_the_full_generator_writes_every_certificate_set(self):
         src = SCRIPT.read_text()

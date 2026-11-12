@@ -11,6 +11,7 @@
     - {path: "{{ edge_root }}/caddyfile", mode: "0755"}
     - {path: "{{ edge_root }}/ntfy", mode: "0750"}
     - {path: "{{ edge_root }}/gatus", mode: "0750"}
+    - {path: "{{ edge_root }}/webhooks-mcp", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
@@ -91,6 +92,21 @@
     mode: "0600"
   no_log: true
   notify: Restart gatus
+
+# ---------- webhooks-mcp ----------
+# Compose recreates the container when this env file's content changes.
+- name: Webhooks-mcp secrets
+  ansible.builtin.copy:
+    dest: "{{ edge_root }}/webhooks-mcp/webhooks-mcp.env"
+    content: |
+      MCP_AUTH_KEY={{ edge_secrets.webhooks_mcp_auth_key }}
+      INGEST_BASE_URLS={{ _ingest_base_urls | to_json }}
+    mode: "0600"
+  vars:
+    _ingest_base_urls:
+      default: "https://{{ webhooks_ingest_hostname }}"
+      staging: "https://{{ webhooks_ingest_hostname }}:{{ staging_edge_port }}"
+  no_log: true
 
 - name: Compose file
   ansible.builtin.template:
@@ -174,9 +190,10 @@
 
 - name: Publicly trusted certificates for every site, with ACME diagnostics on failure
   vars:
-    # One SNI per certificate Caddy manages; status.* and staging are served by the *.{{ magicdns_base_domain }} wildcard.
+    # One SNI per certificate Caddy manages; status.*, webhooks.* and staging are served by the *.{{ magicdns_base_domain }} wildcard.
     _cert_check: >-
-      {{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ status_hostname }}
+      {{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ public_app_hostname }} {{ webhooks_mcp_hostname }}
+      {{ status_hostname }} {{ webhooks_ingest_hostname }}
       {{ staging_ui_hostname }}:{{ staging_edge_port }}
   block:
     - name: Probe the certificates
@@ -231,11 +248,18 @@
       changed_when: false
       failed_when: false
 
+    # Unfiltered on purpose: two failed deploys printed nothing through a grep, so show what the commands return.
     - name: Caddy TLS/ACME log lines
-      ansible.builtin.shell: >-
-        set -o pipefail;
-        docker compose -f {{ edge_root }}/compose.yml logs --no-color --since 30m caddy
-        | grep -iE 'acme|challenge|desec|certificate|obtain|solv|error' | tail -n 60
+      ansible.builtin.shell: |
+        set -o pipefail
+        c="docker compose -f {{ edge_root }}/compose.yml"
+        echo "## caddy container"; $c ps --format '{{ '{{' }}.Name{{ '}}' }} {{ '{{' }}.State{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}' caddy 2>&1
+        echo "## names in the loaded TLS automation policies"
+        curl -fsS --max-time 5 http://localhost:2019/config/apps/tls/automation/policies 2>&1 \
+          | python3 -c 'import json,sys; [print(" ", p.get("subjects")) for p in json.load(sys.stdin)]' 2>&1
+        echo "## caddy log, last 30 min: $($c logs --no-color --since 30m caddy 2>&1 | wc -l) lines; ACME-related:"
+        $c logs --no-color --since 30m caddy 2>&1 | grep -iE 'acme|challenge|desec|certificate|obtain|solv|error' | tail -n 40
+        echo "## caddy log, last 25 lines unfiltered"; $c logs --no-color --tail 25 caddy 2>&1
       args:
         executable: /bin/bash
       register: _caddy_acme_log

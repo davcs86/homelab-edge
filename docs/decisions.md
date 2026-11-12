@@ -31,9 +31,27 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 
 ## Known traps
 
+- **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
+  `webhooks_ingest_hostname`, `webhooks.ts.<domain>`) has no auth and must stay tailnet-only. The `*.ts:8443` site is otherwise open to the
+  internet, so the ingest handle there sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new
+  route in that site must not copy the handle without it.
+  - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
+  - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
+    The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
+  - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
+    container would exit at start.
+  - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
+  - The image pin is by digest only; see `docs/versions.md`.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.
+- **A new public hostname needs its own policy on the deSEC token, before the deploy.** The token may write only
+  the labels it has a policy for, and Caddy reads it from `desec_token` in the SOPS file, not from the GitHub secret:
+  a freshly created token is not on the edge at all. Two deploys failed at the certificate check for
+  `webhooks-mcp` this way. Add the policy to the existing token (`docs/runbooks/acme-token.md` § Add a name).
+- **The deploy's certificate-failure evidence printed no Caddy lines** through a filtered `grep`, with and without
+  `2>&1`; the rescue block now prints Caddy's state, its loaded TLS names and its last log lines unfiltered.
 - **DNS-01 needs `propagation_delay`.** deSEC's anycast nodes converge after Caddy's own check passes; Let's
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. `propagation_delay 2m` / `propagation_timeout 10m` in the `(acme)` snippet fixes it.
