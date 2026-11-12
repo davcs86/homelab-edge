@@ -1,4 +1,35 @@
-# Rotate the ACME token
+# The ACME token
+
+Caddy proves domain ownership through deSEC with one token. Caddy reads it from `desec_token` in
+`secrets/edge.sops.yaml`; the GitHub secret `DESEC_TOKEN` only seeds that file when it is first generated, so
+changing the GitHub secret alone changes nothing on the edge.
+
+## Add a name (required before the first deploy of a new public hostname)
+
+Each public hostname with its own certificate has its own label in `acme.natanddavehouse.com` (the `import acme
+<label>.{{ acme_zone }}` line of its site in the Caddyfile), and the token may write only the labels it has a policy
+for. Add the policy to the **existing** token: it is already on the edge, so no secret changes. In the deSEC web UI
+create a temporary token with *Can manage tokens* (no subnet lock needed: it is the one your machine authenticates
+with), then (`$T` = that temporary token, `$LABEL` = the new label, e.g. `webhooks-mcp`):
+
+```sh
+API=https://desec.io/api/v1/auth/tokens
+curl -fsS $API/ -H "Authorization: Token $T" | jq -r '.[] | "\(.id) \(.name) \(.allowed_subnets)"'   # pick the Caddy token
+ID=<its id>
+curl -fsS -X POST $API/$ID/policies/rrsets/ -H "Authorization: Token $T" -H 'Content-Type: application/json' \
+  -d "{\"domain\":\"acme.natanddavehouse.com\",\"subname\":\"$LABEL\",\"type\":\"TXT\",\"perm_write\":true}"
+curl -fsS $API/$ID/policies/rrsets/ -H "Authorization: Token $T" | jq -c '.[]'   # the new label is listed
+```
+
+The subname is the bare label (not `_acme-challenge.<label>`, not the full hostname) and the domain is the delegated
+zone, not `natanddavehouse.com`. Leave the Caddy token's `allowed_subnets` alone: they lock it to the edge, and the
+edge is still the only caller. Delete the temporary token, then run **deploy** (`tailnet`).
+
+Without the policy the deploy fails at "Every site presents a publicly trusted certificate" after about 15 minutes,
+and the roles after `stack` do not run. Creating a new token instead does not help until `desec_token` is replaced
+(below), and a new token needs every label, not only the new one.
+
+## Rotate
 
 The token lives in deSEC, can write only `TXT` at `hs`, `xstockstrat`, `webhooks-mcp`, `ts` in `acme.natanddavehouse.com`, and is
 accepted only from the droplet's **egress** addresses. These are not the reserved IP: DigitalOcean sends outbound
