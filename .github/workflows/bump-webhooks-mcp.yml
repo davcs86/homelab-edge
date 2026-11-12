@@ -1,0 +1,78 @@
+---
+name: bump-webhooks-mcp
+
+# Opens a PR that pins the newest webhooks-mcp image digest; merging deploys nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: Pin this digest instead of the newest (sha256:...)
+        required: false
+        default: ""
+  schedule:
+    - cron: "23 15 * * *"   # daily
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-webhooks-mcp
+  cancel-in-progress: false
+
+jobs:
+  # No environment gate, so the schedule runs unattended; only the workflow token is used.
+  bump:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Pin the newest image digest
+        id: bump
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: python3 scripts/bump_image_pin.py --var webhooks_mcp_image --image ghcr.io/davcs86/webhooks-mcp ${DIGEST:+--digest "$DIGEST"}
+      - name: Already pinned
+        if: steps.bump.outputs.changed == 'false'
+        run: echo "webhooks-mcp pin is up to date." >> "$GITHUB_STEP_SUMMARY"
+      - name: Open the pull request and start CI on its branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHORT: ${{ steps.bump.outputs.short }}
+          NEW_DIGEST: ${{ steps.bump.outputs.digest }}
+          PREVIOUS: ${{ steps.bump.outputs.previous }}
+          REVISION: ${{ steps.bump.outputs.revision }}
+        run: |
+          branch="bump/webhooks-mcp-${SHORT}"
+          rc=0; git ls-remote --exit-code --heads origin "$branch" >/dev/null || rc=$?
+          if [ "$rc" = 0 ]; then
+            echo "A bump for ${NEW_DIGEST} already exists (branch ${branch})."
+            echo "A bump for \`${NEW_DIGEST}\` is already open or merged (branch \`${branch}\`)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ "$rc" = 2 ] || { echo "::error::git ls-remote failed with exit code ${rc}"; exit 1; }
+          git checkout -b "$branch"
+          git add inventories/prod/group_vars/all/versions.yml docs/versions.md
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Bump webhooks-mcp to sha256:${SHORT}…"
+          git push origin "$branch"
+          if [ "$REVISION" = unknown ]; then
+            source="Source commit: unknown (this image has no org.opencontainers.image.revision label)."
+          else
+            source="Source commit: https://github.com/davcs86/webhooks-mcp/commit/${REVISION}"
+          fi
+          {
+            echo "Previous: \`${PREVIOUS}\`"
+            echo "New: \`${NEW_DIGEST}\`"
+            echo
+            echo "$source"
+            echo
+            echo "Merging this deploys nothing: run deploy (tailnet) afterwards."
+            echo "CI for this PR was started by the bump-webhooks-mcp workflow (PRs opened with the workflow token do not trigger it)."
+          } > "$RUNNER_TEMP/bump-body.md"
+          url="$(gh pr create --base main --head "$branch" --title "Bump webhooks-mcp to sha256:${SHORT}…" --body-file "$RUNNER_TEMP/bump-body.md")"
+          gh workflow run ci.yml --ref "$branch"
+          echo "Opened ${url}" | tee -a "$GITHUB_STEP_SUMMARY"
