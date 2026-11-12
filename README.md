@@ -59,7 +59,7 @@ The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: t
 | `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, `compose.yml` |
 | `inventories/prod/group_vars/all/` | `main.yml` (settings), `versions.yml` (every pin; rationale in `docs/versions.md`), `generated.yml` (reserved IP) |
 | `secrets/` | SOPS files only (`secrets/README.md`) |
-| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin` |
+| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `bump-webhooks-mcp` |
 
 ## Rebuild from scratch
 
@@ -74,6 +74,8 @@ the VPS waits for approval on the `production` environment.
    `DEPLOY_SSH_KEY`, `SOPS_AGE_SSH_PRIVATE_KEY`.
    **Settings → Secrets and variables → Actions → Repository secrets**: `DIGITALOCEAN_READ_TOKEN`, a second DO token
    with the single custom scope `firewall:read`. The daily **verify** schedule uses it without the `production` gate.
+   **Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests"**:
+   tick it once; the daily **bump-webhooks-mcp** workflow opens its PR with the workflow token. Without it the PR step fails with a clear GitHub error.
 3. **Actions → deploy → `provision`**. Creates the droplet and reserved IPv4 and commits `generated.yml`.
 4. **DNS and tokens** (needs the reserved IP from `generated.yml`):
    - Cloudflare (`natanddavehouse.com`, all **DNS-only / grey cloud**):

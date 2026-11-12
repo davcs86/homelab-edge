@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:   # the bump workflow starts CI on its branch
 
 permissions:
   contents: read
@@ -35,6 +36,8 @@ jobs:
         run: python3 scripts/app-deploy-template-test.py
       - name: Workflows that commit to main (App token only when needed, key confined to production)
         run: python3 scripts/workflow-push-test.py
+      - name: Image-pin bump script and its workflow (offline, fake registry, git and gh)
+        run: python3 scripts/bump-image-pin-test.py
       - name: Every secret key the roles read exists in secrets/edge.sops.yaml
         run: python3 scripts/secrets-keys-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
