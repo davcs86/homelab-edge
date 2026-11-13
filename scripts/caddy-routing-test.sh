@@ -107,7 +107,7 @@ wait_for_line() { # <ERE> <command printing the log>...; polls for up to ~10 s
   done
   return 1
 }
-# shellcheck disable=SC2329  # invoked through wait_for_line
+# shellcheck disable=SC2317,SC2329  # invoked through wait_for_line
 access_logs() { docker exec caddy-routing-test sh -c 'cat /var/log/caddy/*.access.log'; }
 
 u="https://$app_host"
