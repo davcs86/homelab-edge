@@ -85,6 +85,33 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
+  - name: commsgun-api
+    group: edge
+    url: https://{{ commsgun_enqueue_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-backlog
+    group: edge
+    url: https://{{ commsgun_enqueue_hostname }}/healthz/backlog
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-ui
+    group: edge
+    url: https://{{ commsgun_ui_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
   - name: public-default-404
     group: public
     url: https://{{ public_app_hostname }}/
