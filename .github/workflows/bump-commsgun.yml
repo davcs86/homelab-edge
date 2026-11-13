@@ -58,15 +58,26 @@ jobs:
           API_REV: ${{ steps.api.outputs.revision }}
           UI_REV: ${{ steps.ui.outputs.revision }}
         run: |
+          # More than one docs row for an image is ambiguous: its commit is then unknown.
           pinned_commit() {
-            grep -F "\`$1\`" docs/versions.md | sed -nE 's/.*commit `([0-9a-f]{7}|unknown)`.*/\1/p'
+            local found
+            found="$(grep -F "\`$1\`" docs/versions.md | sed -nE 's/.*commit `([0-9a-f]{7}|unknown)`.*/\1/p')"
+            case "$found" in *$'\n'*) echo unknown ;; *) echo "$found" ;; esac
+          }
+          # A 7-character value is the docs row's: only then is a prefix compared.
+          same_commit() {
+            case "${#API_REV}:${#UI_REV}" in
+              40:40) [ "$API_REV" = "$UI_REV" ] ;;
+              7:40 | 40:7) [ "${API_REV:0:7}" = "${UI_REV:0:7}" ] ;;
+              *) false ;;
+            esac
           }
           pinned_digest() {
             sed -nE "s/^$1: \".*@(sha256:[0-9a-f]{64})\"\$/\\1/p" inventories/prod/group_vars/all/versions.yml
           }
           API_REV="${API_REV:-$(pinned_commit commsgun_api_image)}"
           UI_REV="${UI_REV:-$(pinned_commit commsgun_ui_image)}"
-          if [ -z "$API_REV" ] || [ -z "$UI_REV" ] || [ "$API_REV" = unknown ] || [ "$UI_REV" = unknown ] || [ "${API_REV:0:7}" != "${UI_REV:0:7}" ]; then
+          if [ -z "$API_REV" ] || [ -z "$UI_REV" ] || [ "$API_REV" = unknown ] || [ "$UI_REV" = unknown ] || ! same_commit; then
             echo "::warning::commsgun images are from different commits or unlabelled (api ${API_REV:-?}, ui ${UI_REV:-?}); nothing proposed."
             echo "commsgun images are from different commits or unlabelled (api \`${API_REV:-?}\`, ui \`${UI_REV:-?}\`); nothing proposed." \
               >> "$GITHUB_STEP_SUMMARY"

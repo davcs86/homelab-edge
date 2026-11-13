@@ -691,7 +691,7 @@ class CommsgunWorkflow(unittest.TestCase):
         self.assertEqual(done["if"], "steps.api.outputs.changed == 'false' && steps.ui.outputs.changed == 'false'")
 
 
-def run_guard(api_rev, ui_rev, docs_commits=("145add0", "145add0")):
+def run_guard(api_rev, ui_rev, docs_commits=("145add0", "145add0"), extra_docs=""):
     with tempfile.TemporaryDirectory() as d:
         Path(d, "inventories/prod/group_vars/all").mkdir(parents=True)
         Path(d, "docs").mkdir()
@@ -699,7 +699,7 @@ def run_guard(api_rev, ui_rev, docs_commits=("145add0", "145add0")):
             f'{API_VAR}: "{API_IMG}@{API_NEW}"\n{UI_VAR}: "{UI_IMG}@{UI_NEW}"\n')
         Path(d, "docs/versions.md").write_text(
             f"| a (`{API_VAR}`) | `{API_IMG}@sha256:c3c3c3c3…`, digest only (commit `{docs_commits[0]}`, 2026-11-13) | x |\n"
-            f"| u (`{UI_VAR}`) | `{UI_IMG}@sha256:d4d4d4d4…`, digest only (commit `{docs_commits[1]}`, 2026-11-13) | x |\n")
+            f"| u (`{UI_VAR}`) | `{UI_IMG}@sha256:d4d4d4d4…`, digest only (commit `{docs_commits[1]}`, 2026-11-13) | x |\n" + extra_docs)
         out, summary = Path(d, "out"), Path(d, "summary")
         env = {"PATH": os.environ["PATH"], "API_REV": api_rev, "UI_REV": ui_rev, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
         r = subprocess.run(["bash", "-e", "-c", cstep("guard")["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
@@ -739,6 +739,27 @@ class CommsgunGuard(unittest.TestCase):
         self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": CREV})
         r, out, _ = run_guard("", CREV, docs_commits=("unknown", "145add0"))
         self.assertEqual(out, {"proceed": "false"})
+
+
+class CommsgunGuardExact(unittest.TestCase):
+    def test_two_full_revisions_sharing_a_short_prefix_are_refused(self):
+        r, out, summary = run_guard("145add0" + "1" * 33, "145add0" + "2" * 33)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(out, {"proceed": "false"})
+        self.assertIn("::warning::", r.stdout)
+
+    def test_a_short_value_is_compared_by_prefix_only_against_the_docs_row(self):
+        r, out, _ = run_guard("", "145add0" + "9" * 33)
+        self.assertEqual(out.get("proceed"), "true", r.stdout + r.stderr)
+        r, out, _ = run_guard("145add", "145add0" + "9" * 33)
+        self.assertEqual(out, {"proceed": "false"})
+
+    def test_more_than_one_docs_row_for_an_image_is_refused(self):
+        for second in ("145add0", "deadbee"):
+            dup = f"| a again (`{API_VAR}`) | `{API_IMG}@sha256:c3c3c3c3…`, digest only (commit `{second}`, 2026-11-13) | x |\n"
+            r, out, _ = run_guard("", CREV, extra_docs=dup)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(out, {"proceed": "false"}, second)
 
 
 class CommsgunPrStep(unittest.TestCase):
@@ -782,6 +803,8 @@ class CommsgunPrStep(unittest.TestCase):
         for needle in (API_NEW, UI_NEW, UI_OLD, f"https://github.com/davcs86/commsgun/commit/{CREV}", "not verified", "deploy", "by hand are lost"):
             self.assertIn(needle, body)
         self.assertNotIn(API_OLD, body)
+        self.assertIn(f"API new: `{API_NEW}` (unchanged)", body)
+        self.assertNotIn(f"UI new: `{UI_NEW}` (unchanged)", body)
         self.assertIn("Opened https://github.com/owner/repo/pull/7", summary)
         self.assertNotIn(SECRET, r.stdout + r.stderr + summary)
 
