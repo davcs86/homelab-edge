@@ -7,6 +7,7 @@ app_dir="${1:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
 project="${2:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
 wait_seconds="${3:-120}"
 keep=5
+image_keep=2 # releases whose images survive: the newest ones, current and previous (all a rollback can reach)
 
 die() { echo "app-deploy: $*" >&2; exit 2; }
 if ! [[ "$wait_seconds" =~ ^[1-9][0-9]{1,2}$ ]] || (( wait_seconds < 30 || wait_seconds > 900 )); then
@@ -19,6 +20,24 @@ renders() {
   err="$(compose "$1" config -q 2>&1 >/dev/null)" && return 0
   grep -oE 'required variable [A-Za-z0-9_]+ is missing a value' <<<"$err" >&2 || true
   return 1
+}
+
+# Remove digest-pinned images of this app that none of the newest image_keep releases, current or previous names;
+# in-use images survive (rmi refuses).
+prune_images() {
+  local keepfile repofile ref d
+  keepfile="$(mktemp)"
+  repofile="$(mktemp)"
+  while read -r d; do compose "$d" config --images 2>/dev/null || true; done \
+    < <({ newest_first | head -n "$image_keep"; readlink -f "$app_dir/current"; echo "${1:-}"; } | sort -u | sed '/^$/d') | grep -F '@sha256:' >"$keepfile" || true
+  if [[ -s "$keepfile" ]]; then # an empty keep set means we could not learn what to keep: remove nothing
+    sed 's/@sha256:.*$//' "$keepfile" | sort -u >"$repofile"
+    while read -r ref; do
+      grep -Fxq -- "${ref%@*}" "$repofile" || continue
+      grep -Fxq -- "$ref" "$keepfile" || docker image rm -- "$ref" >/dev/null 2>&1 || true
+    done < <(docker image ls --digests --format '{{.Repository}}@{{.Digest}}' | grep -F '@sha256:' | sort -u)
+  fi
+  rm -f "$keepfile" "$repofile"
 }
 
 read -r -a cmd <<<"${SSH_ORIGINAL_COMMAND:-}"
@@ -64,6 +83,7 @@ case "$action" in
       while read -r d; do
         [[ "$d" == "$cur" || "$d" == "$previous" ]] || rm -rf -- "$d"
       done < <(newest_first | tail -n +$((keep + 1)))
+      prune_images "$previous" || true
     else
       echo "release $release did not become healthy" >&2
       if [[ -n "$previous" && -d "$previous" ]]; then

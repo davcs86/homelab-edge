@@ -242,3 +242,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
   `pve-setup.py vm-template` now sets `--cpu host`; `host` blocks live migration between different CPUs, which a single node does not need.
+- **The app-deploy gate prunes images, not just release directories.** Docker on the app VMs uses the containerd image store and every
+  deploy pulled ~13 new image digests that nothing removed; `/var/lib/containerd` reached 37 GB (468 images, 13 in use), the 40G root
+  filled, and every deploy failed with the misleading `install: cannot change permissions of '/opt/<app>/releases/<rel>'`. After a healthy
+  `up`, `prune_images` removes digest-pinned local images of repositories that a kept release names, unless the newest `image_keep` (2)
+  releases, `current` or the previous release name that digest; a rollback reaches only those, older releases re-pull from GHCR. An empty keep set removes nothing; in-use images survive because `docker image rm` refuses them.
