@@ -1,6 +1,6 @@
 # Controller-side Python dependencies (GitHub Actions runner / workstation).
 ansible-core==2.21.4
-jmespath==1.0.1
+jmespath==1.1.0
 # Secrets bootstrap only.
 bcrypt==5.0.0
 # Lint only.
