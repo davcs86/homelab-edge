@@ -73,6 +73,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     unless the derived origin equals its `ORIGIN` (`https://commsgun_ui_hostname`); never strip or override those headers on that handle.
   - Staging: app `xstockstrat-staging` is registered (own key, lower limits) but has no route: the staging VM is denied on the `*.ts` 443 site,
     so it cannot reach `comms.ts.<domain>`, and the 8443 site answers 404 for both commsgun names.
+  - "Tailnet-only" means every tailnet identity with a grant on `tag:edge:443` (`policy/policy.hujson`: `group:admins`,
+    `group:members`, `tag:xstockstrat`, `tag:db`, `tag:pve`) reaches the dashboard login and the enqueue route; both are
+    authenticated (dashboard password, per-app key). `tag:xstockstrat-staging` holds that grant too and is denied only once the
+    staging VM is registered with headscale and a deploy has rendered its addresses into `deny_staging_vm` (empty until then).
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.

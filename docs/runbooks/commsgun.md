@@ -40,6 +40,8 @@ Then in this repository:
    ```
 
    A secret value may not contain a quote, backslash or line break (the deploy refuses it; see `docs/decisions.md`).
+   Commit both hand-added keys and get them merged to `main` before step 5; the deploy does not see a value that is
+   only in your working copy or on an unmerged branch.
 4. **Confirm the limits.** The block above `commsgun_providers` in `inventories/prod/group_vars/all/main.yml` carries
    `TODO(ask)`: the provider limit (`resend`: 60 per minute, 100 per day) and each app's per-channel limits are starting
    values the owner has not confirmed. Edit them if wrong and remove the marker once confirmed.
@@ -47,12 +49,17 @@ Then in this repository:
    deploy fails at or after "Start the stack", follow `docs/runbooks/recovery.md` § "After a deploy that failed
    part-way" before re-running.
 
+   On the first deploy Gatus may alert once for the commsgun probes and then resolve: they start before the deploy
+   writes the split-horizon records for the two names. Nothing in the deploy itself proves the new routes work; the proof
+   is the three Gatus probes (`commsgun-api`, `commsgun-backlog`, `commsgun-ui`) green and the checks below.
+
 Verify from a tailnet device that may reach the edge on 443 (your own devices, or `tag:xstockstrat`). Replace
-`<domain>` and `<your address>`; the `ops` app key is read from SOPS:
+`<domain>` and `<your address>`; the `ops` app key is read from SOPS. The `send` function takes two arguments: a suffix
+for the idempotency key (`verify-<suffix>`) and the JSON body:
 
 ```sh
 KEY=$(sops decrypt --extract '["commsgun_app_key_ops"]' secrets/edge.sops.yaml)
-send() {  # send <idempotency key suffix> <json body>
+send() {
   curl -sS -i -X POST "https://comms.ts.<domain>/v1/messages" \
     -H 'X-Commsgun-App: ops' -H "Authorization: Bearer $KEY" \
     -H "Idempotency-Key: verify-$1" -H 'Content-Type: application/json' -d "$2"
@@ -95,13 +102,22 @@ Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, p
    `channels` with the `per_minute` and `per_day` of each channel the app may use. An app that may send email needs the
    `email` channel and a sender entry (step 4); a channel not listed returns 403.
 2. `scripts/init_secrets.py`: add `commsgun_app_key_<app>` to the tuple of generated commsgun keys (`GENERATED`).
-3. Run **Actions → init-secrets** with `fill_missing` (never `overwrite`, which deletes the keys you added by hand).
-4. Add the app's senders (keep the existing entries; `sops set` on the whole map replaces it, so use the app's own path):
+   Push steps 1 and 2 to a branch and open its PR; its CI is red until step 3 has run (the inventory names a key the SOPS
+   file lacks).
+3. **Actions → init-secrets → Run workflow**, choose **the PR's branch** (not `main`), tick `fill_missing` (never
+   `overwrite`, which deletes the keys you added by hand). The workflow runs `scripts/init_secrets.py` from the branch it
+   is run on and pushes its commit to that branch; run on `main`, it does not know the new key, prints "nothing to
+   commit" and the PR stays red.
+4. Pull that commit, then add the app's senders (keep the existing entries; `sops set` on the whole map replaces it, so
+   use the app's own path), commit and push to the same branch:
 
    ```sh
+   git pull
    sops set secrets/edge.sops.yaml '["commsgun_senders"]["<app id>"]' '{"senders": ["App <app@example.com>"], "default_sender": "App <app@example.com>"}'
+   git add secrets/edge.sops.yaml && git commit -m "commsgun: senders for <app id>" && git push
    ```
-5. Merge the PR, then run **Actions → deploy** (`tailnet`).
+5. Wait for CI on the PR to be green (CI does not check senders; the deploy does). Merge the PR, then run
+   **Actions → deploy** (`tailnet`).
 6. Hand the subscriber its app id, the key (`sops decrypt --extract '["commsgun_app_key_<app>"]' secrets/edge.sops.yaml`)
    and `https://comms.ts.<domain>/v1/messages`. Its tag needs a grant to `tag:edge:443`, as for `tag:xstockstrat`
    (`docs/runbooks/onboard-service.md`).
@@ -112,8 +128,9 @@ single-quoted env line" (key missing, empty or holding a quote, backslash or lin
 the service requires" (an app key, the session secret or the API token under 32 characters, the password under 16),
 "Commsgun senders are a map", "commsgun_senders has no usable entry for app <id>" (no entry, `senders` empty or not a
 list, a sender or `default_sender` not shaped `address` or `Name <address>`, or `default_sender` not one of `senders`), or
-"commsgun_senders has <n> entries whose key is not the id of an app with an email channel". Check: send one email as the new app (the `send` function above with its id and key) and see
-`202`, then the message on the dashboard filtered by that app.
+"commsgun_senders has <n> entries whose key is not the id of an app with an email channel". Check: send one email as
+the new app (the `send` function above with its id and key) and see `202`, then the message on the dashboard
+filtered by that app.
 
 ## 3. Rotate an app key or the admin password
 
