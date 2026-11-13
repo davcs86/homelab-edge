@@ -119,8 +119,14 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
-| Build or change the DB host (PostgreSQL, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
+| Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
+| Add a workload (tag, grants, shared Postgres, staging route) | [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) |
+| Deploy, configure or operate commsgun (email/SMS hub) | [`docs/runbooks/commsgun.md`](docs/runbooks/commsgun.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
+| A workflow fails to push to `main` (GH013); the commit-back token | [`docs/runbooks/github-push-token.md`](docs/runbooks/github-push-token.md) |
+| Grants and tags (test with `scripts/policy-test.sh`) | [`policy/policy.hujson`](policy/policy.hujson) |
+| Public routes and limits (test with `scripts/caddy-routing-test.sh`) | [`roles/stack/templates/Caddyfile.j2`](roles/stack/templates/Caddyfile.j2) |
+| What each secret file holds | [`secrets/README.md`](secrets/README.md) |
 | Set up Proxmox by hand (interactive script) | [`docs/runbooks/proxmox-setup.md`](docs/runbooks/proxmox-setup.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |
 | Design decisions and traps already hit | [`docs/decisions.md`](docs/decisions.md) |
