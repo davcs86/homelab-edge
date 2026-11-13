@@ -38,3 +38,12 @@ All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp imag
 Ubuntu-archive packages (fail2ban, chrony, sqlite3, age, …) are pinned by the release and receive security updates
 through unattended-upgrades. Third-party packages (Docker, Tailscale, pgBackRest) are pinned and `apt-mark hold`, and
 unattended-upgrades is told not to touch them.
+
+## Dependabot
+
+`.github/dependabot.yml` proposes weekly bumps, each at least 14 days after release (`cooldown`), for the GitHub Actions
+pins (`.github/workflows`, `.github/actions/setup`), `requirements.txt` and `tools/pve-setup.requirements.txt`. It does
+not cover what it cannot parse: `versions.yml` (digests, checksums, apt versions), `requirements.yml` (Galaxy
+collections), the Caddy Dockerfile (its images arrive as build args from `versions.yml`), the Jinja compose templates and
+`templates/app-deploy/` (not a workflow path). Merge a Dependabot PR only after updating the matching row above in the
+same PR; the `webhooks-mcp` digest stays with `bump-webhooks-mcp`.

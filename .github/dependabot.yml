@@ -1,0 +1,40 @@
+---
+version: 2
+
+# cooldown 14 = the "pins at least two weeks old" rule in docs/versions.md.
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"                      # .github/workflows/*
+      - "/.github/actions/setup" # local composite action, not covered by "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "pip"
+    directory: "/" # requirements.txt (controller: ansible-core, ansible-lint, yamllint, bcrypt)
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/tools" # pve-setup.requirements.txt (typer and its transitive pins)
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      pve-setup:
+        patterns: ["*"]
