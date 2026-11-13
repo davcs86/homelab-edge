@@ -46,8 +46,9 @@ Then in this repository:
    `TODO(ask)`: the provider limit (`resend`: 60 per minute, 100 per day) and each app's per-channel limits are starting
    values the owner has not confirmed. Edit them if wrong and remove the marker once confirmed.
 5. **Deploy.** Run **Actions → deploy** (`tailnet`). Merging the PR that brought the code deployed nothing. If the
-   deploy fails at or after "Start the stack", follow `docs/runbooks/recovery.md` § "After a deploy that failed
-   part-way" before re-running.
+   deploy fails anywhere in the stack role (one of the commsgun checks below, or at or after "Start the stack"), follow
+   `docs/runbooks/recovery.md` § "After a deploy that failed part-way" before re-running: earlier tasks of that run
+   have already written files (the Gatus config among them) whose restarts the failure dropped.
 
    On the first deploy Gatus may alert once for the commsgun probes and then resolve: they start before the deploy
    writes the split-horizon records for the two names. Nothing in the deploy itself proves the new routes work; the proof
@@ -107,7 +108,11 @@ Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, p
 3. **Actions → init-secrets → Run workflow**, choose **the PR's branch** (not `main`), tick `fill_missing` (never
    `overwrite`, which deletes the keys you added by hand). The workflow runs `scripts/init_secrets.py` from the branch it
    is run on and pushes its commit to that branch; run on `main`, it does not know the new key, prints "nothing to
-   commit" and the PR stays red.
+   commit" and the PR stays red. The run needs approval on the `production` environment, which must allow the PR's
+   branch: `docs/runbooks/github-push-token.md` step 1 restricts `production` to `main`, and with that restriction in
+   place this step is blocked (lift it for the branch, or land steps 1–2 on `main` first and run the workflow there).
+   Approving it runs the branch's own `scripts/init_secrets.py` and workflow file with the push token and the SOPS key,
+   so read the PR's changes to those two files first.
 4. Pull that commit, then add the app's senders (keep the existing entries; `sops set` on the whole map replaces it, so
    use the app's own path), commit and push to the same branch:
 
@@ -123,7 +128,7 @@ Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, p
    (`docs/runbooks/onboard-service.md`).
 
 A step missed fails early, not at runtime: CI (`scripts/secrets-keys-test.py`) fails when the inventory names a key the
-SOPS file lacks, and the deploy stops, before it writes anything, at "Commsgun secrets are present and fit a
+SOPS file lacks, and the deploy stops, before it writes any commsgun file, at "Commsgun secrets are present and fit a
 single-quoted env line" (key missing, empty or holding a quote, backslash or line break), "Commsgun secrets are as long as
 the service requires" (an app key, the session secret or the API token under 32 characters, the password under 16),
 "Commsgun senders are a map", "commsgun_senders has no usable entry for app <id>" (no entry, `senders` empty or not a
