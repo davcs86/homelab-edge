@@ -25,13 +25,14 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
-# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable.
+# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable;
+# /echo-headers adds the X-Forwarded-* values received, and commsgun-ui answers with a Location carrying its path.
 cat >"$work/mock.py" <<'EOF'
 import http.server, sys
 name, port = sys.argv[1], int(sys.argv[2])
@@ -40,16 +41,22 @@ class H(http.server.BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n: self.rfile.read(n)
-            body = f"{name} {self.command} {self.path}".encode()
-            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            body = f"{name} {self.command} {self.path}"
+            if self.path.startswith("/echo-headers"):
+                body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For")))
+            body = body.encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(body)))
+            if name == "commsgun-ui": self.send_header("Location", self.path)
+            self.end_headers(); self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
     do_GET = do_POST = do_DELETE = do_HEAD = _r
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
+  if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
 done
 
 sudo ip addr replace "$tailnet_ip/32" dev lo
@@ -121,6 +128,26 @@ expect "webhooks ingest body over 256 KiB"     "413"                            
 expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
+
+# commsgun: both names are tailnet-only *.ts names; each reaches only its own upstream.
+c="https://$comms_host"
+g="https://$cgui_host"
+expect "enqueue aborts publicly"               "000"                              "$(req "$comms_host" -X POST -d '{}' "$c/v1/messages")"
+expect "enqueue from the tailnet"              "200 commsgun-api POST /v1/messages" "$(req "$comms_host" --interface "$tailnet_ip" -X POST -d '{}' "$c/v1/messages")"
+expect "enqueue body at exactly 262144 bytes"  "200 commsgun-api POST /v1/messages" "$(req "$comms_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$c/v1/messages")"
+expect "enqueue body over 262144 bytes"        "413"                              "$(req "$comms_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$c/v1/messages")"
+expect "dashboard aborts publicly"             "000"                              "$(req "$cgui_host" "$g/login")"
+expect "dashboard from the tailnet"            "200 commsgun-ui GET /login"       "$(req "$cgui_host" --interface "$tailnet_ip" "$g/login")"
+expect "staging VM denied on enqueue"          "000"                              "$(req "$comms_host" --interface "$staging_vm_ip" -X POST -d '{}' "$c/v1/messages")"
+expect "staging VM denied on dashboard"        "000"                              "$(req "$cgui_host" --interface "$staging_vm_ip" "$g/login")"
+expect "enqueue name reaches only the API"     "200 commsgun-api GET /login"      "$(req "$comms_host" --interface "$tailnet_ip" "$c/login")"
+expect "dashboard name reaches only the UI"    "200 commsgun-ui POST /v1/messages" "$(req "$cgui_host" --interface "$tailnet_ip" -X POST -d '{}' "$g/v1/messages")"
+expect "dashboard gets Caddy's X-Forwarded-*, not the client's" \
+  "200 commsgun-ui GET /echo-headers xfp=[https] xfh=[$cgui_host] xff=[$tailnet_ip]" \
+  "$(req "$cgui_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$g/echo-headers")"
+expect "dashboard upstream keeps the query"    "200 commsgun-ui GET /messages?recipient=canary@example.test" \
+  "$(req "$cgui_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$g/messages?recipient=canary@example.test")"
+expect "other *.ts name, with a query"         "200 ingest GET /hooks?keep=visible" "$(req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/hooks?keep=visible")"
 
 # Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
 # wreq reaches the tailnet-only listener on staging_port (the staging webhooks ingest).
@@ -201,6 +228,35 @@ if grep -qE 'SECRETCODE123|STATE456' "$work"/logs/*.access.log; then
 else
   echo "PASS  access log redacts OAuth code/state"
 fi
+# The dashboard keeps recipient filters in its query; its log line keeps method, host, path and status only.
+if grep -q canary "$work"/logs/*.access.log; then
+  echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -ho '"[^"]*canary[^"]*"' "$work"/logs/*.access.log | sort -u | tr '\n' ' ')"; fail=1
+elif ! grep -h "\"host\":\"$cgui_host\"" "$work"/logs/*.access.log | grep -q '"uri":"/messages"'; then
+  echo "FAIL  the dashboard request was not logged at all"; fail=1
+else
+  echo "PASS  dashboard logged without query, Referer or Location"
+fi
+if grep -q '"uri":"/hooks?keep=visible"' "$work/logs/tailnet.access.log"; then
+  echo "PASS  other *.ts names are still logged with their query"
+else
+  echo "FAIL  the ingest request lost its query in tailnet.access.log"; fail=1
+fi
+# An upstream error logs the whole request through the error logger (stderr), not the access log.
+kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
+expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$g/messages?recipient=canary@example.test")"
+sleep 1
+if docker logs caddy-routing-test 2>&1 | grep -q canary; then
+  echo "FAIL  Caddy's error log leaks the dashboard's query or Referer"; fail=1
+elif ! docker logs caddy-routing-test 2>&1 | grep '"logger":"http.log.error.commsgun_ui"' | grep -q '"uri":"/messages"'; then
+  echo "FAIL  the dashboard's upstream error was not logged"; fail=1
+else
+  echo "PASS  dashboard upstream error logged without query or Referer"
+fi
+for n in comms cgui; do
+  h="${n}_host"
+  on8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "${!h}:$staging_port:127.0.0.1" -X POST -d '{}' "https://${!h}:$staging_port/v1/messages" -w ' %{http_code}' || true)"
+  if [[ "$on8443" == "Not Found 404" ]]; then echo "PASS  $n name is 404 on the staging port"; else echo "FAIL  $n name on the staging port: $on8443"; fail=1; fi
+done
 ls "$work"/logs/*.access.log >/dev/null && echo "PASS  access logs written: $(cd "$work/logs" && ls)"
 
 exit "$fail"
