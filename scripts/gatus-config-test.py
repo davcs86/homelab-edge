@@ -98,6 +98,16 @@ class Gatus(unittest.TestCase):
         self.assertEqual(ing["client"]["dns-resolver"], "udp://100.100.100.100:53")
         self.assertEqual(ing["conditions"], ["[STATUS] == 200"])
 
+    def test_commsgun_is_probed_over_the_tailnet(self):
+        for name, url in (("commsgun-api", f"https://{V['commsgun_enqueue_hostname']}/healthz"),
+                          ("commsgun-backlog", f"https://{V['commsgun_enqueue_hostname']}/healthz/backlog"),
+                          ("commsgun-ui", f"https://{V['commsgun_ui_hostname']}/healthz")):
+            e = ENDPOINTS[name]
+            self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", url, "1m"))
+            self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+            self.assertEqual(e["alerts"], [{"type": "ntfy"}])
+            self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+
     def test_every_polled_endpoint_alerts_through_ntfy(self):
         for name, e in ENDPOINTS.items():
             self.assertEqual(e["alerts"], [{"type": "ntfy"}], name)

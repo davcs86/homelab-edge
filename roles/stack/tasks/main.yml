@@ -12,6 +12,7 @@
     - {path: "{{ edge_root }}/ntfy", mode: "0750"}
     - {path: "{{ edge_root }}/gatus", mode: "0750"}
     - {path: "{{ edge_root }}/webhooks-mcp", mode: "0750"}
+    - {path: "{{ edge_root }}/commsgun", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
@@ -107,6 +108,103 @@
       default: "https://{{ webhooks_ingest_hostname }}"
       staging: "https://{{ webhooks_ingest_hostname }}:{{ staging_edge_port }}"
   no_log: true
+
+# ---------- commsgun ----------
+# fail_msg is printed even under no_log: it may name a key or an app id, never a value.
+- name: Commsgun secrets and configuration
+  no_log: true
+  vars:
+    _email_apps: "{{ commsgun_apps | selectattr('channels.email', 'defined') | map(attribute='id') | list }}"
+  block:
+    - name: Commsgun secrets are present and fit a single-quoted env line
+      ansible.builtin.assert:
+        that:
+          - edge_secrets[item] is defined
+          - edge_secrets[item] is string
+          - edge_secrets[item] | length > 0
+          - "\"'\" not in edge_secrets[item]"
+          - "'\\\\' not in edge_secrets[item]"
+          - "'\\r' not in edge_secrets[item]"
+          - "'\\n' not in edge_secrets[item]"
+        fail_msg: "secrets/edge.sops.yaml: {{ item }} is missing, empty, or holds a quote, backslash or line break"
+        quiet: true
+      loop: >-
+        {{ ['resend_api_key', 'commsgun_admin_password', 'commsgun_session_secret', 'commsgun_admin_api_token']
+           + commsgun_apps | map(attribute='key') | list }}
+
+    # Minimums are the service's own start-up limits (api MinSecretLen, ui MIN_ADMIN_PASSWORD).
+    - name: Commsgun secrets are as long as the service requires
+      ansible.builtin.assert:
+        that: edge_secrets[item] | length >= (16 if item == 'commsgun_admin_password' else 32)
+        fail_msg: "secrets/edge.sops.yaml: {{ item }} is shorter than commsgun accepts (32 characters; 16 for the password)"
+        quiet: true
+      loop: >-
+        {{ ['commsgun_admin_password', 'commsgun_session_secret', 'commsgun_admin_api_token']
+           + commsgun_apps | map(attribute='key') | list }}
+
+    - name: Commsgun senders are a map
+      ansible.builtin.assert:
+        that:
+          - edge_secrets.commsgun_senders is defined
+          - edge_secrets.commsgun_senders is mapping
+        fail_msg: "secrets/edge.sops.yaml: commsgun_senders is missing or not a map of app id to senders"
+        quiet: true
+
+    - name: Every email app has senders that include its default
+      ansible.builtin.assert:
+        that:
+          - item.id in edge_secrets.commsgun_senders
+          - edge_secrets.commsgun_senders[item.id].senders is defined
+          - edge_secrets.commsgun_senders[item.id].senders is sequence
+          - edge_secrets.commsgun_senders[item.id].senders is not string
+          - edge_secrets.commsgun_senders[item.id].senders is not mapping
+          - edge_secrets.commsgun_senders[item.id].senders | length > 0
+          - edge_secrets.commsgun_senders[item.id].senders | reject('string') | list | length == 0
+          - "'\\r' not in edge_secrets.commsgun_senders[item.id].senders | join('')"
+          - "'\\n' not in edge_secrets.commsgun_senders[item.id].senders | join('')"
+          - edge_secrets.commsgun_senders[item.id].default_sender is defined
+          - edge_secrets.commsgun_senders[item.id].default_sender is string
+          - "'\\r' not in edge_secrets.commsgun_senders[item.id].default_sender"
+          - "'\\n' not in edge_secrets.commsgun_senders[item.id].default_sender"
+          - edge_secrets.commsgun_senders[item.id].default_sender in edge_secrets.commsgun_senders[item.id].senders
+          - >-
+            ([edge_secrets.commsgun_senders[item.id].default_sender] + edge_secrets.commsgun_senders[item.id].senders)
+            | reject('match', '^([^<>@\\s]+@[^<>@\\s]+|.*<[^<>@\\s]+@[^<>@\\s]+>)$') | list | length == 0
+        fail_msg: >-
+          secrets/edge.sops.yaml: commsgun_senders has no usable entry for app {{ item.id }}
+          (a non-empty list of single-line "address" or "Name <address>" senders containing default_sender)
+        quiet: true
+      loop: "{{ commsgun_apps | selectattr('channels.email', 'defined') | list }}"
+
+    - name: Commsgun senders name only registered email apps
+      ansible.builtin.assert:
+        that: edge_secrets.commsgun_senders | list | reject('in', _email_apps) | list | length == 0
+        fail_msg: >-
+          secrets/edge.sops.yaml: commsgun_senders has
+          {{ edge_secrets.commsgun_senders | list | reject('in', _email_apps) | list | length }}
+          entries whose key is not the id of an app with an email channel in commsgun_apps
+        quiet: true
+
+    # Compose takes a single-quoted value verbatim except that \' is an escape: hence no ', \, CR or LF in raw values.
+    - name: Commsgun API environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/commsgun/api.env"
+        content: |
+          COMMSGUN_CONFIG='{{ lookup('ansible.builtin.template', 'commsgun-config.json.j2') | trim }}'
+          RESEND_API_KEY='{{ edge_secrets.resend_api_key }}'
+          ADMIN_API_TOKEN='{{ edge_secrets.commsgun_admin_api_token }}'
+        mode: "0600"
+
+    - name: Commsgun dashboard environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/commsgun/ui.env"
+        content: |
+          ADMIN_PASSWORD='{{ edge_secrets.commsgun_admin_password }}'
+          SESSION_SECRET='{{ edge_secrets.commsgun_session_secret }}'
+          ADMIN_API_TOKEN='{{ edge_secrets.commsgun_admin_api_token }}'
+          API_BASE_URL='http://commsgun-api:9201'
+          ORIGIN='https://{{ commsgun_ui_hostname }}'
+        mode: "0600"
 
 - name: Compose file
   ansible.builtin.template:

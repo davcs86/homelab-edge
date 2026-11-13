@@ -9,7 +9,7 @@ work="$(mktemp -d)"
 tailnet_ip=100.64.0.250
 staging_vm_ip=100.64.0.251
 pids=()
-# shellcheck disable=SC2317  # invoked via trap
+# shellcheck disable=SC2317,SC2329  # invoked via trap
 cleanup() {
   docker rm -f caddy-routing-test >/dev/null 2>&1 || true
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
@@ -25,31 +25,43 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
-# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable.
+# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable;
+# Test hooks: /echo-headers, /reset; commsgun-ui also sends Location.
 cat >"$work/mock.py" <<'EOF'
-import http.server, sys
+import http.server, socket, struct, sys
 name, port = sys.argv[1], int(sys.argv[2])
 class H(http.server.BaseHTTPRequestHandler):
     def _r(self):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n: self.rfile.read(n)
-            body = f"{name} {self.command} {self.path}".encode()
-            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            if self.path.startswith("/reset"):
+                self.send_response(200); self.send_header("Content-Length", "100000"); self.end_headers()
+                self.wfile.write(b"x" * 1000); self.wfile.flush()
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.connection.close(); return
+            body = f"{name} {self.command} {self.path}"
+            if self.path.startswith("/echo-headers"):
+                body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For")))
+            body = body.encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(body)))
+            if name == "commsgun-ui": self.send_header("Location", self.path)
+            self.end_headers(); self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
     do_GET = do_POST = do_DELETE = do_HEAD = _r
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
+  if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
 done
 
 sudo ip addr replace "$tailnet_ip/32" dev lo
@@ -80,6 +92,23 @@ req2() { # same as req, but as a different client (source 127.0.0.3) so rate-lim
 expect() { # <description> <expected-prefix> <actual>
   if [[ "$3" == "$2"* ]]; then echo "PASS  $1 -> $3"; else echo "FAIL  $1: expected '$2', got '$3'"; fail=1; fi
 }
+# Caddy writes its logs as root with a private mode, so read them through the container; an unreadable or empty log is a FAIL.
+read_log() { # <file glob in /var/log/caddy> -> $work/log; non-zero if unreadable or empty
+  if docker exec caddy-routing-test sh -c "cat /var/log/caddy/$1" >"$work/log" 2>"$work/log.err" && [[ -s "$work/log" ]]; then return 0; fi
+  echo "FAIL  cannot read Caddy log $1: $(head -c 300 "$work/log.err")"; fail=1; return 1
+}
+# Caddy writes its logs asynchronously; a timeout is not a FAIL here, the check that follows reports it.
+wait_for_line() { # <ERE> <command printing the log>...; polls for up to ~10 s
+  local want="$1"; shift
+  for _ in $(seq 1 50); do
+    "$@" >"$work/poll" 2>&1 || true
+    if grep -qE "$want" "$work/poll"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+# shellcheck disable=SC2317,SC2329  # invoked through wait_for_line
+access_logs() { docker exec caddy-routing-test sh -c 'cat /var/log/caddy/*.access.log'; }
 
 u="https://$app_host"
 expect "MCP endpoint, prefix stripped"         "200 agent POST /"                 "$(req "$app_host" -X POST "$u/agent")"
@@ -121,6 +150,26 @@ expect "webhooks ingest body over 256 KiB"     "413"                            
 expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
+
+# commsgun: both names are tailnet-only *.ts names; each reaches only its own upstream.
+c="https://$comms_host"
+g="https://$cgui_host"
+expect "enqueue aborts publicly"               "000"                              "$(req "$comms_host" -X POST -d '{}' "$c/v1/messages")"
+expect "enqueue from the tailnet"              "200 commsgun-api POST /v1/messages" "$(req "$comms_host" --interface "$tailnet_ip" -X POST -d '{}' "$c/v1/messages")"
+expect "enqueue body at exactly 262144 bytes"  "200 commsgun-api POST /v1/messages" "$(req "$comms_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$c/v1/messages")"
+expect "enqueue body over 262144 bytes"        "413"                              "$(req "$comms_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$c/v1/messages")"
+expect "dashboard aborts publicly"             "000"                              "$(req "$cgui_host" "$g/login")"
+expect "dashboard from the tailnet"            "200 commsgun-ui GET /login"       "$(req "$cgui_host" --interface "$tailnet_ip" "$g/login")"
+expect "staging VM denied on enqueue"          "000"                              "$(req "$comms_host" --interface "$staging_vm_ip" -X POST -d '{}' "$c/v1/messages")"
+expect "staging VM denied on dashboard"        "000"                              "$(req "$cgui_host" --interface "$staging_vm_ip" "$g/login")"
+expect "enqueue name reaches only the API"     "200 commsgun-api GET /login"      "$(req "$comms_host" --interface "$tailnet_ip" "$c/login")"
+expect "dashboard name reaches only the UI"    "200 commsgun-ui POST /v1/messages" "$(req "$cgui_host" --interface "$tailnet_ip" -X POST -d '{}' "$g/v1/messages")"
+expect "dashboard gets Caddy's X-Forwarded-*, not the client's" \
+  "200 commsgun-ui GET /echo-headers xfp=[https] xfh=[$cgui_host] xff=[$tailnet_ip]" \
+  "$(req "$cgui_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$g/echo-headers")"
+expect "dashboard upstream keeps the query"    "200 commsgun-ui GET /messages?recipient=canary@example.test" \
+  "$(req "$cgui_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$g/messages?recipient=canary@example.test")"
+expect "other *.ts name, with a query"         "200 ingest GET /hooks?keep=visible" "$(req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/hooks?keep=visible")"
 
 # Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
 # wreq reaches the tailnet-only listener on staging_port (the staging webhooks ingest).
@@ -195,12 +244,61 @@ else
 fi
 
 expect "OAuth callback routed"                 "200 agent GET /oauth/callback"   "$(req "$app_host" "$u/agent/oauth/callback?code=SECRETCODE123&state=STATE456")"
-sleep 1
-if grep -qE 'SECRETCODE123|STATE456' "$work"/logs/*.access.log; then
-  echo "FAIL  access log leaks OAuth code/state"; fail=1
-else
-  echo "PASS  access log redacts OAuth code/state"
+wait_for_line "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" access_logs || true
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" "$work/log"; then
+    echo "FAIL  the OAuth callback request was not logged"; fail=1
+  elif grep -qE 'SECRETCODE123|STATE456' "$work/log"; then
+    echo "FAIL  access log leaks OAuth code/state"; fail=1
+  else
+    echo "PASS  access log redacts OAuth code/state"
+  fi
 fi
-ls "$work"/logs/*.access.log >/dev/null && echo "PASS  access logs written: $(cd "$work/logs" && ls)"
+canary_hdr='Referer: https://x/?recipient=canary@example.test'
+req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/reset?recipient=canary@example.test" >/dev/null
+req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/reset?keep=visible" >/dev/null
+kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
+expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/upstream-down?recipient=canary@example.test")"
+wait_for_line "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" access_logs || true
+wait_for_line 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
+if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
+  echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
+fi
+# The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" "$work/log"; then
+    echo "FAIL  the dashboard's 502 request was not logged at all"; fail=1
+  elif grep -q canary "$work/log"; then
+    echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
+  else
+    echo "PASS  dashboard logged without query, Referer or Location (incl. reset and 502)"
+  fi
+fi
+if read_log tailnet.access.log; then
+  if grep -q '"uri":"/hooks?keep=visible"' "$work/log"; then
+    echo "PASS  other *.ts names are still logged with their query"
+  else
+    echo "FAIL  the ingest request lost its query in tailnet.access.log"; fail=1
+  fi
+fi
+if grep -q canary "$work/caddy.stderr"; then
+  echo "FAIL  Caddy's stderr leaks the dashboard's query or Referer: $(grep -o '"logger":"[^"]*"' <(grep canary "$work/caddy.stderr") | sort -u | tr '\n' ' ')"; fail=1
+else
+  echo "PASS  Caddy's stderr carries no dashboard query or Referer"
+fi
+for want in 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
+            "http.handlers.reverse_proxy.*\"host\":\"$ingest_host\",\"uri\":\"/reset\""; do
+  if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
+done
+for n in comms cgui; do
+  h="${n}_host"
+  on8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "${!h}:$staging_port:127.0.0.1" -X POST -d '{}' "https://${!h}:$staging_port/v1/messages" -w ' %{http_code}' || true)"
+  if [[ "$on8443" == "Not Found 404" ]]; then echo "PASS  $n name is 404 on the staging port"; else echo "FAIL  $n name on the staging port: $on8443"; fail=1; fi
+done
+if logs_written="$(docker exec caddy-routing-test sh -c 'ls /var/log/caddy/*.access.log')"; then
+  echo "PASS  access logs written: $(echo "$logs_written" | xargs -n1 basename | tr '\n' ' ')"
+else
+  echo "FAIL  no access logs written"; fail=1
+fi
 
 exit "$fail"

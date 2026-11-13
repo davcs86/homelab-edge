@@ -66,6 +66,7 @@ body_limits:
   mcp: 1MB
   webhooks_mcp: 1MB
   webhooks_ingest: 262144   # bytes; equals the listener's 256 KiB cap
+  commsgun_enqueue: 262144  # bytes; equals the enqueue listener's cap
   login: 8KB
   register: 16KB
   default: 64KB
@@ -77,6 +78,33 @@ webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
 webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
 webhooks_mcp_port: 9100
 webhooks_ingest_port: 9101
+
+# ---------- commsgun (email/SMS delivery hub) ----------
+commsgun_enqueue_hostname: "comms.{{ magicdns_base_domain }}"
+commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"
+commsgun_enqueue_port: 9200
+commsgun_ui_port: 9202
+# `key` names the SOPS key holding the app's bearer key; every email app needs an entry in the SOPS map commsgun_senders.
+# TODO(ask): owner confirms these limits before the first deploy
+commsgun_providers:
+  email: {name: resend, per_minute: 60, per_day: 100}
+  sms: null
+commsgun_apps:
+  - id: xstockstrat
+    key: commsgun_app_key_xstockstrat
+    channels:
+      email: {per_minute: 10, per_day: 60}
+      sms: {per_minute: 5, per_day: 50}
+  - id: xstockstrat-staging
+    key: commsgun_app_key_xstockstrat_staging
+    channels:
+      email: {per_minute: 10, per_day: 40}
+      sms: {per_minute: 5, per_day: 50}
+  - id: ops
+    key: commsgun_app_key_ops
+    channels:
+      email: {per_minute: 2, per_day: 5}
+      sms: {per_minute: 5, per_day: 50}
 
 # Public hostnames served on 443, one certificate each. `name` is the ACME label (CNAME target <name>.<acme_zone>), the
 # access-log name and the rate-limit zone prefix. kind app: OAuth routes + tailnet bypass; bearer_mcp: one path behind a static key.

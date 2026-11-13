@@ -51,11 +51,15 @@ GENERATED = {
     "db_role_xstockstrat_production_password": lambda: secrets.token_urlsafe(32),
     "db_role_xstockstrat_staging_password": lambda: secrets.token_urlsafe(32),
     "webhooks_mcp_auth_key": lambda: secrets.token_urlsafe(36),
+    **{k: lambda: secrets.token_urlsafe(36) for k in (
+        "commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
+        "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops")},
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
-# Public keys the owner adds with `sops set`; neither mode writes them, and overwrite drops them (add them again).
-HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "production")]
+# Values the owner adds with `sops set` (gate public keys, Resend key, sender map); neither mode writes them, fill-missing
+# does not require them, and overwrite drops them (add them again).
+HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "production")] + ["resend_api_key", "commsgun_senders"]
 # Sets that are created whole, never completed: the TLS CA of the database host, and the certs the pull direction adds.
 DB_TLS_KEYS = [f"db_tls_{n}_{k}" for n in ("ca", "server") for k in ("crt", "key")]
 PGBACKREST_DB_KEYS = ["pgbackrest_db_server_crt", "pgbackrest_db_server_key", "pgbackrest_edge_client_crt", "pgbackrest_edge_client_key"]

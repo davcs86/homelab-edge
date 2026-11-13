@@ -19,11 +19,14 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
-- **The webhooks-mcp bump PR is opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
+- **The webhooks-mcp and commsgun bump PRs are opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
   Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
-  workflows, so `bump-webhooks-mcp` dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
+  workflows, so `bump-webhooks-mcp` (and `bump-commsgun`, which does the same for its two images) dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
   `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
   It keeps one branch and one open PR (force-pushed and retitled for a newer digest), so runs never pile up PRs and a run cancelled before the PR exists, or before `ci` was started, heals on the next.
+  The webhooks-mcp and commsgun pins sit on adjacent lines (and adjacent `docs/versions.md` rows), so merging one bump PR leaves the other
+  unmergeable: a bump PR left behind by a merge to `main` is rebuilt on the next run (an open PR for the same digests whose head the GitHub
+  compare API reports behind `main` is rebuilt from `main`, force-pushed and updated; if that check fails, the run fails and leaves the PR as is).
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
@@ -48,6 +51,32 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     container would exit at start.
   - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
   - The image pin is by digest only; see `docs/versions.md`.
+- **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
+  `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.ts` 443 site behind `import tailnet_only`
+  and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
+  - Admin port 9201 is never published. The two containers sit on their own compose network (`commsgun`), so no other stack
+    container can reach 9201 or send the dashboard forged `X-Forwarded-*` headers; the admin API is also guarded by `commsgun_admin_api_token`.
+  - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `commsgun-data`. A bind mount would be root-owned and
+    the container would exit at start. The store (SQLite) is not in the nightly backup, by decision: queued messages expire within 24 hours.
+  - The two image pins (`commsgun_api_image`, `commsgun_ui_image`) move together: `bump-commsgun` proposes a pair only when both
+    images carry the same revision label and refuses a mismatched or unlabelled pair. Caddy's body cap (`body_limits.commsgun_enqueue`,
+    262144 bytes) must equal the API's own cap.
+  - `resend_api_key` must be a full-access Resend key: bounce tracking reads email status, and a sending-only key makes every status poll fail.
+  - The env files are written with single-quoted values and Compose treats `\'` as an escape inside them, so the deploy refuses (before
+    writing anything) a commsgun secret containing a quote, backslash or line break; `COMMSGUN_CONFIG` is rendered with `tojson` for the same reason.
+  - **The dashboard's filters live in the URL query, and recipient addresses are in them.** Caddy's default JSON access log of a
+    `*.ts` site would carry them, so the dashboard host has its own access log (`commsgun-ui.access.log`) that drops the query, `Referer` and
+    `Location`. The trap that remained: Caddy's `http.handlers.reverse_proxy` logger (not per host) and the `http.log.error.*` loggers
+    print the full URI and `Referer` on an upstream error, bypassing the per-host filter. The default logger therefore excludes them and a
+    second logger, `redacted_requests`, takes them with the query and `Referer` stripped. `caddy-routing-test.sh` checks the canary address does not appear.
+  - The dashboard builds its origin and its login rate-limit key from Caddy's default `X-Forwarded-Proto`, `-Host` and `-For` and answers 400
+    unless the derived origin equals its `ORIGIN` (`https://commsgun_ui_hostname`); never strip or override those headers on that handle.
+  - Staging: app `xstockstrat-staging` is registered (own key, lower limits) but has no route: the staging VM is denied on the `*.ts` 443 site,
+    so it cannot reach `comms.ts.<domain>`, and the 8443 site answers 404 for both commsgun names.
+  - "Tailnet-only" means every tailnet identity with a grant on `tag:edge:443` (`policy/policy.hujson`: `group:admins`,
+    `group:members`, `tag:xstockstrat`, `tag:db`, `tag:pve`) reaches the dashboard login and the enqueue route; both are
+    authenticated (dashboard password, per-app key). `tag:xstockstrat-staging` holds that grant too and is denied only once the
+    staging VM is registered with headscale and a deploy has rendered its addresses into `deny_staging_vm` (empty until then).
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.

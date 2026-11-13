@@ -14,6 +14,18 @@
 		output stderr
 		format json
 		level INFO
+		exclude http.log.error.commsgun_ui http.handlers.reverse_proxy
+	}
+	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
+	log redacted_requests {
+		output stderr
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			wrap json
+		}
+		level INFO
+		include http.log.error.commsgun_ui http.handlers.reverse_proxy
 	}
 }
 
@@ -349,6 +361,35 @@
 			max_size {{ body_limits.webhooks_ingest }}
 		}
 		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
+	}
+
+	@commsgun_enqueue host {{ commsgun_enqueue_hostname }}
+	handle @commsgun_enqueue {
+		request_body {
+			max_size {{ body_limits.commsgun_enqueue }}
+		}
+		reverse_proxy 127.0.0.1:{{ commsgun_enqueue_port }}
+	}
+
+	# The dashboard keeps recipient addresses in its query (and so in Referer and redirects); its own logger drops all three.
+	log commsgun_ui {
+		hostnames {{ commsgun_ui_hostname }}
+		output file /var/log/caddy/commsgun-ui.access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			resp_headers>Location delete
+			wrap json
+		}
+	}
+	# The dashboard derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
+	@commsgun_ui host {{ commsgun_ui_hostname }}
+	handle @commsgun_ui {
+		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
 	}
 
 	handle {

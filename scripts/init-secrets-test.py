@@ -28,6 +28,12 @@ OLD = {  # what the 2026-10-15 file held: no gatus_heartbeat_db_token
 OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password": "sup-OLD", "gatus_heartbeat_pgbackrest_token": "pgbr-OLD", "db_role_xstockstrat_production_password": "prod-OLD",
        "db_role_xstockstrat_staging_password": "stg-OLD", **{k: PEM for k in init_secrets.DB_TLS_KEYS + init_secrets.PGBACKREST_DB_KEYS}}
 
+COMMSGUN_GENERATED = ["commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
+                      "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops"]
+OWNER_KEYS = ["resend_api_key", "commsgun_senders"]
+SENDERS = {"xstockstrat": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"},
+           "ops": {"senders": ["Ops <ops@example.com>"], "default_sender": "Ops <ops@example.com>"}}
+
 
 @unittest.skipUnless(shutil.which("sops") and shutil.which("ssh-keygen"), "sops and ssh-keygen are required")
 class FillMissing(unittest.TestCase):
@@ -63,10 +69,27 @@ class FillMissing(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: v for k, v in got.items() if k in OLD}, OLD)
-        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key"})
+        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key", *COMMSGUN_GENERATED})
         self.assertRegex(got["gatus_heartbeat_db_token"], r"^[A-Za-z0-9_-]{43}$")
         self.assertRegex(got["webhooks_mcp_auth_key"], r"^[A-Za-z0-9_-]{48}$")
+        for k in COMMSGUN_GENERATED:
+            self.assertRegex(got[k], r"^[A-Za-z0-9_-]{48}$", k)
+        self.assertEqual(len({got[k] for k in COMMSGUN_GENERATED}), len(COMMSGUN_GENERATED))
+        self.assertTrue(set(OWNER_KEYS).isdisjoint(got))
         self.assertIn("added gatus_heartbeat_db_token", r.stdout)
+
+    def test_a_file_that_already_holds_the_owner_keys_keeps_them_including_the_nested_map(self):
+        owner = {"resend_api_key": "re_OLD", "commsgun_senders": SENDERS}
+        self.write({**OLD, **owner})
+        r = self.fill()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = self.read()
+        self.assertEqual({k: got[k] for k in owner}, owner)
+        self.assertEqual({k: got[k] for k in OLD}, OLD)
+        self.assertIn(f"added {', '.join(['gatus_heartbeat_db_token', 'webhooks_mcp_auth_key', *COMMSGUN_GENERATED])}", r.stdout)
+        before = (self.tmp / self.file).read_bytes()
+        self.assertEqual(self.fill().stdout.strip(), "nothing to add")
+        self.assertEqual((self.tmp / self.file).read_bytes(), before)
 
     def test_the_new_value_is_never_printed_or_left_in_plaintext(self):
         self.write(OLD)
@@ -123,7 +146,7 @@ class FillMissing(unittest.TestCase):
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
                          {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password", "webhooks_mcp_auth_key",
-                          *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
+                          *COMMSGUN_GENERATED, *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")
         # the database TLS CA is its own: it signs the server cert and is not the pgBackRest CA
@@ -179,6 +202,13 @@ class Registry(unittest.TestCase):
 
     def test_the_webhooks_mcp_key_is_48_url_safe_characters(self):
         self.assertRegex(init_secrets.GENERATED["webhooks_mcp_auth_key"](), r"^[A-Za-z0-9_-]{48}$")
+
+    def test_owner_keys_are_never_generated_or_required_by_fill_missing_but_are_known(self):
+        for k in OWNER_KEYS:
+            self.assertNotIn(k, init_secrets.GENERATED)
+            self.assertNotIn(k, init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS)
+            self.assertIn(k, init_secrets.HAND_KEYS)
+        self.assertEqual(set(COMMSGUN_GENERATED) - set(init_secrets.GENERATED), set())
 
     def test_the_full_generator_writes_every_certificate_set(self):
         src = SCRIPT.read_text()

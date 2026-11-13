@@ -98,6 +98,37 @@ services:
       - webhooks-data:/data
     mem_limit: 192m
 
+  # Its own network: nothing else may reach the admin port 9201 or spoof the dashboard's forwarded headers.
+  commsgun-api:
+    <<: *hardening
+    image: {{ commsgun_api_image }}
+    read_only: true
+    ports: ["127.0.0.1:{{ commsgun_enqueue_port }}:9200"]
+    env_file: [./commsgun/api.env]
+    volumes:
+      - commsgun-data:/data
+    networks: [commsgun]
+    mem_limit: 96m
+    stop_grace_period: 30s
+
+  commsgun-ui:
+    <<: *hardening
+    image: {{ commsgun_ui_image }}
+    read_only: true
+    ports: ["127.0.0.1:{{ commsgun_ui_port }}:9202"]
+    env_file: [./commsgun/ui.env]
+    networks: [commsgun]
+    depends_on: [commsgun-api]
+    mem_limit: 192m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9202/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  commsgun: {}
+
 volumes:
   headscale-data:
   headscale-run:
@@ -106,3 +137,4 @@ volumes:
   gatus-data:
   ntfy-data:
   webhooks-data:
+  commsgun-data:
