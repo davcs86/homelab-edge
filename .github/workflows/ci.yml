@@ -42,6 +42,10 @@ jobs:
         run: python3 scripts/secrets-keys-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
         run: python3 scripts/gatus-config-test.py
+      - name: Commsgun config, env files (read back by docker compose), assertions and compose services
+        env:
+          COMMSGUN_TEST_REQUIRE_DOCKER: "1"
+        run: python3 scripts/commsgun-config-test.py
       - name: No plaintext secrets in secrets/
         run: |
           for f in secrets/*.sops.yaml; do

@@ -1,0 +1,14 @@
+{#- One line of JSON for an env file: tojson escapes ' < > & so the value fits in single quotes. -#}
+{"apps":[
+{%- for app in commsgun_apps -%}
+{"id":{{ app.id | tojson }},"key":{{ edge_secrets[app.key] | tojson }},"channels":{
+{%- for name, ch in app.channels.items() -%}
+{{ name | tojson }}:{"per_minute":{{ ch.per_minute | int }},"per_day":{{ ch.per_day | int }}
+{%- if name == 'email' -%}
+,"senders":{{ edge_secrets.commsgun_senders[app.id].senders | tojson }},"default_sender":{{ edge_secrets.commsgun_senders[app.id].default_sender | tojson }}
+{%- endif -%}
+}{{ ',' if not loop.last }}
+{%- endfor -%}
+}}{{ ',' if not loop.last }}
+{%- endfor -%}
+],"providers":{{ commsgun_providers | tojson }}}

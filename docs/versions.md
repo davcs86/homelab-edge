@@ -1,6 +1,6 @@
 # Versions
 
-All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp image, the owner's own, which the `bump-webhooks-mcp` workflow proposes as soon as it is published); container images are pinned by digest, binaries by checksum.
+All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp and commsgun images, the owner's own, pinned as soon as they are published); container images are pinned by digest, binaries by checksum.
 
 | Component | Pin | Why this one |
 |---|---|---|
@@ -14,6 +14,8 @@ All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp imag
 | Gatus | v5.37.0 | newest ≥ 2 weeks; checks, heartbeats and ntfy alerts are declared in the repo |
 | ntfy | v2.28.0 | v2.29/2.30 under two weeks; 2.28 already has declarative users/ACLs/tokens |
 | webhooks-mcp (`webhooks_mcp_image`) | `ghcr.io/davcs86/webhooks-mcp@sha256:09e1e5f2…`, digest only (commit `64c15cc`, 2026-11-11) | the image is tagged by commit SHA and has no semver tag, so the digest is the pin. Built, smoke-tested and pushed by that repo's CI on merge to `main`; the package is public, so the edge pulls without a credential. The `bump-webhooks-mcp` workflow opens the bump PR daily or on manual run (optionally with a chosen digest); editing `versions.yml` by hand still works, but keep the pin cell exactly `…@sha256:xxxxxxxx…`, digest only (commit `xxxxxxx`, YYYY-MM-DD) or the workflow fails. It keeps one branch, `bump/webhooks-mcp`, and one open PR: a newer digest rebuilds the branch from `main` and updates that PR, so commits added to it by hand are lost, and a manually chosen older digest lasts only until the next daily run proposes the newest again (merge it first, or close the PR for the newest to reject it). To reject a digest, close its PR without merging; a closed PR with that title stops the workflow proposing the digest again. |
+| commsgun API (`commsgun_api_image`) | `ghcr.io/davcs86/commsgun-api@sha256:9544aba7…`, digest only (commit `145add0`, 2026-11-13) | the owner's own image, tagged by commit SHA with no semver tag, so the digest is the pin; built, smoke-tested and pushed together with the dashboard by that repo's CI on merge to `main`, public on GHCR. Pin both commsgun images from the same commit. Keep the pin cell in exactly this form (`…@sha256:xxxxxxxx…`, digest only (commit `xxxxxxx`, YYYY-MM-DD)); `scripts/bump_image_pin.py` rewrites it |
+| commsgun dashboard (`commsgun_ui_image`) | `ghcr.io/davcs86/commsgun-ui@sha256:3fbf2c06…`, digest only (commit `145add0`, 2026-11-13) | built from the same commit as the API image; same reasons and the same pin-cell format |
 | Docker CE / CLI | 29.8.2 | 29.9.x under two weeks |
 | containerd.io / compose / buildx | 2.3.6 / 5.5.1 / 0.37.1 | newest ≥ 2 weeks for 26.04 |
 | Docker on the app VMs (Debian 13) | the same five releases, `~debian.13~trixie` builds (`docker_packages_debian13`) | one Docker version across edge and app hosts; all five are in Docker's trixie repository |
