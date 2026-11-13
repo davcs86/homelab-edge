@@ -404,12 +404,25 @@ if name == "gh" and sys.argv[1:3] == ["run", "list"]:
     print(os.environ.get("FAKE_RUN_LIST", "[]"))
 if name == "gh" and sys.argv[1:3] == ["pr", "create"]:
     print("https://github.com/owner/repo/pull/7")
+if name == "gh" and sys.argv[1] == "api" and "/compare/" in sys.argv[2]:
+    print(os.environ.get("FAKE_BEHIND_BY", "0"))
 if name == os.environ.get("FAKE_FAIL_CMD") and os.environ.get("FAKE_FAIL_VERB") in sys.argv:
     sys.exit(1)
 """
 
 SECRET = "ghs_SECRET_TOKEN_VALUE"
 HEAD_SHA = "f" * 40
+MAIN_SHA = "e" * 40
+COMPARE = f"repos/owner/repo/compare/{MAIN_SHA}...{HEAD_SHA}"
+
+
+def writes_by_gh_api(calls):
+    """gh api calls other than the read-only compare of main with the PR head."""
+    return [c for c in calls if c["cmd"] == "gh" and c["argv"][0] == "api" and c["argv"][1] != COMPARE]
+
+
+def compares(calls):
+    return [c["argv"] for c in calls if c["cmd"] == "gh" and c["argv"][:2] == ["api", COMPARE]]
 
 
 class OpenPrStep(unittest.TestCase):
@@ -430,7 +443,7 @@ class OpenPrStep(unittest.TestCase):
     def dispatches(calls):
         return [c["argv"] for c in calls if c["cmd"] == "gh" and c["argv"][:2] == ["workflow", "run"]]
 
-    def run_step(self, revision=REV, prs=None, fail=None, ci_runs=None):
+    def run_step(self, revision=REV, prs=None, fail=None, ci_runs=None, behind="0"):
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
                 p = Path(d, n)
@@ -440,7 +453,7 @@ class OpenPrStep(unittest.TestCase):
             env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET,
                    "FAKE_PR_LIST": json.dumps(prs or []), "FAKE_RUN_LIST": json.dumps(ci_runs or []), "GITHUB_REPOSITORY": "owner/repo",
                    "SHORT": "abababababab", "NEW_DIGEST": self.NEW_FULL, "PREVIOUS": OLD, "REVISION": revision,
-                   "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
+                   "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d, "GITHUB_SHA": MAIN_SHA, "FAKE_BEHIND_BY": behind}
             if fail:
                 env["FAKE_FAIL_CMD"], env["FAKE_FAIL_VERB"] = fail
             r = subprocess.run(["bash", "-e", "-c", pr_step()["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
@@ -454,8 +467,8 @@ class OpenPrStep(unittest.TestCase):
     def assert_nothing_written(self, calls):
         for verb in ("checkout", "commit", "push"):
             self.assertEqual(self.sub(calls, "git", verb), [], verb)
-        for verb in ("create", "api"):
-            self.assertEqual(self.sub(calls, "gh", verb), [], verb)
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        self.assertEqual(writes_by_gh_api(calls), [])
 
     def assert_branch_rebuilt_and_ci_started(self, calls):
         self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-B", self.BRANCH])
@@ -571,6 +584,40 @@ class OpenPrStep(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assert_nothing_written(calls)
         self.assertNotIn(SECRET, r.stdout + r.stderr)
+
+    def test_open_pr_for_this_digest_behind_main_is_rebuilt_and_updated_not_duplicated(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], ci_runs=[{"headSha": HEAD_SHA}], behind="2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(compares(calls), [["api", COMPARE, "--jq", ".behind_by"]])
+        self.assert_branch_rebuilt_and_ci_started(calls)
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        edits = writes_by_gh_api(calls)
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["argv"][:4], ["api", "-X", "PATCH", "repos/owner/repo/pulls/7"])
+        self.assertIn(f"title={self.TITLE}", edits[0]["argv"])
+        self.assertIn("Updated https://github.com/owner/repo/pull/7", summary)
+        self.assertNotIn(SECRET, r.stdout + r.stderr + summary)
+
+    def test_open_pr_for_this_digest_not_behind_main_is_left_alone(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], ci_runs=[{"headSha": HEAD_SHA}], behind="0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(compares(calls), [["api", COMPARE, "--jq", ".behind_by"]])
+        self.assert_nothing_written(calls)
+        self.assertEqual(self.dispatches(calls), [])
+
+    def test_an_open_pr_behind_main_is_rebuilt_despite_an_earlier_rejection(self):
+        r, calls, _ = self.run_step(prs=[self.pr("CLOSED", 1, self.TITLE), self.pr("OPEN", 2, self.TITLE)], behind="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("::warning::", r.stdout)
+        self.assert_branch_rebuilt_and_ci_started(calls)
+
+    def test_an_unanswered_compare_leaves_the_pr_as_is_and_fails(self):
+        for fail, behind in ((("gh", "api"), "0"), (None, ""), (None, "null"), (None, "3\n4")):
+            r, calls, _ = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], fail=fail, behind=behind)
+            self.assertNotEqual(r.returncode, 0, (fail, behind))
+            self.assert_nothing_written(calls)
+            self.assertEqual(self.dispatches(calls), [], (fail, behind))
+            self.assertIn("left as is", r.stdout, (fail, behind))
 
     def test_a_failing_push_opens_no_pr_and_starts_no_ci(self):
         r, calls, _ = self.run_step(fail=("git", "push"))
@@ -702,7 +749,7 @@ class CommsgunPrStep(unittest.TestCase):
     sub = staticmethod(OpenPrStep.sub)
     dispatches = staticmethod(OpenPrStep.dispatches)
 
-    def run_step(self, prs=None, api_prev=API_OLD, ui_prev=UI_OLD, revision=CREV):
+    def run_step(self, prs=None, api_prev=API_OLD, ui_prev=UI_OLD, revision=CREV, behind="0"):
         step = cstep(needle="gh pr create")
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
@@ -711,16 +758,13 @@ class CommsgunPrStep(unittest.TestCase):
             log, summary = Path(d, "log"), Path(d, "summary")
             env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET, "FAKE_PR_LIST": json.dumps(prs or []),
                    "FAKE_RUN_LIST": "[]", "GITHUB_REPOSITORY": "owner/repo", "API_PREV": api_prev, "UI_PREV": ui_prev,
-                   "API_DIGEST": API_NEW, "UI_DIGEST": UI_NEW, "REVISION": revision, "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
+                   "API_DIGEST": API_NEW, "UI_DIGEST": UI_NEW, "REVISION": revision, "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d,
+                   "GITHUB_SHA": MAIN_SHA, "FAKE_BEHIND_BY": behind}
             r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
             calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
             return r, calls, summary.read_text() if summary.exists() else ""
 
-    def assert_nothing_written(self, calls):
-        for verb in ("checkout", "commit", "push"):
-            self.assertEqual(self.sub(calls, "git", verb), [], verb)
-        for verb in ("create", "api"):
-            self.assertEqual(self.sub(calls, "gh", verb), [], verb)
+    assert_nothing_written = OpenPrStep.assert_nothing_written
 
     def test_only_the_ui_changed_still_pushes_the_branch_and_opens_one_pr(self):
         r, calls, summary = self.run_step(api_prev="")
@@ -753,6 +797,31 @@ class CommsgunPrStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_nothing_written(calls)
         self.assertIn("https://github.com/owner/repo/pull/7", summary)
+
+    def test_open_pr_with_the_same_title_behind_main_is_rebuilt_and_updated(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], behind="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(compares(calls), [["api", COMPARE, "--jq", ".behind_by"]])
+        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-B", self.BRANCH])
+        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")],
+                         [["push", "--force", f"https://x-access-token:{SECRET}@github.com/owner/repo.git", f"HEAD:refs/heads/{self.BRANCH}"]])
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        edits = writes_by_gh_api(calls)
+        self.assertEqual([e["argv"][:4] for e in edits], [["api", "-X", "PATCH", "repos/owner/repo/pulls/7"]])
+        self.assertEqual(self.dispatches(calls), [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        self.assertIn("Updated https://github.com/owner/repo/pull/7", summary)
+
+    def test_open_pr_with_the_same_title_not_behind_main_is_left_alone(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], behind="0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(compares(calls), [["api", COMPARE, "--jq", ".behind_by"]])
+        self.assert_nothing_written(calls)
+
+    def test_an_unanswered_compare_leaves_the_pr_as_is_and_fails(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)], behind="")
+        self.assertNotEqual(r.returncode, 0)
+        self.assert_nothing_written(calls)
+        self.assertIn("left as is", r.stdout)
 
     def test_closed_unmerged_pr_with_the_same_title_is_not_proposed_again(self):
         r, calls, summary = self.run_step(prs=[self.pr("CLOSED", 9, self.TITLE)])

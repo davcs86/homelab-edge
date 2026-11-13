@@ -61,7 +61,17 @@ jobs:
           open_title="$(jq -r '[.[] | select(.state == "OPEN")][0].title // empty' <<<"$prs")"
           open_head="$(jq -r '[.[] | select(.state == "OPEN")][0].headRefOid // empty' <<<"$prs")"
           rejected="$(jq -r --arg t "$title" '[.[] | select(.state == "CLOSED" and .title == $t)][0].url // empty' <<<"$prs")"
+          behind=0
           if [ -n "$open_number" ] && [ "$open_title" = "$title" ]; then
+            # Bump PRs edit adjacent lines, so one merging leaves the other unmergeable: a head behind main is rebuilt.
+            if ! behind="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${open_head}" --jq .behind_by)" \
+              || ! [[ "$behind" =~ ^[0-9]+$ ]]; then
+              echo "::error::could not tell whether ${open_url} is behind main; it is left as is."
+              exit 1
+            fi
+            [ "$behind" = 0 ] || echo "${open_url} is ${behind} commit(s) behind main; rebuilding its branch."
+          fi
+          if [ -n "$open_number" ] && [ "$open_title" = "$title" ] && [ "$behind" = 0 ]; then
             echo "${NEW_DIGEST} is already proposed: ${open_url}"
             echo "\`${NEW_DIGEST}\` is already proposed: ${open_url}" >> "$GITHUB_STEP_SUMMARY"
             runs="$(gh run list --workflow ci.yml --branch "$branch" --limit 20 --json headSha)"
@@ -72,7 +82,7 @@ jobs:
             fi
             exit 0
           fi
-          if [ -n "$rejected" ]; then
+          if [ -n "$rejected" ] && [ "$behind" = 0 ]; then
             echo "::warning::${NEW_DIGEST} was rejected (PR closed without merging: ${rejected}); not proposed again."
             echo "\`${NEW_DIGEST}\` was rejected (PR closed without merging: ${rejected}); not proposed again." >> "$GITHUB_STEP_SUMMARY"
             exit 0

@@ -24,6 +24,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   workflows, so `bump-webhooks-mcp` (and `bump-commsgun`, which does the same for its two images) dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
   `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
   It keeps one branch and one open PR (force-pushed and retitled for a newer digest), so runs never pile up PRs and a run cancelled before the PR exists, or before `ci` was started, heals on the next.
+  The webhooks-mcp and commsgun pins sit on adjacent lines (and adjacent `docs/versions.md` rows), so merging one bump PR leaves the other
+  unmergeable: a bump PR left behind by a merge to `main` is rebuilt on the next run (an open PR for the same digests whose head the GitHub
+  compare API reports behind `main` is rebuilt from `main`, force-pushed and updated; if that check fails, the run fails and leaves the PR as is).
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
