@@ -95,7 +95,7 @@ rc=0; out="$(gate "probe 0000000-0" </dev/null 2>&1)" || rc=$?
 check "the app-host probe exits 2" 2 "$rc"
 check "the app-host probe is reported as an unknown action" 1 "$(grep -c "unknown action 'probe'" <<<"$out" || true)"
 
-# Image pruning: only digest-pinned images of this app that no remaining release names.
+# Image pruning: only digest-pinned images of this app that the newest 2 releases, current and previous do not name.
 check "no image is removed when no release names a digest" 0 "$(cat "$work/removed" 2>/dev/null | wc -l)"
 img2="$work/opt/imgapp"
 mkdir -p "$img2"
@@ -108,13 +108,14 @@ for n in 1 2 3 4 5 6 7; do
   echo "reg.test/app@sha256:$n" >"$img2/releases/$r/images"
   sleep 0.05
   if [[ "$n" == 7 ]]; then
-    printf '%s\n' reg.test/app@sha256:1 reg.test/app@sha256:2 reg.test/app@sha256:3 reg.test/app@sha256:7 reg.test/app@sha256:orphan reg.test/other@sha256:9 'reg.test/app@<none>' >"$work/local_images"
+    printf '%s\n' reg.test/app@sha256:1 reg.test/app@sha256:2 reg.test/app@sha256:3 reg.test/app@sha256:6 reg.test/app@sha256:7 reg.test/app@sha256:orphan reg.test/other@sha256:9 'reg.test/app@<none>' >"$work/local_images"
   fi
   echo tok | gate2 deploy "$r" octo >/dev/null
 done
 check "images of pruned releases are removed" 1 "$(grep -cx 'reg.test/app@sha256:1' "$work/removed" || true)"
 check "unreferenced digests of the app are removed" 1 "$(grep -cx 'reg.test/app@sha256:orphan' "$work/removed" || true)"
-check "images of kept releases are kept" 0 "$(grep -cE 'sha256:(3|7)$' "$work/removed" || true)"
+check "images of the current and previous release are kept" 0 "$(grep -cE 'sha256:(6|7)$' "$work/removed" || true)"
+check "images of older kept releases are removed (image_keep is 2)" 1 "$(grep -cx 'reg.test/app@sha256:3' "$work/removed" || true)"
 check "other repositories are never touched" 0 "$(grep -c 'other' "$work/removed" || true)"
 check "undigested refs are never touched" 0 "$(grep -c 'none' "$work/removed" || true)"
 

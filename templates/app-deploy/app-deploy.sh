@@ -7,6 +7,7 @@ app_dir="${1:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
 project="${2:?usage: app-deploy <app dir> <compose project> [wait seconds]}"
 wait_seconds="${3:-120}"
 keep=5
+image_keep=2 # releases whose images survive: the newest ones, current and previous (all a rollback can reach)
 
 die() { echo "app-deploy: $*" >&2; exit 2; }
 if ! [[ "$wait_seconds" =~ ^[1-9][0-9]{1,2}$ ]] || (( wait_seconds < 30 || wait_seconds > 900 )); then
@@ -21,13 +22,14 @@ renders() {
   return 1
 }
 
-# Remove digest-pinned images of this app that no remaining release names; in-use images survive (rmi refuses).
+# Remove digest-pinned images of this app that none of the newest image_keep releases, current or previous names;
+# in-use images survive (rmi refuses).
 prune_images() {
-  local keepfile repofile ref
+  local keepfile repofile ref d
   keepfile="$(mktemp)"
   repofile="$(mktemp)"
   while read -r d; do compose "$d" config --images 2>/dev/null || true; done \
-    < <(find "$app_dir/releases" -mindepth 1 -maxdepth 1 -type d) | grep -F '@sha256:' >"$keepfile" || true
+    < <({ newest_first | head -n "$image_keep"; readlink -f "$app_dir/current"; echo "${1:-}"; } | sort -u | sed '/^$/d') | grep -F '@sha256:' >"$keepfile" || true
   if [[ -s "$keepfile" ]]; then # an empty keep set means we could not learn what to keep: remove nothing
     sed 's/@sha256:.*$//' "$keepfile" | sort -u >"$repofile"
     while read -r ref; do
@@ -81,7 +83,7 @@ case "$action" in
       while read -r d; do
         [[ "$d" == "$cur" || "$d" == "$previous" ]] || rm -rf -- "$d"
       done < <(newest_first | tail -n +$((keep + 1)))
-      prune_images || true
+      prune_images "$previous" || true
     else
       echo "release $release did not become healthy" >&2
       if [[ -n "$previous" && -d "$previous" ]]; then
