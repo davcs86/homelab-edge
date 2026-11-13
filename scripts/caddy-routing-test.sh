@@ -97,6 +97,18 @@ read_log() { # <file glob in /var/log/caddy> -> $work/log; non-zero if unreadabl
   if docker exec caddy-routing-test sh -c "cat /var/log/caddy/$1" >"$work/log" 2>"$work/log.err" && [[ -s "$work/log" ]]; then return 0; fi
   echo "FAIL  cannot read Caddy log $1: $(head -c 300 "$work/log.err")"; fail=1; return 1
 }
+# Caddy writes its logs asynchronously; a timeout is not a FAIL here, the check that follows reports it.
+wait_for_line() { # <ERE> <command printing the log>...; polls for up to ~10 s
+  local want="$1"; shift
+  for _ in $(seq 1 50); do
+    "$@" >"$work/poll" 2>&1 || true
+    if grep -qE "$want" "$work/poll"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+# shellcheck disable=SC2329  # invoked through wait_for_line
+access_logs() { docker exec caddy-routing-test sh -c 'cat /var/log/caddy/*.access.log'; }
 
 u="https://$app_host"
 expect "MCP endpoint, prefix stripped"         "200 agent POST /"                 "$(req "$app_host" -X POST "$u/agent")"
@@ -232,7 +244,7 @@ else
 fi
 
 expect "OAuth callback routed"                 "200 agent GET /oauth/callback"   "$(req "$app_host" "$u/agent/oauth/callback?code=SECRETCODE123&state=STATE456")"
-sleep 1
+wait_for_line "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" access_logs || true
 if read_log '*.access.log'; then
   if ! grep -q "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" "$work/log"; then
     echo "FAIL  the OAuth callback request was not logged"; fail=1
@@ -246,15 +258,16 @@ canary_hdr='Referer: https://x/?recipient=canary@example.test'
 req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/reset?recipient=canary@example.test" >/dev/null
 req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/reset?keep=visible" >/dev/null
 kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
-expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/messages?recipient=canary@example.test")"
-sleep 1
+expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/upstream-down?recipient=canary@example.test")"
+wait_for_line "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" access_logs || true
+wait_for_line 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
 if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
   echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
 fi
 # The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
 if read_log '*.access.log'; then
-  if ! grep -q "\"host\":\"$cgui_host\",\"uri\":\"/messages\"" "$work/log"; then
-    echo "FAIL  the dashboard request was not logged at all"; fail=1
+  if ! grep -q "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" "$work/log"; then
+    echo "FAIL  the dashboard's 502 request was not logged at all"; fail=1
   elif grep -q canary "$work/log"; then
     echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
   else
@@ -273,7 +286,7 @@ if grep -q canary "$work/caddy.stderr"; then
 else
   echo "PASS  Caddy's stderr carries no dashboard query or Referer"
 fi
-for want in 'http.log.error.commsgun_ui.*"uri":"/messages"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
+for want in 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
             "http.handlers.reverse_proxy.*\"host\":\"$ingest_host\",\"uri\":\"/reset\""; do
   if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
 done
