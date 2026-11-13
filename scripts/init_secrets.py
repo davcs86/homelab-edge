@@ -53,7 +53,7 @@ GENERATED = {
     "webhooks_mcp_auth_key": lambda: secrets.token_urlsafe(36),
     **{k: lambda: secrets.token_urlsafe(36) for k in (
         "commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
-        "commsgun_app_key_xstockstrat", "commsgun_app_key_ops")},
+        "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops")},
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]

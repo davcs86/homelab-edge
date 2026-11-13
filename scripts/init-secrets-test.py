@@ -29,7 +29,7 @@ OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password"
        "db_role_xstockstrat_staging_password": "stg-OLD", **{k: PEM for k in init_secrets.DB_TLS_KEYS + init_secrets.PGBACKREST_DB_KEYS}}
 
 COMMSGUN_GENERATED = ["commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
-                      "commsgun_app_key_xstockstrat", "commsgun_app_key_ops"]
+                      "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops"]
 OWNER_KEYS = ["resend_api_key", "commsgun_senders"]
 SENDERS = {"xstockstrat": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"},
            "ops": {"senders": ["Ops <ops@example.com>"], "default_sender": "Ops <ops@example.com>"}}
