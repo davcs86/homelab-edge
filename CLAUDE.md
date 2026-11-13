@@ -33,7 +33,8 @@ Read only the row that matches the task.
 | Backup host, Proxmox heartbeat, app VM | `docs/runbooks/home-side.md` |
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | `docs/runbooks/db-host.md`, `playbooks/db.yml` |
 | Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
-| Bumping or adding a pin (the webhooks-mcp digest is bumped by `.github/workflows/bump-webhooks-mcp.yml`, the two commsgun digests by `.github/workflows/bump-commsgun.yml`) | `docs/versions.md` |
+| Bumping or adding a pin, including the bot-opened webhooks-mcp and commsgun digest bumps | `docs/versions.md` |
+| Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C8) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
