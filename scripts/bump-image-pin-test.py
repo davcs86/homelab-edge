@@ -580,6 +580,194 @@ class OpenPrStep(unittest.TestCase):
         self.assertNotIn(SECRET, r.stdout + r.stderr)
 
 
+CWF = ROOT / ".github/workflows/bump-commsgun.yml"
+API_VAR, UI_VAR = "commsgun_api_image", "commsgun_ui_image"
+API_IMG, UI_IMG = "ghcr.io/davcs86/commsgun-api", "ghcr.io/davcs86/commsgun-ui"
+API_OLD, UI_OLD = "sha256:" + "a1" * 32, "sha256:" + "b2" * 32
+API_NEW, UI_NEW = "sha256:" + "c3" * 32, "sha256:" + "d4" * 32
+CREV = "145add0" + "0" * 33
+
+
+def csteps():
+    return yaml.safe_load(CWF.read_text())["jobs"]["bump"]["steps"]
+
+
+def cstep(sid=None, needle=None):
+    return next(s for s in csteps() if (sid and s.get("id") == sid) or (needle and needle in s.get("run", "")))
+
+
+class CommsgunWorkflow(unittest.TestCase):
+    def test_triggers_permissions_and_concurrency(self):
+        wf = yaml.safe_load(CWF.read_text())
+        self.assertEqual(sorted(wf[True]), ["schedule", "workflow_dispatch"])
+        self.assertEqual(wf[True]["schedule"], [{"cron": "41 15 * * *"}])
+        self.assertEqual(list(wf[True]["workflow_dispatch"]["inputs"]), ["api_digest", "ui_digest"])
+        for i in wf[True]["workflow_dispatch"]["inputs"].values():
+            self.assertIs(i.get("required", False), False)
+        self.assertEqual(wf["permissions"], {"contents": "read"})
+        self.assertEqual(wf["jobs"]["bump"]["permissions"], {"contents": "write", "pull-requests": "write", "actions": "write"})
+        self.assertEqual(wf["concurrency"], {"group": "bump-commsgun", "cancel-in-progress": True})
+        self.assertEqual(wf["jobs"]["bump"]["if"], "github.ref == 'refs/heads/main'")
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", CWF.read_text())), {"GITHUB_TOKEN"})
+
+    def test_script_runs_once_per_image_in_order(self):
+        api, ui = cstep("api"), cstep("ui")
+        self.assertIn(f"bump_image_pin.py --var {API_VAR} --image {API_IMG}", api["run"])
+        self.assertIn(f"bump_image_pin.py --var {UI_VAR} --image {UI_IMG}", ui["run"])
+        self.assertEqual(api["env"], {"DIGEST": "${{ inputs.api_digest }}"})
+        self.assertEqual(ui["env"], {"DIGEST": "${{ inputs.ui_digest }}"})
+        ids = [s.get("id") for s in csteps()]
+        self.assertLess(ids.index("api"), ids.index("ui"))
+        self.assertLess(ids.index("ui"), ids.index("guard"))
+        for run in (s["run"] for s in csteps() if "run" in s):
+            self.assertNotIn("${{", run)
+
+    def test_actions_pinned_and_checkout_keeps_no_credentials(self):
+        self.assertEqual([u for u in re.findall(r"uses:\s*(\S+)", CWF.read_text()) if not re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", u)], [])
+        co = next(s for s in csteps() if str(s.get("uses", "")).startswith("actions/checkout@"))
+        self.assertIs(co["with"]["persist-credentials"], False)
+
+    def test_pr_step_needs_the_guard_and_gets_its_data_through_env(self):
+        pr = cstep(needle="gh pr create")
+        self.assertEqual(pr["if"], "steps.guard.outputs.proceed == 'true'")
+        self.assertEqual(pr["env"]["GH_TOKEN"], "${{ secrets.GITHUB_TOKEN }}")
+        want = {"API_PREV": "steps.api.outputs.previous", "UI_PREV": "steps.ui.outputs.previous",
+                "API_DIGEST": "steps.guard.outputs.api_digest", "UI_DIGEST": "steps.guard.outputs.ui_digest",
+                "REVISION": "steps.guard.outputs.revision"}
+        for k, v in want.items():
+            self.assertEqual(pr["env"][k], "${{ %s }}" % v)
+        guard = cstep("guard")
+        self.assertEqual(guard["if"], "steps.api.outputs.changed == 'true' || steps.ui.outputs.changed == 'true'")
+        self.assertEqual(guard["env"]["API_REV"], "${{ steps.api.outputs.revision }}")
+        self.assertEqual(guard["env"]["UI_REV"], "${{ steps.ui.outputs.revision }}")
+        done = next(s for s in csteps() if s.get("name") == "Already pinned")
+        self.assertEqual(done["if"], "steps.api.outputs.changed == 'false' && steps.ui.outputs.changed == 'false'")
+
+
+def run_guard(api_rev, ui_rev, docs_commits=("145add0", "145add0")):
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "inventories/prod/group_vars/all").mkdir(parents=True)
+        Path(d, "docs").mkdir()
+        Path(d, "inventories/prod/group_vars/all/versions.yml").write_text(
+            f'{API_VAR}: "{API_IMG}@{API_NEW}"\n{UI_VAR}: "{UI_IMG}@{UI_NEW}"\n')
+        Path(d, "docs/versions.md").write_text(
+            f"| a (`{API_VAR}`) | `{API_IMG}@sha256:c3c3c3c3…`, digest only (commit `{docs_commits[0]}`, 2026-11-13) | x |\n"
+            f"| u (`{UI_VAR}`) | `{UI_IMG}@sha256:d4d4d4d4…`, digest only (commit `{docs_commits[1]}`, 2026-11-13) | x |\n")
+        out, summary = Path(d, "out"), Path(d, "summary")
+        env = {"PATH": os.environ["PATH"], "API_REV": api_rev, "UI_REV": ui_rev, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
+        r = subprocess.run(["bash", "-e", "-c", cstep("guard")["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
+        outputs = dict(l.split("=", 1) for l in out.read_text().splitlines()) if out.exists() else {}
+        return r, outputs, summary.read_text() if summary.exists() else ""
+
+
+class CommsgunGuard(unittest.TestCase):
+    def test_different_revisions_refuse_the_pair_and_name_both(self):
+        r, out, summary = run_guard("a" * 40, "b" * 40)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(out, {"proceed": "false"})
+        self.assertIn("::warning::", r.stdout)
+        for rev in ("a" * 40, "b" * 40):
+            self.assertIn(rev, summary)
+
+    def test_an_unlabelled_image_refuses_the_pair(self):
+        for a, u in (("unknown", "unknown"), (CREV, "unknown"), ("unknown", CREV)):
+            r, out, _ = run_guard(a, u)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(out, {"proceed": "false"}, (a, u))
+
+    def test_same_revision_proceeds_and_reports_pins_and_revision(self):
+        r, out, _ = run_guard(CREV, CREV)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": CREV})
+
+    def test_an_unchanged_image_is_checked_against_the_commit_in_the_docs_row(self):
+        r, out, _ = run_guard("", CREV)
+        self.assertEqual(out.get("proceed"), "true", r.stdout + r.stderr)
+        self.assertEqual(out["revision"], CREV)
+        r, out, _ = run_guard(CREV, "", docs_commits=("145add0", "145add0"))
+        self.assertEqual(out.get("proceed"), "true")
+        r, out, _ = run_guard("", "e" * 40)
+        self.assertEqual(out, {"proceed": "false"})
+        r, out, _ = run_guard("", CREV, docs_commits=("145add0", "unknown"))
+        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": CREV})
+        r, out, _ = run_guard("", CREV, docs_commits=("unknown", "145add0"))
+        self.assertEqual(out, {"proceed": "false"})
+
+
+class CommsgunPrStep(unittest.TestCase):
+    BRANCH = "bump/commsgun"
+    TITLE = f"Bump commsgun to api sha256:{API_NEW[7:19]}… / ui sha256:{UI_NEW[7:19]}…"
+    OTHER = "Bump commsgun to api sha256:000000000000… / ui sha256:111111111111…"
+    pr = staticmethod(OpenPrStep.pr)
+    sub = staticmethod(OpenPrStep.sub)
+    dispatches = staticmethod(OpenPrStep.dispatches)
+
+    def run_step(self, prs=None, api_prev=API_OLD, ui_prev=UI_OLD, revision=CREV):
+        step = cstep(needle="gh pr create")
+        with tempfile.TemporaryDirectory() as d:
+            for n in ("git", "gh"):
+                Path(d, n).write_text(FAKE)
+                Path(d, n).chmod(0o755)
+            log, summary = Path(d, "log"), Path(d, "summary")
+            env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET, "FAKE_PR_LIST": json.dumps(prs or []),
+                   "FAKE_RUN_LIST": "[]", "GITHUB_REPOSITORY": "owner/repo", "API_PREV": api_prev, "UI_PREV": ui_prev,
+                   "API_DIGEST": API_NEW, "UI_DIGEST": UI_NEW, "REVISION": revision, "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d}
+            r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
+            calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+            return r, calls, summary.read_text() if summary.exists() else ""
+
+    def assert_nothing_written(self, calls):
+        for verb in ("checkout", "commit", "push"):
+            self.assertEqual(self.sub(calls, "git", verb), [], verb)
+        for verb in ("create", "api"):
+            self.assertEqual(self.sub(calls, "gh", verb), [], verb)
+
+    def test_only_the_ui_changed_still_pushes_the_branch_and_opens_one_pr(self):
+        r, calls, summary = self.run_step(api_prev="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.sub(calls, "git", "checkout")[0]["argv"], ["checkout", "-B", self.BRANCH])
+        self.assertEqual([c["argv"] for c in self.sub(calls, "git", "push")],
+                         [["push", "--force", f"https://x-access-token:{SECRET}@github.com/owner/repo.git", f"HEAD:refs/heads/{self.BRANCH}"]])
+        self.assertEqual(self.dispatches(calls), [["workflow", "run", "ci.yml", "--ref", self.BRANCH]])
+        commit = self.sub(calls, "git", "commit")[0]["argv"]
+        self.assertEqual(commit[commit.index("-m") + 1], self.TITLE)
+        pr = self.sub(calls, "gh", "create")
+        self.assertEqual(len(pr), 1)
+        self.assertEqual(pr[0]["argv"][pr[0]["argv"].index("--title") + 1], self.TITLE)
+        body = pr[0]["body"]
+        for needle in (API_NEW, UI_NEW, UI_OLD, f"https://github.com/davcs86/commsgun/commit/{CREV}", "not verified", "deploy", "by hand are lost"):
+            self.assertIn(needle, body)
+        self.assertNotIn(API_OLD, body)
+        self.assertIn("Opened https://github.com/owner/repo/pull/7", summary)
+        self.assertNotIn(SECRET, r.stdout + r.stderr + summary)
+
+    def test_both_changed_lists_both_previous_digests(self):
+        r, calls, _ = self.run_step()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        body = self.sub(calls, "gh", "create")[0]["body"]
+        for needle in (API_OLD, UI_OLD, API_NEW, UI_NEW):
+            self.assertIn(needle, body)
+
+    def test_open_pr_with_the_same_title_means_nothing_pushed(self):
+        r, calls, summary = self.run_step(prs=[self.pr("OPEN", 7, self.TITLE)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertIn("https://github.com/owner/repo/pull/7", summary)
+
+    def test_closed_unmerged_pr_with_the_same_title_is_not_proposed_again(self):
+        r, calls, summary = self.run_step(prs=[self.pr("CLOSED", 9, self.TITLE)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_nothing_written(calls)
+        self.assertIn("::warning::", r.stdout)
+        self.assertIn("rejected", summary)
+
+    def test_open_pr_for_older_digests_is_reused(self):
+        r, calls, _ = self.run_step(prs=[self.pr("OPEN", 3, self.OTHER)])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.sub(calls, "gh", "create"), [])
+        self.assertEqual(self.sub(calls, "gh", "api")[0]["argv"][:4], ["api", "-X", "PATCH", "repos/owner/repo/pulls/3"])
+
+
 class CiWorkflow(unittest.TestCase):
     def test_ci_can_be_dispatched_and_this_test_runs_in_lint(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
