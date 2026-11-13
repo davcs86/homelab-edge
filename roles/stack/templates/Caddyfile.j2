@@ -14,10 +14,10 @@
 		output stderr
 		format json
 		level INFO
-		exclude http.log.error.commsgun_ui
+		exclude http.log.error.commsgun_ui http.handlers.reverse_proxy
 	}
-	# Upstream errors log the full request; the dashboard's carry recipient addresses in the query and Referer.
-	log commsgun_ui_error {
+	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
+	log redacted_requests {
 		output stderr
 		format filter {
 			request>uri regexp \?.* ""
@@ -25,7 +25,7 @@
 			wrap json
 		}
 		level INFO
-		include http.log.error.commsgun_ui
+		include http.log.error.commsgun_ui http.handlers.reverse_proxy
 	}
 }
 

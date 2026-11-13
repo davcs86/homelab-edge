@@ -9,7 +9,7 @@ work="$(mktemp -d)"
 tailnet_ip=100.64.0.250
 staging_vm_ip=100.64.0.251
 pids=()
-# shellcheck disable=SC2317  # invoked via trap
+# shellcheck disable=SC2317,SC2329  # invoked via trap
 cleanup() {
   docker rm -f caddy-routing-test >/dev/null 2>&1 || true
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
@@ -32,15 +32,20 @@ app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host=
 . "$work/hosts.env"
 
 # Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable;
-# /echo-headers adds the X-Forwarded-* values received, and commsgun-ui answers with a Location carrying its path.
+# Test hooks: /echo-headers, /reset; commsgun-ui also sends Location.
 cat >"$work/mock.py" <<'EOF'
-import http.server, sys
+import http.server, socket, struct, sys
 name, port = sys.argv[1], int(sys.argv[2])
 class H(http.server.BaseHTTPRequestHandler):
     def _r(self):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n: self.rfile.read(n)
+            if self.path.startswith("/reset"):
+                self.send_response(200); self.send_header("Content-Length", "100000"); self.end_headers()
+                self.wfile.write(b"x" * 1000); self.wfile.flush()
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.connection.close(); return
             body = f"{name} {self.command} {self.path}"
             if self.path.startswith("/echo-headers"):
                 body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For")))
@@ -228,30 +233,35 @@ if grep -qE 'SECRETCODE123|STATE456' "$work"/logs/*.access.log; then
 else
   echo "PASS  access log redacts OAuth code/state"
 fi
-# The dashboard keeps recipient filters in its query; its log line keeps method, host, path and status only.
+canary_hdr='Referer: https://x/?recipient=canary@example.test'
+req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/reset?recipient=canary@example.test" >/dev/null
+req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/reset?keep=visible" >/dev/null
+kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
+expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/messages?recipient=canary@example.test")"
+sleep 1
+docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1
+# The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
 if grep -q canary "$work"/logs/*.access.log; then
   echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -ho '"[^"]*canary[^"]*"' "$work"/logs/*.access.log | sort -u | tr '\n' ' ')"; fail=1
 elif ! grep -h "\"host\":\"$cgui_host\"" "$work"/logs/*.access.log | grep -q '"uri":"/messages"'; then
   echo "FAIL  the dashboard request was not logged at all"; fail=1
 else
-  echo "PASS  dashboard logged without query, Referer or Location"
+  echo "PASS  dashboard logged without query, Referer or Location (incl. reset and 502)"
 fi
 if grep -q '"uri":"/hooks?keep=visible"' "$work/logs/tailnet.access.log"; then
   echo "PASS  other *.ts names are still logged with their query"
 else
   echo "FAIL  the ingest request lost its query in tailnet.access.log"; fail=1
 fi
-# An upstream error logs the whole request through the error logger (stderr), not the access log.
-kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
-expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$g/messages?recipient=canary@example.test")"
-sleep 1
-if docker logs caddy-routing-test 2>&1 | grep -q canary; then
-  echo "FAIL  Caddy's error log leaks the dashboard's query or Referer"; fail=1
-elif ! docker logs caddy-routing-test 2>&1 | grep '"logger":"http.log.error.commsgun_ui"' | grep -q '"uri":"/messages"'; then
-  echo "FAIL  the dashboard's upstream error was not logged"; fail=1
+if grep -q canary "$work/caddy.stderr"; then
+  echo "FAIL  Caddy's stderr leaks the dashboard's query or Referer: $(grep -o '"logger":"[^"]*"' <(grep canary "$work/caddy.stderr") | sort -u | tr '\n' ' ')"; fail=1
 else
-  echo "PASS  dashboard upstream error logged without query or Referer"
+  echo "PASS  Caddy's stderr carries no dashboard query or Referer"
 fi
+for want in 'http.log.error.commsgun_ui.*"uri":"/messages"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
+            "http.handlers.reverse_proxy.*\"host\":\"$ingest_host\",\"uri\":\"/reset\""; do
+  if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
+done
 for n in comms cgui; do
   h="${n}_host"
   on8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "${!h}:$staging_port:127.0.0.1" -X POST -d '{}' "https://${!h}:$staging_port/v1/messages" -w ' %{http_code}' || true)"
