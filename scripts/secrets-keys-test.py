@@ -39,6 +39,20 @@ class Extraction(unittest.TestCase):
         d = tree({"inventories/prod/hosts.yml": "h:\n  gate_sops_key: app_gate_x_staging_public_key\n"})
         self.assertEqual(secret_keys.used_keys(d), {"app_gate_x_staging_public_key"})
 
+    def test_registry_keys_read_by_a_template_loop(self):
+        d = tree({
+            "inventories/prod/group_vars/all/main.yml": "reg:\n  - {id: a, key: reg_key_a}\n  - id: b\n    key: reg_key_b\nother:\n  - {key: not_read}\n",
+            "roles/a/templates/c.j2": "{%- for app in reg %}{{ edge_secrets[app.key] | tojson }}{% endfor %}",
+        })
+        self.assertEqual(secret_keys.used_keys(d), {"reg_key_a", "reg_key_b"})
+
+    def test_a_registry_no_template_loops_over_is_ignored(self):
+        d = tree({
+            "inventories/prod/group_vars/all/main.yml": "reg:\n  - {id: a, key: reg_key_a}\n",
+            "roles/a/templates/c.j2": "{% for app in other %}{{ edge_secrets[app.key] }}{% endfor %}{{ reg }}",
+        })
+        self.assertEqual(secret_keys.used_keys(d), set())
+
     def test_key_entries_in_files_that_do_not_index_by_item_key_are_ignored(self):
         d = tree({"roles/a/tasks/main.yml": "- {name: x, key: unrelated_thing}\nvalue: '{{ edge_secrets.real }}'\n"})
         self.assertEqual(secret_keys.used_keys(d), {"real"})
@@ -54,6 +68,7 @@ class Repository(unittest.TestCase):
         self.assertIn("gatus_heartbeat_db_token", used)   # dotted
         self.assertTrue({"pgbackrest_tls_ca_crt", "pgbackrest_tls_server_crt", "pgbackrest_tls_server_key"} <= used)  # edge_secrets[item.key]
         self.assertIn("db_role_xstockstrat_production_password", used)  # password_key in group_vars
+        self.assertTrue({"commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops"} <= used)  # registry
 
     def test_every_key_the_roles_read_is_in_the_committed_file(self):
         missing = secret_keys.used_keys() - secret_keys.file_keys()
