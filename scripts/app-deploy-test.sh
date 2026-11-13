@@ -13,6 +13,9 @@ cat >"$work/bin/docker" <<EOT
 #!/usr/bin/env bash
 echo "docker \$* [cfg=\${DOCKER_CONFIG:-none}]" >>"$work/log"
 [[ "\$*" == *login* ]] && cat >/dev/null
+[[ "\$*" == *"config --images"* ]] && { a="\$*"; f="\${a##*-f }"; cat "\$(dirname "\${f%% *}")/images" 2>/dev/null; exit 0; }
+[[ "\$*" == "image ls "* ]] && { cat "$work/local_images" 2>/dev/null; exit 0; }
+[[ "\$*" == "image rm "* ]] && { echo "\${*: -1}" >>"$work/removed"; exit 0; }
 [[ -n "\${FAIL_ON:-}" && "\$*" == *"\$FAIL_ON"*"up -d"* ]] && exit 1
 [[ -n "\${FAIL_CONFIG:-}" && "\$*" == *" config -q"* ]] && { echo 'line 3: unexpected character "!" in variable name "BAD!KEY=SECRETPROBE"' >&2; echo 'required variable DB_PASSWORD is missing a value' >&2; exit 15; }
 exit 0
@@ -91,5 +94,28 @@ check "unknown action is rejected" 2 "$rc"
 rc=0; out="$(gate "probe 0000000-0" </dev/null 2>&1)" || rc=$?
 check "the app-host probe exits 2" 2 "$rc"
 check "the app-host probe is reported as an unknown action" 1 "$(grep -c "unknown action 'probe'" <<<"$out" || true)"
+
+# Image pruning: only digest-pinned images of this app that no remaining release names.
+check "no image is removed when no release names a digest" 0 "$(cat "$work/removed" 2>/dev/null | wc -l)"
+img2="$work/opt/imgapp"
+mkdir -p "$img2"
+gate2() { SSH_ORIGINAL_COMMAND="$*" bash "$gate_script" "$img2" myapp; }
+: >"$work/local_images"
+for n in 1 2 3 4 5 6 7; do
+  r="$(release $((100 + n)))"
+  echo "name: x" | gate2 put "$r" compose.yml
+  echo "APP_IMAGE=i$n" | gate2 put "$r" .env
+  echo "reg.test/app@sha256:$n" >"$img2/releases/$r/images"
+  sleep 0.05
+  if [[ "$n" == 7 ]]; then
+    printf '%s\n' reg.test/app@sha256:1 reg.test/app@sha256:2 reg.test/app@sha256:3 reg.test/app@sha256:7 reg.test/app@sha256:orphan reg.test/other@sha256:9 'reg.test/app@<none>' >"$work/local_images"
+  fi
+  echo tok | gate2 deploy "$r" octo >/dev/null
+done
+check "images of pruned releases are removed" 1 "$(grep -cx 'reg.test/app@sha256:1' "$work/removed" || true)"
+check "unreferenced digests of the app are removed" 1 "$(grep -cx 'reg.test/app@sha256:orphan' "$work/removed" || true)"
+check "images of kept releases are kept" 0 "$(grep -cE 'sha256:(3|7)$' "$work/removed" || true)"
+check "other repositories are never touched" 0 "$(grep -c 'other' "$work/removed" || true)"
+check "undigested refs are never touched" 0 "$(grep -c 'none' "$work/removed" || true)"
 
 exit "$fail"

@@ -21,6 +21,23 @@ renders() {
   return 1
 }
 
+# Remove digest-pinned images of this app that no remaining release names; in-use images survive (rmi refuses).
+prune_images() {
+  local keepfile repofile ref
+  keepfile="$(mktemp)"
+  repofile="$(mktemp)"
+  while read -r d; do compose "$d" config --images 2>/dev/null || true; done \
+    < <(find "$app_dir/releases" -mindepth 1 -maxdepth 1 -type d) | grep -F '@sha256:' >"$keepfile" || true
+  if [[ -s "$keepfile" ]]; then # an empty keep set means we could not learn what to keep: remove nothing
+    sed 's/@sha256:.*$//' "$keepfile" | sort -u >"$repofile"
+    while read -r ref; do
+      grep -Fxq -- "${ref%@*}" "$repofile" || continue
+      grep -Fxq -- "$ref" "$keepfile" || docker image rm -- "$ref" >/dev/null 2>&1 || true
+    done < <(docker image ls --digests --format '{{.Repository}}@{{.Digest}}' | grep -F '@sha256:' | sort -u)
+  fi
+  rm -f "$keepfile" "$repofile"
+}
+
 read -r -a cmd <<<"${SSH_ORIGINAL_COMMAND:-}"
 action="${cmd[0]:-}"
 release="${cmd[1]:-}"
@@ -64,6 +81,7 @@ case "$action" in
       while read -r d; do
         [[ "$d" == "$cur" || "$d" == "$previous" ]] || rm -rf -- "$d"
       done < <(newest_first | tail -n +$((keep + 1)))
+      prune_images || true
     else
       echo "release $release did not become healthy" >&2
       if [[ -n "$previous" && -d "$previous" ]]; then

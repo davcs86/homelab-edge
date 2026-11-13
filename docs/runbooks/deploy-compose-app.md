@@ -6,7 +6,7 @@ Template: `templates/app-deploy/` (`deploy.yml`, `app-deploy.sh`, `compose.examp
 push / dispatch → build job: docker build → push to GHCR → image digest
                 → deploy job: pinned tailscale → join tailnet as ephemeral tag:ci node
                               → ssh app@VM (forced command = app-deploy.sh): put compose.yml, put .env, deploy
-                              → VM: pull by digest → up --wait → healthy: prune old releases / unhealthy: roll back
+                              → VM: pull by digest → up --wait → healthy: prune old releases and the images only they name / unhealthy: roll back
 ```
 
 The deploy key can run only `put`, `deploy`, `rollback` and `status` for one app directory. The VM never keeps registry
