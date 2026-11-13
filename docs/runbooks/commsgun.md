@@ -43,7 +43,9 @@ Then in this repository:
 4. **Confirm the limits.** The block above `commsgun_providers` in `inventories/prod/group_vars/all/main.yml` carries
    `TODO(ask)`: the provider limit (`resend`: 60 per minute, 100 per day) and each app's per-channel limits are starting
    values the owner has not confirmed. Edit them if wrong and remove the marker once confirmed.
-5. **Deploy.** Run **Actions → deploy** (`tailnet`). Merging the PR that brought the code deployed nothing.
+5. **Deploy.** Run **Actions → deploy** (`tailnet`). Merging the PR that brought the code deployed nothing. If the
+   deploy fails at or after "Start the stack", follow `docs/runbooks/recovery.md` § "After a deploy that failed
+   part-way" before re-running.
 
 Verify from a tailnet device that may reach the edge on 443 (your own devices, or `tag:xstockstrat`). Replace
 `<domain>` and `<your address>`; the `ops` app key is read from SOPS:
@@ -105,10 +107,12 @@ Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, p
    (`docs/runbooks/onboard-service.md`).
 
 A step missed fails early, not at runtime: CI (`scripts/secrets-keys-test.py`) fails when the inventory names a key the
-SOPS file lacks, and the deploy stops at "Commsgun secrets are present and fit a single-quoted env line" (key missing,
-empty or holding a quote, backslash or line break), "Commsgun senders are a map" or "commsgun_senders has no usable entry
-for app <id>" (no entry, empty `senders`, or `default_sender` not one of them), or "commsgun_senders has entries for apps
-without an email channel". Check: send one email as the new app (the `send` function above with its id and key) and see
+SOPS file lacks, and the deploy stops, before it writes anything, at "Commsgun secrets are present and fit a
+single-quoted env line" (key missing, empty or holding a quote, backslash or line break), "Commsgun secrets are as long as
+the service requires" (an app key, the session secret or the API token under 32 characters, the password under 16),
+"Commsgun senders are a map", "commsgun_senders has no usable entry for app <id>" (no entry, `senders` empty or not a
+list, a sender or `default_sender` not shaped `address` or `Name <address>`, or `default_sender` not one of `senders`), or
+"commsgun_senders has <n> entries whose key is not the id of an app with an email channel". Check: send one email as the new app (the `send` function above with its id and key) and see
 `202`, then the message on the dashboard filtered by that app.
 
 ## 3. Rotate an app key or the admin password

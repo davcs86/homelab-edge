@@ -36,6 +36,7 @@ def load_vars():
 
 V = load_vars()
 ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, loader=jinja2.FileSystemLoader(ROOT / "roles/stack/templates"))
+ENV.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None  # Ansible's `match` test
 TRICKY = "O'Brien \"Ops\" $HOME #1 <ops@example.com>"  # quote, double quotes, $ and # must survive the env file
 BACKSLASH = r'"Ops\\Team \'q\'" <team@example.com>'  # backslashes and a backslash before a quote
 SENDERS = {
@@ -92,8 +93,9 @@ def parse_env(text):
     return out
 
 
-def assertions_pass(s):
-    """Evaluates the role's assert tasks the way Ansible does: per loop item, conditions in order."""
+def first_failure(s):
+    """Evaluates the role's assert tasks the way Ansible does: per loop item, conditions in order.
+    Returns the rendered fail_msg of the first failing assertion, or None."""
     ctx = {**V, "edge_secrets": s}
     ctx |= {k: ENV.compile_expression(v.strip()[2:-2])(**ctx) for k, v in BLOCK.get("vars", {}).items()}
     for t in BLOCK["block"]:
@@ -107,8 +109,12 @@ def assertions_pass(s):
         for item in items:
             for cond in that:
                 if not ENV.compile_expression(cond)(**ctx, item=item):
-                    return False
-    return True
+                    return ENV.from_string(a["fail_msg"]).render(**ctx, item=item)
+    return None
+
+
+def assertions_pass(s):
+    return first_failure(s) is None
 
 
 COMPOSE = yaml.safe_load(ENV.get_template("compose.yml.j2").render(**V, ansible_managed="test"))
@@ -267,11 +273,42 @@ class Assertions(unittest.TestCase):
     def test_senders_must_be_a_map(self):
         self.assertFalse(assertions_pass(secrets(commsgun_senders="Alerts <alerts@example.com>")))
 
+    def test_secrets_shorter_than_the_service_accepts_fail(self):
+        # api/internal/constants MinSecretLen = 32; ui/src/lib/server/env.ts MIN_ADMIN_PASSWORD = 16
+        for key in ["commsgun_session_secret", "commsgun_admin_api_token", *[a["key"] for a in V["commsgun_apps"]]]:
+            self.assertFalse(assertions_pass(secrets(**{key: "x" * 31})), key)
+            self.assertTrue(assertions_pass(secrets(**{key: "x" * 32})), key)
+        self.assertFalse(assertions_pass(secrets(commsgun_admin_password="x" * 15)))
+        self.assertTrue(assertions_pass(secrets(commsgun_admin_password="x" * 16)))
+
+    def test_senders_given_as_a_map_fail(self):
+        entry = {"senders": {"a": "Alerts <alerts@example.com>"}, "default_sender": "a"}
+        self.assertFalse(assertions_pass(secrets(commsgun_senders={**SENDERS, "ops": entry})))
+
+    def test_a_sender_without_an_address_shape_fails(self):
+        for bad in ("Alerts", "alerts@", "@example.com", "Alerts alerts@example.com", "Alerts <alerts@example.com",
+                    "a@b@example.com", "Alerts <alerts@example.com> x", "<>"):
+            senders = {**SENDERS, "ops": {"senders": [TRICKY, bad], "default_sender": TRICKY}}
+            self.assertFalse(assertions_pass(secrets(commsgun_senders=senders)), bad)
+            senders = {**SENDERS, "ops": {"senders": [TRICKY, bad], "default_sender": bad}}
+            self.assertFalse(assertions_pass(secrets(commsgun_senders=senders)), bad)
+        good = {**SENDERS, "ops": {"senders": ["ops@example.com", TRICKY], "default_sender": "ops@example.com"}}
+        self.assertTrue(assertions_pass(secrets(commsgun_senders=good)))
+
+    def test_the_unknown_entries_message_counts_them_without_naming_them(self):
+        extra = {**SENDERS, "leak@example.com": {"senders": ["N <n@example.com>"], "default_sender": "N <n@example.com>"},
+                 "nobody": {"senders": ["N <n@example.com>"], "default_sender": "N <n@example.com>"}}
+        msg = first_failure(secrets(commsgun_senders=extra))
+        self.assertIsNotNone(msg)
+        self.assertNotIn("leak", msg)
+        self.assertNotIn("nobody", msg)
+        self.assertIn("2", msg)
+
     def test_failure_messages_name_keys_or_app_ids_only(self):
         for t in BLOCK["block"]:
             msg = t.get("ansible.builtin.assert", {}).get("fail_msg", "")
             for ref in re.findall(r"\{\{(.*?)\}\}", msg):
-                self.assertIn(ref.strip(), {"item", "item.id"} | {"(edge_secrets.commsgun_senders | list | reject('in', _email_apps) | list | join(', '))"}, msg)
+                self.assertIn(ref.strip(), {"item", "item.id", "edge_secrets.commsgun_senders | list | reject('in', _email_apps) | list | length"}, msg)
 
 
 class Compose(unittest.TestCase):
