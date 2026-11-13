@@ -96,7 +96,8 @@ check "the app-host probe exits 2" 2 "$rc"
 check "the app-host probe is reported as an unknown action" 1 "$(grep -c "unknown action 'probe'" <<<"$out" || true)"
 
 # Image pruning: only digest-pinned images of this app that the newest 2 releases, current and previous do not name.
-check "no image is removed when no release names a digest" 0 "$(cat "$work/removed" 2>/dev/null | wc -l)"
+: >>"$work/removed"
+check "no image is removed when no release names a digest" 0 "$(wc -l <"$work/removed")"
 img2="$work/opt/imgapp"
 mkdir -p "$img2"
 gate2() { SSH_ORIGINAL_COMMAND="$*" bash "$gate_script" "$img2" myapp; }
