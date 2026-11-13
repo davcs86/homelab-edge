@@ -42,9 +42,9 @@ Then in this repository:
    A secret value may not contain a quote, backslash or line break (the deploy refuses it; see `docs/decisions.md`).
    Commit both hand-added keys and get them merged to `main` before step 5; the deploy does not see a value that is
    only in your working copy or on an unmerged branch.
-4. **Confirm the limits.** The block above `commsgun_providers` in `inventories/prod/group_vars/all/main.yml` carries
-   `TODO(ask)`: the provider limit (`resend`: 60 per minute, 100 per day) and each app's per-channel limits are starting
-   values the owner has not confirmed. Edit them if wrong and remove the marker once confirmed.
+4. **Check the limits.** `commsgun_providers` and `commsgun_apps` in `inventories/prod/group_vars/all/main.yml` hold the
+   provider limit (`resend`: 60 per minute, 100 per day) and each app's per-channel limits, confirmed by the owner on
+   2026-11-13. The apps' daily email limits sum to 105 on purpose: the provider cap wins and the excess is deferred.
 5. **Deploy.** Run **Actions → deploy** (`tailnet`). Merging the PR that brought the code deployed nothing. If the
    deploy fails anywhere in the stack role (one of the commsgun checks below, or at or after "Start the stack"), follow
    `docs/runbooks/recovery.md` § "After a deploy that failed part-way" before re-running: earlier tasks of that run

@@ -85,7 +85,7 @@ commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"
 commsgun_enqueue_port: 9200
 commsgun_ui_port: 9202
 # `key` names the SOPS key holding the app's bearer key; every email app needs an entry in the SOPS map commsgun_senders.
-# TODO(ask): owner confirms these limits before the first deploy
+# App daily limits may sum above the provider's: the provider cap wins and the excess is deferred, not dropped.
 commsgun_providers:
   email: {name: resend, per_minute: 60, per_day: 100}
   sms: null
