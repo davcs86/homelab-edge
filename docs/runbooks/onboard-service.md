@@ -49,6 +49,9 @@ and the tailscale split-horizon records are generated from it. `kind: app` is an
 bypass; `ui_public` also serves the whole UI), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
 are still written per service. `webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its
 handle in the `*.ts:8443` site (tailnet-only, not in the firewall) must keep `import tailnet_only` (see `docs/decisions.md`).
+A workload that must send email or SMS needs no route of its own: it POSTs to commsgun's tailnet-only enqueue name
+(`commsgun_enqueue_hostname`, `comms.ts.<domain>`) with its own app key, over the `tag:edge:443` grant its tag already needs;
+register the app as in `docs/runbooks/commsgun.md` § 2.
 
 A new public hostname with its own certificate also needs three things outside this repo, **all before the deploy**
 that introduces it:
