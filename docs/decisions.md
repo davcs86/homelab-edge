@@ -19,6 +19,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
+- **The webhooks-mcp bump PR is opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
+  Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
+  workflows, so `bump-webhooks-mcp` dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
+  `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
+  It keeps one branch and one open PR (force-pushed and retitled for a newer digest), so runs never pile up PRs and a run cancelled before the PR exists, or before `ci` was started, heals on the next.
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
@@ -237,3 +242,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
   `pve-setup.py vm-template` now sets `--cpu host`; `host` blocks live migration between different CPUs, which a single node does not need.
+- **The app-deploy gate prunes images, not just release directories.** Docker on the app VMs uses the containerd image store and every
+  deploy pulled ~13 new image digests that nothing removed; `/var/lib/containerd` reached 37 GB (468 images, 13 in use), the 40G root
+  filled, and every deploy failed with the misleading `install: cannot change permissions of '/opt/<app>/releases/<rel>'`. After a healthy
+  `up`, `prune_images` removes digest-pinned local images of repositories that a kept release names, unless the newest `image_keep` (2)
+  releases, `current` or the previous release name that digest; a rollback reaches only those, older releases re-pull from GHCR. An empty keep set removes nothing; in-use images survive because `docker image rm` refuses them.
