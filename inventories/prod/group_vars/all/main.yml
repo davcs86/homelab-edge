@@ -93,12 +93,12 @@ commsgun_apps:
   - id: xstockstrat
     key: commsgun_app_key_xstockstrat
     channels:
-      email: {per_minute: 10, per_day: 80}
+      email: {per_minute: 10, per_day: 60}
       sms: {per_minute: 5, per_day: 50}
   - id: xstockstrat-staging
     key: commsgun_app_key_xstockstrat_staging
     channels:
-      email: {per_minute: 2, per_day: 10}
+      email: {per_minute: 10, per_day: 40}
       sms: {per_minute: 5, per_day: 50}
   - id: ops
     key: commsgun_app_key_ops

@@ -162,9 +162,9 @@ class Config(unittest.TestCase):
 
     def test_email_carries_the_senders_and_sms_only_limits(self):
         self.assertEqual(self.apps["xstockstrat"]["channels"]["email"],
-                         {"per_minute": 10, "per_day": 80, **SENDERS["xstockstrat"]})
+                         {"per_minute": 10, "per_day": 60, **SENDERS["xstockstrat"]})
         self.assertEqual(self.apps["xstockstrat-staging"]["channels"]["email"],
-                         {"per_minute": 2, "per_day": 10, **SENDERS["xstockstrat-staging"]})
+                         {"per_minute": 10, "per_day": 40, **SENDERS["xstockstrat-staging"]})
         self.assertEqual(self.apps["ops"]["channels"]["email"], {"per_minute": 2, "per_day": 5, **SENDERS["ops"]})
         for app in self.apps.values():
             self.assertEqual(app["channels"]["sms"], {"per_minute": 5, "per_day": 50})
