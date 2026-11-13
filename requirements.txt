@@ -4,5 +4,5 @@ jmespath==1.0.1
 # Secrets bootstrap only.
 bcrypt==5.0.0
 # Lint only.
-ansible-lint==26.9.0
+ansible-lint==26.10.1
 yamllint==1.38.0
