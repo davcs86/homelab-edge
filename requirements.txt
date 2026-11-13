@@ -1,5 +1,5 @@
 # Controller-side Python dependencies (GitHub Actions runner / workstation).
-ansible-core==2.21.4
+ansible-core==2.21.5
 jmespath==1.0.1
 # Secrets bootstrap only.
 bcrypt==5.0.0
