@@ -92,6 +92,11 @@ req2() { # same as req, but as a different client (source 127.0.0.3) so rate-lim
 expect() { # <description> <expected-prefix> <actual>
   if [[ "$3" == "$2"* ]]; then echo "PASS  $1 -> $3"; else echo "FAIL  $1: expected '$2', got '$3'"; fail=1; fi
 }
+# Caddy writes its logs as root with a private mode, so read them through the container; an unreadable or empty log is a FAIL.
+read_log() { # <file glob in /var/log/caddy> -> $work/log; non-zero if unreadable or empty
+  if docker exec caddy-routing-test sh -c "cat /var/log/caddy/$1" >"$work/log" 2>"$work/log.err" && [[ -s "$work/log" ]]; then return 0; fi
+  echo "FAIL  cannot read Caddy log $1: $(head -c 300 "$work/log.err")"; fail=1; return 1
+}
 
 u="https://$app_host"
 expect "MCP endpoint, prefix stripped"         "200 agent POST /"                 "$(req "$app_host" -X POST "$u/agent")"
@@ -228,10 +233,14 @@ fi
 
 expect "OAuth callback routed"                 "200 agent GET /oauth/callback"   "$(req "$app_host" "$u/agent/oauth/callback?code=SECRETCODE123&state=STATE456")"
 sleep 1
-if grep -qE 'SECRETCODE123|STATE456' "$work"/logs/*.access.log; then
-  echo "FAIL  access log leaks OAuth code/state"; fail=1
-else
-  echo "PASS  access log redacts OAuth code/state"
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" "$work/log"; then
+    echo "FAIL  the OAuth callback request was not logged"; fail=1
+  elif grep -qE 'SECRETCODE123|STATE456' "$work/log"; then
+    echo "FAIL  access log leaks OAuth code/state"; fail=1
+  else
+    echo "PASS  access log redacts OAuth code/state"
+  fi
 fi
 canary_hdr='Referer: https://x/?recipient=canary@example.test'
 req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/reset?recipient=canary@example.test" >/dev/null
@@ -239,19 +248,25 @@ req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/reset?keep=vi
 kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
 expect "dashboard upstream down"               "502" "$(req "$cgui_host" --interface "$tailnet_ip" -H "$canary_hdr" "$g/messages?recipient=canary@example.test")"
 sleep 1
-docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1
-# The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
-if grep -q canary "$work"/logs/*.access.log; then
-  echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -ho '"[^"]*canary[^"]*"' "$work"/logs/*.access.log | sort -u | tr '\n' ' ')"; fail=1
-elif ! grep -h "\"host\":\"$cgui_host\"" "$work"/logs/*.access.log | grep -q '"uri":"/messages"'; then
-  echo "FAIL  the dashboard request was not logged at all"; fail=1
-else
-  echo "PASS  dashboard logged without query, Referer or Location (incl. reset and 502)"
+if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
+  echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
 fi
-if grep -q '"uri":"/hooks?keep=visible"' "$work/logs/tailnet.access.log"; then
-  echo "PASS  other *.ts names are still logged with their query"
-else
-  echo "FAIL  the ingest request lost its query in tailnet.access.log"; fail=1
+# The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$cgui_host\",\"uri\":\"/messages\"" "$work/log"; then
+    echo "FAIL  the dashboard request was not logged at all"; fail=1
+  elif grep -q canary "$work/log"; then
+    echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
+  else
+    echo "PASS  dashboard logged without query, Referer or Location (incl. reset and 502)"
+  fi
+fi
+if read_log tailnet.access.log; then
+  if grep -q '"uri":"/hooks?keep=visible"' "$work/log"; then
+    echo "PASS  other *.ts names are still logged with their query"
+  else
+    echo "FAIL  the ingest request lost its query in tailnet.access.log"; fail=1
+  fi
 fi
 if grep -q canary "$work/caddy.stderr"; then
   echo "FAIL  Caddy's stderr leaks the dashboard's query or Referer: $(grep -o '"logger":"[^"]*"' <(grep canary "$work/caddy.stderr") | sort -u | tr '\n' ' ')"; fail=1
@@ -267,6 +282,10 @@ for n in comms cgui; do
   on8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "${!h}:$staging_port:127.0.0.1" -X POST -d '{}' "https://${!h}:$staging_port/v1/messages" -w ' %{http_code}' || true)"
   if [[ "$on8443" == "Not Found 404" ]]; then echo "PASS  $n name is 404 on the staging port"; else echo "FAIL  $n name on the staging port: $on8443"; fail=1; fi
 done
-ls "$work"/logs/*.access.log >/dev/null && echo "PASS  access logs written: $(cd "$work/logs" && ls)"
+if logs_written="$(docker exec caddy-routing-test sh -c 'ls /var/log/caddy/*.access.log')"; then
+  echo "PASS  access logs written: $(echo "$logs_written" | xargs -n1 basename | tr '\n' ' ')"
+else
+  echo "FAIL  no access logs written"; fail=1
+fi
 
 exit "$fail"
