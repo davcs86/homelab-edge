@@ -1,4 +1,4 @@
-{#- One line of JSON for an env file: tojson escapes ' < > & so the value fits in single quotes. -#}
+{#- One line for a single-quoted env value: tojson writes ' as \u0027 and \ as \\, so no \' escape can occur. -#}
 {"apps":[
 {%- for app in commsgun_apps -%}
 {"id":{{ app.id | tojson }},"key":{{ edge_secrets[app.key] | tojson }},"channels":{

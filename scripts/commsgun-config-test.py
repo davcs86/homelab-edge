@@ -37,10 +37,11 @@ def load_vars():
 V = load_vars()
 ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, loader=jinja2.FileSystemLoader(ROOT / "roles/stack/templates"))
 TRICKY = "O'Brien \"Ops\" $HOME #1 <ops@example.com>"  # quote, double quotes, $ and # must survive the env file
+BACKSLASH = r'"Ops\\Team \'q\'" <team@example.com>'  # backslashes and a backslash before a quote
 SENDERS = {
     "xstockstrat": {"senders": ["Alerts <alerts@example.com>", TRICKY], "default_sender": "Alerts <alerts@example.com>"},
     "xstockstrat-staging": {"senders": ["Staging <staging@example.com>"], "default_sender": "Staging <staging@example.com>"},
-    "ops": {"senders": [TRICKY], "default_sender": TRICKY},
+    "ops": {"senders": [TRICKY, BACKSLASH], "default_sender": TRICKY},
 }
 GENERATED = ["commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token"]
 
@@ -208,7 +209,7 @@ class EnvFiles(unittest.TestCase):
             got = {n: {k: v.replace("$$", "$") for k, v in svc[n]["environment"].items()} for n in ("a", "u")}
             self.assertEqual(got["a"], parse_env((d / "api.env").read_text()))
             self.assertEqual(got["u"], parse_env((d / "ui.env").read_text()))
-            self.assertEqual(json.loads(got["a"]["COMMSGUN_CONFIG"])["apps"][2]["channels"]["email"]["senders"], [TRICKY])
+            self.assertEqual(json.loads(got["a"]["COMMSGUN_CONFIG"])["apps"][2]["channels"]["email"]["senders"], [TRICKY, BACKSLASH])
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -227,6 +228,18 @@ class Assertions(unittest.TestCase):
     def test_a_value_that_would_break_its_env_line_fails(self):
         self.assertFalse(assertions_pass(secrets(resend_api_key="re_a'b")))
         self.assertFalse(assertions_pass(secrets(commsgun_admin_api_token="a\nb" + "x" * 40)))
+        self.assertFalse(assertions_pass(secrets(commsgun_admin_api_token="a\rb" + "x" * 40)))
+        self.assertFalse(assertions_pass(secrets(resend_api_key="re_x\\")))
+        self.assertFalse(assertions_pass(secrets(commsgun_session_secret="x" * 40 + "\\'y")))
+        for key in GENERATED + [a["key"] for a in V["commsgun_apps"]]:
+            self.assertFalse(assertions_pass(secrets(**{key: fake(key) + "\\"})), key)
+
+    def test_the_json_line_escapes_quotes_and_backslashes_for_a_single_quoted_value(self):
+        text = render_config(secrets())
+        self.assertNotIn("'", text)
+        self.assertIn(r"\u0027", text)
+        self.assertIn(r"Ops\\\\Team \\\u0027q\\\u0027", text)  # each backslash doubled, each quote \u0027
+        self.assertEqual(json.loads(text)["apps"][2]["channels"]["email"]["senders"], [TRICKY, BACKSLASH])
 
     def test_an_email_app_without_senders_fails(self):
         senders = {k: v for k, v in SENDERS.items() if k != "ops"}
@@ -242,6 +255,14 @@ class Assertions(unittest.TestCase):
     def test_senders_for_an_unregistered_app_fail(self):
         extra = {**SENDERS, "nobody": {"senders": ["N <n@example.com>"], "default_sender": "N <n@example.com>"}}
         self.assertFalse(assertions_pass(secrets(commsgun_senders=extra)))
+
+    def test_a_sender_that_is_not_a_single_line_string_fails(self):
+        for bad in (["A <a@example.com>\nBcc: x@example.com"], ["A <a@example.com>\r"], [7], [["A <a@example.com>"]]):
+            senders = {**SENDERS, "ops": {"senders": [TRICKY, *bad], "default_sender": TRICKY}}
+            self.assertFalse(assertions_pass(secrets(commsgun_senders=senders)), bad)
+        for bad in (7, "A <a@example.com>\n", None):
+            entry = {"senders": [TRICKY], **({} if bad is None else {"default_sender": bad})}
+            self.assertFalse(assertions_pass(secrets(commsgun_senders={**SENDERS, "ops": entry})), bad)
 
     def test_senders_must_be_a_map(self):
         self.assertFalse(assertions_pass(secrets(commsgun_senders="Alerts <alerts@example.com>")))

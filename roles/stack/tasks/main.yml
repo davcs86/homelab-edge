@@ -123,8 +123,10 @@
           - edge_secrets[item] is string
           - edge_secrets[item] | length > 0
           - "\"'\" not in edge_secrets[item]"
-          - "'\n' not in edge_secrets[item]"
-        fail_msg: "secrets/edge.sops.yaml: {{ item }} is missing, empty, or holds a quote or line break"
+          - "'\\\\' not in edge_secrets[item]"
+          - "'\\r' not in edge_secrets[item]"
+          - "'\\n' not in edge_secrets[item]"
+        fail_msg: "secrets/edge.sops.yaml: {{ item }} is missing, empty, or holds a quote, backslash or line break"
         quiet: true
       loop: >-
         {{ ['resend_api_key', 'commsgun_admin_password', 'commsgun_session_secret', 'commsgun_admin_api_token']
@@ -146,11 +148,17 @@
           - edge_secrets.commsgun_senders[item.id].senders is sequence
           - edge_secrets.commsgun_senders[item.id].senders is not string
           - edge_secrets.commsgun_senders[item.id].senders | length > 0
+          - edge_secrets.commsgun_senders[item.id].senders | reject('string') | list | length == 0
+          - "'\\r' not in edge_secrets.commsgun_senders[item.id].senders | join('')"
+          - "'\\n' not in edge_secrets.commsgun_senders[item.id].senders | join('')"
           - edge_secrets.commsgun_senders[item.id].default_sender is defined
+          - edge_secrets.commsgun_senders[item.id].default_sender is string
+          - "'\\r' not in edge_secrets.commsgun_senders[item.id].default_sender"
+          - "'\\n' not in edge_secrets.commsgun_senders[item.id].default_sender"
           - edge_secrets.commsgun_senders[item.id].default_sender in edge_secrets.commsgun_senders[item.id].senders
         fail_msg: >-
           secrets/edge.sops.yaml: commsgun_senders has no usable entry for app {{ item.id }}
-          (non-empty senders containing default_sender)
+          (non-empty single-line string senders containing default_sender)
         quiet: true
       loop: "{{ commsgun_apps | selectattr('channels.email', 'defined') | list }}"
 
@@ -162,7 +170,7 @@
           {{ (edge_secrets.commsgun_senders | list | reject('in', _email_apps) | list | join(', ')) }}
         quiet: true
 
-    # Single-quoted values reach the container verbatim (no interpolation, no comment stripping).
+    # Compose takes a single-quoted value verbatim except that \' is an escape: hence no ', \, CR or LF in raw values.
     - name: Commsgun API environment
       ansible.builtin.copy:
         dest: "{{ edge_root }}/commsgun/api.env"

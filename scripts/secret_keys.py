@@ -17,10 +17,12 @@ REGISTRY_LOOP = re.compile(r"\{%-?\s*for\s+(\w+)\s+in\s+(\w+)")
 
 def inventory_lists(root: Path) -> dict[str, list]:
     out: dict[str, list] = {}
-    for f in (root / "inventories").rglob("*.yml"):
-        doc = yaml.safe_load(f.read_text())
-        if isinstance(doc, dict):
-            out |= {k: v for k, v in doc.items() if isinstance(v, list)}
+    for f in sorted((root / "inventories").rglob("*")):
+        if f.is_file() and f.suffix in (".yml", ".yaml"):
+            doc = yaml.safe_load(f.read_text())
+            for k, v in (doc.items() if isinstance(doc, dict) else ()):
+                if isinstance(v, list):
+                    out.setdefault(k, []).extend(v)
     return out
 
 

@@ -46,6 +46,15 @@ class Extraction(unittest.TestCase):
         })
         self.assertEqual(secret_keys.used_keys(d), {"reg_key_a", "reg_key_b"})
 
+    def test_same_named_registries_in_several_inventory_files_are_united(self):
+        d = tree({
+            "inventories/prod/group_vars/all/main.yml": "reg:\n  - {id: a, key: reg_key_a}\n",
+            "inventories/prod/group_vars/apps/main.yaml": "reg:\n  - {id: b, key: reg_key_b}\n",
+            "inventories/prod/group_vars/zz/main.yml": "reg:\n  - {id: c, key: reg_key_c}\n",
+            "roles/a/templates/c.j2": "{% for app in reg %}{{ edge_secrets[app.key] }}{% endfor %}",
+        })
+        self.assertEqual(secret_keys.used_keys(d), {"reg_key_a", "reg_key_b", "reg_key_c"})
+
     def test_a_registry_no_template_loops_over_is_ignored(self):
         d = tree({
             "inventories/prod/group_vars/all/main.yml": "reg:\n  - {id: a, key: reg_key_a}\n",

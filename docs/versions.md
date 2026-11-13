@@ -1,6 +1,6 @@
 # Versions
 
-All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp and commsgun images, the owner's own, pinned as soon as they are published); container images are pinned by digest, binaries by checksum.
+All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp and commsgun images, the owner's own, pinned as soon as they are published; the `bump-webhooks-mcp` workflow proposes the webhooks-mcp pin); container images are pinned by digest, binaries by checksum.
 
 | Component | Pin | Why this one |
 |---|---|---|
