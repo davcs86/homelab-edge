@@ -14,8 +14,8 @@ caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 gatus_image: "twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e"
 ntfy_image: "binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da"
 webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:43508ed55e6358bdb8483ce7dcbcc42af8a256c12117e3f1978ad76ebc656fcc"
-commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:40ce1649b13bfafd4ec5964efbcfaa0790ebb29b8316459f9eece452c971ba75"
-commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:95a9f80cb54474bc71f102b51b1669b227808a62245eaad01539c9b1f314de49"
+commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:fab67eb14d379a40a0d468db6f9e939bfadb8cb62a6ce73b37ad9912cf1e7d74"
+commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:4443e90ede33eb9e1a96ec23b7562d5e8c9e59e872cc32c32691c99b53f93b23"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
 db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
