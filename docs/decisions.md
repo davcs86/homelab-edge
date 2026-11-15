@@ -60,8 +60,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     else by exactly one matching email, else creates a user with roles written as `{trader}`. Email is copied from Authelia at
     each login. MCP effective scope = roles ∩ OAuth scopes granted to the client (read-only connectors against prompt
     injection), with a ~60 s fail-closed role cache. Password login stays behind a flag as the rollback path, so the Caddy login
-    limits stay until the flag is removed (fail closed when its key is missing). MCP accepts only Authelia tokens; rolling MCP
-    back means redeploying the previous xstockstrat release. The xstockstrat side is feature 345 (`authelia-sso`).
+    limits stay until the flag is removed (fail closed when its key is missing). Each xstockstrat deployment (DigitalOcean or
+    homelab) switches mode by its own config: legacy (today's login and OAuth server) until its cutover, then Authelia only;
+    clearing the issuer keys rolls it back. The xstockstrat side is feature 345 (`authelia-sso`).
   - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`; its password login goes. This only holds if Caddy
     deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
     and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four. The move also
