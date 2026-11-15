@@ -49,18 +49,25 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     and only delegate its login to Authelia.
   - Release: v4.39.28. v4.39.21–22 rejected RFC 8707 `resource` in the code flow (authelia#12970, #13113), and v4.39.23 shipped the
     resource-indicator fix. `TODO(verify)` in the spike before the digest pin lands in `versions.yml`: MCP clients pass with
-    `resource`, JWT access tokens, custom scopes in the token, group re-check on refresh, Claude.ai and Claude Code with a
-    pre-registered client, `sub` bound to the username.
+    `resource`, JWT access tokens carrying `scope` and `email` (xstockstrat links first-time MCP users by email), custom scopes,
+    group re-check on refresh, Claude.ai and Claude Code with a pre-registered client, `sub` bound to the username.
+  - Client IDs (xstockstrat feature 345, FR-13; per app, staging prefixed `xstockstrat-staging-`): `xstockstrat-web`
+    (confidential), `xstockstrat-mcp-claude` (all `xstockstrat.*` scopes) and `xstockstrat-mcp-claude-ro` (`xstockstrat.read`),
+    redirect `https://claude.ai/api/mcp/auth_callback` for the MCP clients.
   - Access is one group per app, with `default_policy: deny` and `two_factor` everywhere; a person may hold several groups.
     Authelia knows nothing of xstockstrat's environments: `xstockstrat` and `xstockstrat-staging` are separate apps.
   - xstockstrat keeps `identity.users` (migrations and FKs depend on it) and its roles per environment. A login links by `sub`,
     else by exactly one matching email, else creates a user with roles written as `{trader}`. Email is copied from Authelia at
     each login. MCP effective scope = roles ∩ OAuth scopes granted to the client (read-only connectors against prompt
     injection), with a ~60 s fail-closed role cache. Password login stays behind a flag as the rollback path, so the Caddy login
-    limits stay until the flag is removed. The xstockstrat side goes through its SDD pipeline.
+    limits stay until the flag is removed (fail closed when its key is missing). MCP accepts only Authelia tokens; rolling MCP
+    back means redeploying the previous xstockstrat release. The xstockstrat side is feature 345 (`authelia-sso`).
   - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`; its password login goes. This only holds if Caddy
     deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
-    and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four.
+    and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four. The move also
+    crosses three constitution seams: no `trusted_proxies` on the new public site (EDGE-02); the `*.ts` four-place wiring is
+    undone for `commsgun_ui_hostname` (EDGE-07); and the dashboard's `ORIGIN` follows the new hostname (EDGE-11, a commsgun-side
+    change).
   - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
     nightly backup: losing it loses every `sub` and second factor.
 

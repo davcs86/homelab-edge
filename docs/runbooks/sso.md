@@ -67,7 +67,8 @@ Per environment (prod and staging have separate `identity.users`), in this order
 1. The `sub` is already linked → that account.
 2. Exactly one **active, unlinked** row has the login's email (case-insensitive) → link it, record a ledger audit event.
 3. No row has that email → create one with roles written explicitly as `{trader}`.
-4. Anything else (several matches, or the only match is linked to another `sub`) → login refused.
+4. Anything else is refused: several matches, the only match is linked to another `sub`, the account is inactive, or
+   the token has no email. This applies to the web and to MCP; MCP tokens carry the email claim too.
 
 An app account whose email does not match the person's Authelia email is **not** linked automatically. Make them
 match before the person's first login (§ 6).
