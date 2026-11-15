@@ -13,7 +13,7 @@ caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
 gatus_image: "twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e"
 ntfy_image: "binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da"
-webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:43508ed55e6358bdb8483ce7dcbcc42af8a256c12117e3f1978ad76ebc656fcc"
+webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:58d34aa13e7d214cd9c5cda6c8906268570c455675b5add87c5e280a97e2bc53"
 commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:7d37b996e8f41595e94dc5634258f86bdec4c41878c23a9f8d406d3b2026f2a6"
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:34b15d1e259f3890ad283c230d3b2c79f68263800e768bc53059db299f84ed2c"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
