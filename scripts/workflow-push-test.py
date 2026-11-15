@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks how the workflows that commit to main do it: App token only when something changed, key confined to `production`, pins, staging shell."""
+"""Checks how the workflows that commit to main do it: the `PUSH_TOKEN` PAT only when something changed, key confined to `production`, pins, staging shell."""
 import os
 import re
 import subprocess

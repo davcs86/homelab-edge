@@ -96,7 +96,19 @@ class Gatus(unittest.TestCase):
         ing = ENDPOINTS["webhooks-ingest"]
         self.assertEqual((ing["group"], ing["url"]), ("edge", f"https://{V['webhooks_ingest_hostname']}/healthz"))
         self.assertEqual(ing["client"]["dns-resolver"], "udp://100.100.100.100:53")
-        self.assertEqual(ing["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(ing["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
+
+    def test_the_staging_ingest_listener_is_probed_over_the_tailnet(self):
+        e = ENDPOINTS["webhooks-ingest-staging"]
+        self.assertEqual((e["group"], e["url"]), ("edge", f"https://{V['webhooks_ingest_hostname']}:{V['staging_edge_port']}/healthz"))
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+
+    def test_the_tailnet_wildcard_certificate_expiry_is_probed(self):
+        wildcard = "." + V["magicdns_base_domain"]
+        probed = [n for n, e in ENDPOINTS.items() if e["url"].startswith("https://") and e["url"].split("/")[2].split(":")[0].endswith(wildcard)
+                  and "[CERTIFICATE_EXPIRATION] > 336h" in e["conditions"]]
+        self.assertTrue(probed)
 
     def test_commsgun_is_probed_over_the_tailnet(self):
         for name, url in (("commsgun-api", f"https://{V['commsgun_enqueue_hostname']}/healthz"),

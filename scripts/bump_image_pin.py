@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pins the newest published image digest in versions.yml and docs/versions.md; the bump-webhooks-mcp workflow runs it."""
+"""Pins the newest published image digest in versions.yml and docs/versions.md; the bump-webhooks-mcp and bump-commsgun workflows run it."""
 import argparse
 import datetime
 import http.client
