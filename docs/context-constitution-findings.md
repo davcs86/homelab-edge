@@ -1,7 +1,7 @@
 # homelab-edge — Constitution Findings
 
-Defects and drift surfaced by `/context-constitution` (context-forge) on 2026-11-15 from branch
-`claude/context-constitution-parity-zggeq3` at commit `93c0175` while deriving the constitution. These are for triage,
+Defects and drift surfaced by `/context-constitution` (context-forge) on 2026-11-15; last refreshed 2026-11-15 from branch
+`claude/context-constitution-parity-zggeq3` at commit `45e0b71` while deriving the constitution. These are for triage,
 not governance: a defect is not a rule. This log is maintained (**CF-N12**): `/context-constitution refresh` re-verifies
 every open row and retires the rows that no longer reproduce to `## Resolved`.
 
@@ -12,8 +12,7 @@ every open row and retires the rows that no longer reproduce to `## Resolved`.
 | `docs/decisions.md` "Rate-limit zone names are global": `public_routes` prefixes zones with `prod_`, `staging_` | Zones are prefixed with `site.name` (`xstockstrat_`, `xstockstrat-staging_`) | `roles/stack/templates/Caddyfile.j2#(public_routes)` ("zone {args[1]}_general") | Correct the doc |
 | `docs/decisions.md` (Monitoring): "two dead-man heartbeats (Proxmox …, nightly backup)"; `docs/runbooks/alerts.md` lists 3 | 4 `external-endpoints` (plus `db-heartbeat`, `pgbackrest-backup`) | `roles/stack/templates/gatus-config.yaml.j2` (`external-endpoints`) | Update both docs |
 | `docs/decisions.md`: the deploy "probes every managed SNI (hs, xstockstrat, `*.ts`)" | `_cert_check` probes every `edge_sites` hostname, including staging and webhooks-mcp | `roles/stack/tasks/main.yml` (`_cert_check`) | Correct the doc |
-| `CLAUDE.md#Context Guide`: "cross-repo contracts C1–C8" | webhooks-mcp `docs/contracts.md` now has C9 (wire format) | webhooks-mcp `docs/contracts.md` ("C9") | Say "C1–C9", or drop the range |
-| `README.md` `.github/workflows/` row lists 7 workflows | `app-host.yml` and `db-host.yml` exist too | `.github/workflows/` | Update the README |
+| `README.md#Repository map`: the `.github/workflows/` row lists 7 workflows; the playbooks rows and the `roles/stack/templates/` row are also incomplete | `app-host.yml` and `db-host.yml` exist too; so do `playbooks/app.yml`, `playbooks/db.yml`, `playbooks/diag-boot.yml`, `gatus-config.yaml.j2` and `commsgun-config.json.j2` | `.github/workflows/`, `playbooks/`, `roles/stack/templates/` | Update the README |
 | `ci.yml` step "Workflows that commit to main (App token only when needed …)" and the `scripts/workflow-push-test.py` docstring say "App token" | `docs/decisions.md` records the owner's fine-grained PAT (`PUSH_TOKEN`), chosen over a GitHub App | `.github/workflows/ci.yml` ("App token only when needed"), `scripts/workflow-push-test.py` | Reword to "PAT" |
 | `docs/versions.md#Dependabot`: only the webhooks-mcp digest stays with `bump-webhooks-mcp` | The commsgun pins and `bump-commsgun` are omitted; the `scripts/bump_image_pin.py` docstring names only bump-webhooks-mcp | `docs/versions.md`, `scripts/bump_image_pin.py` | Mention commsgun |
 | `policy/policy.hujson` comment: "tailnet-only staging route" | Staging is a public 443 site (decisions.md "Staging is a public name on 443") | `policy/policy.hujson` ("tailnet-only staging route") | Update the comment |
@@ -45,7 +44,9 @@ every open row and retires the rows that no longer reproduce to `## Resolved`.
 
 ## Dismissed (won't fix)
 
-_None._
+| What the docs say / issue | Evidence (was) | Resolved | How confirmed |
+|---|---|---|---|
+| `CLAUDE.md#Context Guide`: "cross-repo contracts C1–C8" | webhooks-mcp `docs/contracts.md` ("C9") | 2026-11-15 | Context Guide now says C1–C9 (step-3 refresh); webhooks-mcp `docs/contracts.md` lists C1–C9 |
 
 ## Resolved
 

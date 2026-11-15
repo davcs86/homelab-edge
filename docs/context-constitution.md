@@ -1,7 +1,7 @@
 # homelab-edge — Constitution
 
-Derived by `/context-constitution` (context-forge) on 2026-11-15 from branch
-`claude/context-constitution-parity-zggeq3` at commit `93c0175` — the repo state this analysis reflects; a later
+Derived by `/context-constitution` (context-forge) on 2026-11-15; last refreshed 2026-11-15 from branch
+`claude/context-constitution-parity-zggeq3` at commit `45e0b71` — the repo state this analysis reflects; a later
 `refresh` reruns against a newer commit. This file captures the **non-obvious**: patterns the roles, templates and
 workflows follow but never wrote down, the places that break them, and the contracts with `davcs86/webhooks-mcp`,
 `davcs86/commsgun` and home-side pushers. It does **not** restate `CLAUDE.md`, `docs/decisions.md` (design and
@@ -37,7 +37,7 @@ this file adds the patterns *between* them.
 | ID | Norm | Why | Evidence | Example |
 |---|---|---|---|---|
 | **EDGE-12** | Prefix every Caddy rate-limit zone with its site name, as `public_routes` does (`{args[1]}_<zone>`). The bare `bearer_mcp` zone is the outlier (logged as a finding). | Zone names are global in caddy-ratelimit (decisions.md). | `roles/stack/templates/Caddyfile.j2#(public_routes)` (norm) vs `site.kind == 'bearer_mcp'` ("zone {{ site.limits }}") (outlier) | `roles/stack/templates/Caddyfile.j2#(public_routes)` |
-| **EDGE-13** | A port change for ntfy (`2586`) or headscale (`8080`) touches every literal: compose, Caddyfile and Gatus (url and healthcheck). The other services use `*_port` variables. | They were never re-mapped, so the literals are scattered. | `roles/stack/templates/compose.yml.j2#ntfy`, `roles/stack/templates/Caddyfile.j2#@ntfy`, `roles/stack/templates/gatus-config.yaml.j2#alerting` | — |
+| **EDGE-13** | A port change for ntfy (`2586`) or headscale (`8080`) touches every literal: ntfy in compose, Caddyfile (`@ntfy`) and Gatus (`alerting` url and healthcheck); headscale in compose, Caddyfile and `headscale-config.yaml.j2` (`listen_addr`). The other services use `*_port` variables. | They were never re-mapped, so the literals are scattered. | `roles/stack/templates/compose.yml.j2#ntfy`, `roles/stack/templates/Caddyfile.j2#@ntfy`, `roles/stack/templates/gatus-config.yaml.j2#alerting`, `roles/stack/templates/headscale-config.yaml.j2` ("listen_addr: 0.0.0.0:8080") | — |
 
 ## Gotchas & scars
 
@@ -63,7 +63,7 @@ this file adds the patterns *between* them.
 |---|---|---|
 | `pgbackrest_package_version` (edge) and `db_pgbackrest_package_version` must share an upstream version | `versions.yml` comment says "must equal"; no assert or test compares them | An assert, or the owner |
 | `init-secrets` should join the `deploy-edge` concurrency group | It commits to `main` with `PUSH_TOKEN` like deploy, but has no group | Reading `init-secrets.yml`/`db-host.yml` for a push race |
-| The external verify should cover the public `webhooks-mcp.<domain>` (`bearer_mcp`) host | verify hardcodes `hs.`, `xstockstrat.`, `xstockstrat-staging.` only | Owner intent |
+| The external verify should cover the public `webhooks-mcp.<domain>` (`bearer_mcp`) host | verify hardcodes `hs.`, `xstockstrat.`, `xstockstrat-staging.` (plus an `other.` negative probe) only | Owner intent |
 
 ## Pointers (already documented or CI-enforced — not restated here)
 

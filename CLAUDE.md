@@ -63,7 +63,7 @@ Read only the row that matches the task.
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | `docs/runbooks/db-host.md`, `playbooks/db.yml` |
 | Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
 | Bumping or adding a pin, including the bot-opened webhooks-mcp and commsgun digest bumps | `docs/versions.md` |
-| Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C8) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
+| Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C9) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Patterns between the traps an edit can silently break (pin-line quoting, XFF trust, restart/handler shape, `*.ts` four-place wiring, secret-read shapes, apt pin recipe, owner-app seams) — `EDGE-*` — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
