@@ -234,17 +234,17 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   alert, as `nightly-backup` does for headscale. The token is passed to curl on stdin (argv is world-readable) by a root-run `ExecStartPost=+`.
   A Gatus outage right after a good backup marks the unit failed and notifies; that is the same trade as `edge-backup.service`.
 - **Owner roles get `idle_in_transaction_session_timeout = 10min` and no `statement_timeout`.** A leaked transaction holds locks and pins
-  vacuum, and 60 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
+  vacuum, and 70 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
 - **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
   the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
 - **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
-  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 5 = 23, so each role is limited to 25.
-  Both environments deploy together (the daily promotion): 2 x 25 + admin 3 + superadmin 3 + 3 reserved slots = 59, so `max_connections` is 60 (the
+  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 10 = 28, so each role is limited to 30.
+  Both environments deploy together (the daily promotion): 2 x 30 + admin 3 + superadmin 3 + 3 reserved slots = 69, so `max_connections` is 70 (the
   playbook asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
-  60 x 26 MB + 768 MB of `shared_buffers` is about 2.3 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
-  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool stays 5 per database: xstockstrat bounds
-  `max_concurrent_bars_fetches` to [1, 5] with the marketdata PgBouncer pool as the ceiling, so a smaller pool queues work it allows, and 5 is
-  already 2 x cores + 1. Raise nothing before measuring.
+  70 x 26 MB + 768 MB of `shared_buffers` is about 2.5 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
+  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool is 10 per database, doubled from 5 by the
+  owner on 2026-11-15 with the container measured at about 10% of memory and CPU: the six pooled xstockstrat services share one pool, so
+  marketdata's bars fetches (`max_concurrent_bars_fetches`, bounded to [1, 5]) and concurrent ingest backfill jobs contended for 5. Raise nothing further before measuring.
 - **Traps:** a Debian LXC without a UTF-8 locale creates a `SQL_ASCII` cluster, so `createcluster.d` forces `--encoding=UTF8`;
   PostgreSQL and PgBouncer bind the tailnet address, which tailscaled brings up after boot, so their units wait for it
   (`wait-tailnet-ip`); a `postgres` login with `ALTER ROLE … PASSWORD` can log the statement on error, so it sets

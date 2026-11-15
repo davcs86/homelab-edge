@@ -15,7 +15,7 @@ Per workload (`db_workloads` in `group_vars/all/main.yml`): database `xstockstra
 
 | Role | Can do | Reaches the host from | Connections | SOPS key |
 |---|---|---|---|---|
-| `xstockstrat_production`, `xstockstrat_staging` | own their database (schemas, hypertables, data) | that workload's tailnet IP (TLS), loopback for PgBouncer | 25 each | `db_role_xstockstrat_<env>_password` |
+| `xstockstrat_production`, `xstockstrat_staging` | own their database (schemas, hypertables, data) | that workload's tailnet IP (TLS), loopback for PgBouncer | 30 each | `db_role_xstockstrat_<env>_password` |
 | `admin` | read only: `pg_monitor`, `pg_read_all_data` | devices in `db_admin_tailnet_hosts` (empty), loopback | 3 | `db_role_admin_password` |
 | `superadmin` | everything (PostgreSQL superuser), for manual work | devices in `db_superadmin_tailnet_hosts` (`macbook-pro`) over TLS, loopback; never PgBouncer | 3 | `db_role_superadmin_password` |
 | `postgres` (OS user) | superuser over the local socket | `ssh david_admin@db…`, then `sudo -u postgres psql` (key only, passwordless sudo) | n/a | none (peer authentication) |
@@ -88,9 +88,9 @@ The container has 3 GiB, 2 cores and no swap. Where each number lives and why (t
 
 | Setting | Value | Where |
 |---|---|---|
-| `max_connections` | 60 | `roles/db_host/defaults/main.yml` (`db_pg_settings`) |
-| Role connection limits | 25 per workload, 3 `admin`, 3 `superadmin` | `db_workloads`, `db_admin_connection_limit`, `db_superadmin_connection_limit` |
-| PgBouncer pool | 5 per database (server connections); `max_client_conn` 200 | `db_pgbouncer_pool_size`; `templates/pgbouncer.ini.j2` |
+| `max_connections` | 70 | `roles/db_host/defaults/main.yml` (`db_pg_settings`) |
+| Role connection limits | 30 per workload, 3 `admin`, 3 `superadmin` | `db_workloads`, `db_admin_connection_limit`, `db_superadmin_connection_limit` |
+| PgBouncer pool | 10 per database (server connections); `max_client_conn` 200 | `db_pgbouncer_pool_size`; `templates/pgbouncer.ini.j2` |
 | `shared_buffers`, `work_mem`, `maintenance_work_mem`, `autovacuum_work_mem` | 768MB, 8MB, 256MB, 64MB | `db_pg_settings` |
 
 The playbook refuses to run when the role limits plus 3 reserved slots exceed `max_connections`. Change the container size and these together.
