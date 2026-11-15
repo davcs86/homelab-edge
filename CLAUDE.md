@@ -1,9 +1,37 @@
+<!-- context-forge:behavioral-contract:start -->
+## How to Act
+
+Read this first — it governs *how* you work here; everything below is the *what* you work with.
+These four behaviors are the operating defaults; the rest of this file (and the constitution) is
+context you load per task.
+
+1. **Don't assume — ask, and surface tradeoffs.** Before acting, always list every assumption you
+   are making on your own — scope, interpretation, defaults, a choice between options — each with
+   its basis, or say "none". On ambiguity, a missing detail, or a design fork, stop and raise it.
+   *Red flag:* "it's obvious" / "too small to ask" — that *is* the assumption; list it.
+   *(Enforced by `## Rules` 1 and the cross-repo seams **EDGE-02/EDGE-10/EDGE-11**.)*
+2. **Write the minimum that solves the stated problem.** Nothing speculative — no abstraction,
+   option, or "while I'm here" scaffolding. *Red flag:* "might need it later", "for flexibility".
+   *(Enforced by **EDGE-03/EDGE-04**: one restart shape, `env_file` over new handlers.)*
+3. **Touch only what the task requires.** Surgical, auditable diffs; clean up only orphans *you*
+   introduced. *Red flag:* "cleaner if I also…" — propose it, don't do it.
+   *(Enforced by **EDGE-01**: reformatting a pin line silently breaks CI and the bump guard.)*
+4. **Define success up front, then loop until verified.** State the pass condition before you
+   start; claim done only with the check's output from this session in hand.
+   *Red flag:* "should work", "looks right", "probably passes".
+   *(Enforced by `## Rules` 6 — `ci`, `deploy`, `verify` output — and **EDGE-07**'s four-place wiring.)*
+
+No exceptions for small or obvious tasks — honoring the letter while dodging the intent is a violation.
+
+> Litmus test for any future line in this file: *does it shape how the agent thinks (a behavior), or
+> restate a fact the agent can read from the code?* If it's a fact already in the repo, leave it out.
+<!-- context-forge:behavioral-contract:end -->
 # homelab edge — CLAUDE.md
 
 Ansible (run from GitHub Actions) for one DigitalOcean droplet: headscale + embedded DERP/STUN, Caddy as the only
 public entry point, Gatus, ntfy, nightly age backups, a pgBackRest repo. Human overview: `README.md`.
 
-## How to Act
+## Rules
 
 1. **Never assume a value the owner has not stated** — provider setting, hostname, version, schedule, home-side
    detail. Ask first. Open `TODO(provide)` / `TODO(verify)` markers are the known gaps; resolve them with the owner,
@@ -38,6 +66,7 @@ Read only the row that matches the task.
 | Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C8) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
+| Patterns between the traps an edit can silently break (pin-line quoting, XFF trust, restart/handler shape, `*.ts` four-place wiring, secret-read shapes, apt pin recipe, owner-app seams) — `EDGE-*` — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
 | Deploy a Compose app (xstockstrat or other) to the homelab; build or change an app VM | `docs/runbooks/deploy-compose-app.md`, `templates/app-deploy/`, `playbooks/app.yml` |
 | Set up the local Proxmox host by hand | `docs/runbooks/proxmox-setup.md`, `tools/pve-setup.py` |
