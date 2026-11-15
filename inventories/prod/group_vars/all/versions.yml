@@ -1,8 +1,8 @@
 ---
-# Every pin is a release at least two weeks old on 2026-10-14 (database host pins: on 2026-10-25). Rationale per pin lives in docs/versions.md.
+# Every pin is a release at least two weeks old on 2026-10-14 (database host pins: on 2026-10-25), except the owner's own
+# webhooks-mcp and commsgun images, pinned as soon as they are published. Rationale per pin lives in docs/versions.md.
 ubuntu_image: ubuntu-26-04-x64
 
-headscale_version: v0.29.4
 headscale_image: "ghcr.io/juanfont/headscale:v0.29.4@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"
 
 caddy_version: "2.11.6"

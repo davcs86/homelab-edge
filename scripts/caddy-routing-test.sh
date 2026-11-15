@@ -295,6 +295,32 @@ for n in comms cgui; do
   on8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "${!h}:$staging_port:127.0.0.1" -X POST -d '{}' "https://${!h}:$staging_port/v1/messages" -w ' %{http_code}' || true)"
   if [[ "$on8443" == "Not Found 404" ]]; then echo "PASS  $n name is 404 on the staging port"; else echo "FAIL  $n name on the staging port: $on8443"; fail=1; fi
 done
+# Zone names are global in caddy-ratelimit: a second site with the same `limits` must still get its own counters.
+python3 - "$repo_root/inventories/prod/group_vars/all/main.yml" >"$work/twin.json" <<'EOF'
+import json, sys, yaml
+sites = yaml.safe_load(open(sys.argv[1]))["edge_sites"]
+twin = next(s for s in sites if s["kind"] == "bearer_mcp")
+sites.append({**twin, "name": twin["name"] + "-twin", "hostname": "twin-" + twin["hostname"]})
+print(json.dumps({"edge_sites": sites}))
+EOF
+(cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template \
+  -a "src=roles/stack/templates/Caddyfile.j2 dest=$work/Caddyfile.twin" \
+  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 -e staging_tailnet_host=127.0.0.1 -e "@$work/twin.json" >/dev/null)
+for f in Caddyfile Caddyfile.twin; do
+  zones="$(docker run --rm --network none -v "$work/$f:/etc/caddy/Caddyfile:ro" "$image" caddy adapt --config /etc/caddy/Caddyfile 2>/dev/null \
+    | python3 -c 'import json, sys
+def walk(o):
+    if isinstance(o, dict):
+        yield from o.get("rate_limits", {})
+        for v in o.values(): yield from walk(v)
+    elif isinstance(o, list):
+        for v in o: yield from walk(v)
+print(" ".join(walk(json.load(sys.stdin))))' || true)"
+  dupes="$(tr ' ' '\n' <<<"$zones" | sed '/^$/d' | sort | uniq -d | paste -sd' ' -)"
+  if [[ -z "$zones" ]]; then echo "FAIL  no rate-limit zones found in the adapted $f"; fail=1
+  elif [[ -n "$dupes" ]]; then echo "FAIL  rate-limit zones shared across sites in $f: $dupes"; fail=1
+  else echo "PASS  every rate-limit zone in $f is unique ($(wc -w <<<"$zones") zones)"; fi
+done
 if logs_written="$(docker exec caddy-routing-test sh -c 'ls /var/log/caddy/*.access.log')"; then
   echo "PASS  access logs written: $(echo "$logs_written" | xargs -n1 basename | tr '\n' ' ')"
 else

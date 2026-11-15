@@ -315,7 +315,7 @@
 	@mcp path {{ site.path }}
 	handle @mcp {
 		rate_limit {
-			zone {{ site.limits }} {
+			zone {{ site.name }}_{{ site.limits }} {
 				key {remote_host}
 				window {{ ratelimit[site.limits].window }}
 				events {{ ratelimit[site.limits].events }}

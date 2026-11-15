@@ -6,7 +6,7 @@ All pins were at least two weeks old on 2026-10-14 (except the webhooks-mcp and 
 |---|---|---|
 | Ubuntu | 26.04 LTS (`ubuntu-26-04-x64`) | your choice; Docker, Tailscale and PGDG all publish `resolute` packages |
 | Droplet | `s-1vcpu-2gb-amd`, sfo3 | 2 GB RAM headroom, 50 GB disk (30 GB budget incl. ~15 GB pgBackRest); sfo3 is closest to Hayward |
-| headscale | v0.29.4 | v0.29.5 was one day old; 0.29.5's fixes only touch `via` grants, which this policy does not use |
+| headscale | v0.29.4 (`headscale_image`, tag + digest) | v0.29.5 was one day old; 0.29.5's fixes only touch `via` grants, which this policy does not use. The image is the only pin: a separate `headscale_version` was read by nothing and could drift from the tag, so it was removed (2026-11-15) |
 | tailscale (edge + runners) | 1.98.10 | newest client inside headscale 0.29.4's generated capability table (≤1.98); 0.29.4 rejects < 1.80 |
 | Caddy | 2.11.6 | 2.11.7 was 11 days old |
 | caddy-dns/desec | v1.1.0 | latest release |
@@ -48,4 +48,4 @@ pins (`.github/workflows`, `.github/actions/setup`), `requirements.txt` and `too
 not cover what it cannot parse: `versions.yml` (digests, checksums, apt versions), `requirements.yml` (Galaxy
 collections), the Caddy Dockerfile (its images arrive as build args from `versions.yml`), the Jinja compose templates and
 `templates/app-deploy/` (not a workflow path). Merge a Dependabot PR only after updating the matching row above in the
-same PR; the `webhooks-mcp` digest stays with `bump-webhooks-mcp`.
+same PR; the `webhooks-mcp` digest stays with `bump-webhooks-mcp`, and the two commsgun digests with `bump-commsgun`.

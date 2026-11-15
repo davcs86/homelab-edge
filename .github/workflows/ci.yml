@@ -34,7 +34,7 @@ jobs:
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
       - name: App-deploy template (pins, secret handling, source and report steps)
         run: python3 scripts/app-deploy-template-test.py
-      - name: Workflows that commit to main (App token only when needed, key confined to production)
+      - name: Workflows that commit to main (PUSH_TOKEN PAT only when needed, key confined to production)
         run: python3 scripts/workflow-push-test.py
       - name: Image-pin bump script and its workflow (offline, fake registry, git and gh)
         run: python3 scripts/bump-image-pin-test.py

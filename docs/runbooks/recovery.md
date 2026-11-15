@@ -29,7 +29,7 @@ the failed run's log: every task marked `changed` before the failure names the f
 | Headscale policy | `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml kill -s HUP headscale'` |
 | Headscale config | `... restart headscale` |
 | Gatus config or secrets | the re-run restarts Gatus itself when the env file changes; otherwise `... restart gatus` |
-| Caddy secrets / Caddyfile | `... restart caddy` / the re-run reloads it |
+| Caddy secrets / Caddyfile | `... restart caddy` / `... exec -T caddy caddy reload --config /etc/caddy/Caddyfile` (nothing in the re-run reloads it: the file is unchanged, and the inode check passes because the container already sees it) |
 
 A missing secret key is the most common cause: **init-secrets → `fill_missing`** (see `secrets/README.md`). Then run **verify**.
 

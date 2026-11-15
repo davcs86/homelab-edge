@@ -15,7 +15,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IP on `POST /api/auth/login`) are the only brute-force control until the app adds them.
 - **Access logs** drop OAuth `code`, `state`, `txn` and `agent_cb` query values; Caddy redacts credential headers.
 - **Monitoring is Gatus**: public probes resolve through 1.1.1.1 (what the internet sees), home probes through
-  MagicDNS; two dead-man heartbeats (Proxmox every 60 s, nightly backup + drill) alert when silent.
+  MagicDNS; four dead-man heartbeats (Proxmox every 60 s, DB host every 5 min, nightly backup + drill, pgBackRest backup) alert when silent.
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
@@ -42,7 +42,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   ingest) is tailnet-only too and not in the firewall, but its ingest handle still sits behind `import tailnet_only`, and
   `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in that site must not copy the handle without it.
   - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
-    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
     The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
@@ -87,7 +87,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. The fix lives in the `(acme)` snippet of `roles/stack/templates/Caddyfile.j2`.
 - **`caddy reload` keeps ACME jobs already in backoff** on the old settings; only a restart drops them. The deploy
-  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, xstockstrat, `*.ts`).
+  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.ts`).
 - **Tailscale's STUN server ignores generic STUN probes.** A request needs SOFTWARE `tailnode` and a FINGERPRINT
   attribute; XOR-MAPPED-ADDRESS may come back as IPv4-mapped IPv6. `scripts/stun-probe.py` builds the right one.
 - **The verify test node must run userspace (`TS_USERSPACE=true`).** Kernel mode in a container fails on iptables,
@@ -125,7 +125,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   old inode: `caddy reload` exited 0 and Caddy kept the old config (staging's 8443 stayed tailnet-gated after deploy 21, and `unsafe_writes`
   does not help, it renames first). The stack role now also compares the container's hash of the file with the host's and restarts Caddy on a mismatch.
 - **Rate-limit zone names are global across sites.** Two `rate_limit` blocks with a zone called `login` share one counter per client IP, so six prod
-  login attempts left staging answering 429 to its first (verify run 40). `public_routes` prefixes every zone with a per-site label (`prod_`, `staging_`).
+  login attempts left staging answering 429 to its first (verify run 40). Every zone is prefixed with the site's `name` (`xstockstrat_`, `xstockstrat-staging_`, `webhooks-mcp_`).
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
   acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,

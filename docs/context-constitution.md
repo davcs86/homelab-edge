@@ -36,7 +36,7 @@ this file adds the patterns *between* them.
 
 | ID | Norm | Why | Evidence | Example |
 |---|---|---|---|---|
-| **EDGE-12** | Prefix every Caddy rate-limit zone with its site name, as `public_routes` does (`{args[1]}_<zone>`). The bare `bearer_mcp` zone is the outlier (logged as a finding). | Zone names are global in caddy-ratelimit (decisions.md). | `roles/stack/templates/Caddyfile.j2#(public_routes)` (norm) vs `site.kind == 'bearer_mcp'` ("zone {{ site.limits }}") (outlier) | `roles/stack/templates/Caddyfile.j2#(public_routes)` |
+| **EDGE-12** | Prefix every Caddy rate-limit zone with its site name, as `public_routes` (`{args[1]}_<zone>`) and `bearer_mcp` (`{{ site.name }}_{{ site.limits }}`) do. | Zone names are global in caddy-ratelimit (decisions.md); `caddy-routing-test.sh` fails on a zone shared across sites. | `roles/stack/templates/Caddyfile.j2#(public_routes)`, `site.kind == 'bearer_mcp'`; `scripts/caddy-routing-test.sh` ("every rate-limit zone") | `roles/stack/templates/Caddyfile.j2#(public_routes)` |
 | **EDGE-13** | A port change for ntfy (`2586`) or headscale (`8080`) touches every literal: ntfy in compose, Caddyfile (`@ntfy`) and Gatus (`alerting` url and healthcheck); headscale in compose, Caddyfile and `headscale-config.yaml.j2` (`listen_addr`). The other services use `*_port` variables. | They were never re-mapped, so the literals are scattered. | `roles/stack/templates/compose.yml.j2#ntfy`, `roles/stack/templates/Caddyfile.j2#@ntfy`, `roles/stack/templates/gatus-config.yaml.j2#alerting`, `roles/stack/templates/headscale-config.yaml.j2` ("listen_addr: 0.0.0.0:8080") | — |
 
 ## Gotchas & scars
@@ -55,7 +55,7 @@ this file adds the patterns *between* them.
 - **Two Tailscale install implementations.** `roles/tailscale` (edge, Ubuntu repo, mints its own key) and
   `roles/tailnet_host/tasks/tailscale.yml` (DB and app hosts) share only the version variable, so a flag or behaviour
   change is made twice. The app-deploy template carries literal copies of the tailscale pin
-  (`templates/app-deploy/deploy.yml#TAILSCALE_VERSION`), synced by hand per `docs/versions.md`.
+  (`templates/app-deploy/deploy.yml#TAILSCALE_VERSION`), which `scripts/app-deploy-template-test.py` keeps equal to `versions.yml`.
 
 ## Candidate rules (unverified)
 
