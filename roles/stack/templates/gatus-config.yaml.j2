@@ -83,6 +83,16 @@ endpoints:
     <<: *tailnet
     conditions:
       - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: webhooks-ingest-staging
+    group: edge
+    url: https://{{ webhooks_ingest_hostname }}:{{ staging_edge_port }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
   - name: commsgun-api

@@ -54,12 +54,15 @@ The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: t
 | `playbooks/backup-now.yml` | run backup + restore drill now |
 | `playbooks/node-admin.yml` | list / approve / tag / force-reauth / remove devices, mint CI key; writes a run summary |
 | `playbooks/diag-stun.yml` | read-only STUN evidence from both ends (run by verify) |
+| `playbooks/diag-boot.yml` | read-only boot and container diagnosis after a reboot (node-admin → `diagnose-boot`) |
+| `playbooks/db.yml` | database host: PostgreSQL + TimescaleDB, PgBouncer, pgBackRest (`docs/runbooks/db-host.md`) |
+| `playbooks/app.yml` | Compose app VMs: users, Tailscale, pinned Docker, the app-deploy gate (`docs/runbooks/deploy-compose-app.md`) |
 | `scripts/` | offline tests (`policy-test.sh`, `caddy-routing-test.sh`), `stun-probe.py`, `tls-check.py`, `runner-tailnet.sh`, `init_secrets.py` |
 | `policy/policy.hujson` | headscale grants + `tests` (tests run in CI only; see `docs/decisions.md`) |
-| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, `compose.yml` |
+| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, Gatus `config.yaml`, commsgun config, `compose.yml` |
 | `inventories/prod/group_vars/all/` | `main.yml` (settings), `versions.yml` (every pin; rationale in `docs/versions.md`), `generated.yml` (reserved IP) |
 | `secrets/` | SOPS files only (`secrets/README.md`) |
-| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `bump-webhooks-mcp`, `bump-commsgun` |
+| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `app-host`, `db-host`, `bump-webhooks-mcp`, `bump-commsgun` |
 
 ## Rebuild from scratch
 

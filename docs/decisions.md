@@ -5,8 +5,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 ## Design decisions
 
 - **Policy tests run in CI only.** headscale re-runs a policy's `tests` on every reload and would reject updates
-  while tagged nodes are missing (fresh tailnet, rebuilt node). The edge receives the policy with `tests` stripped;
-  `scripts/policy-test.sh` registers one fake node per user/tag in a throwaway headscale and runs them.
+  while tagged nodes are missing (fresh tailnet, rebuilt node). Mechanism: `roles/stack/tasks/main.yml` ("Render policy
+  without its tests block"), `scripts/policy-test.sh`.
 - **The edge reaches its own control plane on 127.0.0.1** (`/etc/hosts`), so nothing depends on hairpinning through
   the reserved IP. Direct WireGuard to the edge uses hole punching (no inbound UDP besides 3478); DERP is the fallback.
 - **Caddy uses host networking** so rate limits and the tailnet split see real client IPs. Upstreams resolve via
@@ -15,7 +15,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IP on `POST /api/auth/login`) are the only brute-force control until the app adds them.
 - **Access logs** drop OAuth `code`, `state`, `txn` and `agent_cb` query values; Caddy redacts credential headers.
 - **Monitoring is Gatus**: public probes resolve through 1.1.1.1 (what the internet sees), home probes through
-  MagicDNS; two dead-man heartbeats (Proxmox every 60 s, nightly backup + drill) alert when silent.
+  MagicDNS; four dead-man heartbeats (Proxmox every 60 s, DB host every 5 min, nightly backup + drill, pgBackRest backup) alert when silent.
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
@@ -23,10 +23,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
   workflows, so `bump-webhooks-mcp` (and `bump-commsgun`, which does the same for its two images) dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
   `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
-  It keeps one branch and one open PR (force-pushed and retitled for a newer digest), so runs never pile up PRs and a run cancelled before the PR exists, or before `ci` was started, heals on the next.
-  The webhooks-mcp and commsgun pins sit on adjacent lines (and adjacent `docs/versions.md` rows), so merging one bump PR leaves the other
-  unmergeable: a bump PR left behind by a merge to `main` is rebuilt on the next run (an open PR for the same digests whose head the GitHub
-  compare API reports behind `main` is rebuilt from `main`, force-pushed and updated; if that check fails, the run fails and leaves the PR as is).
+  The webhooks-mcp and commsgun pins sit on adjacent lines, so merging one bump PR leaves the other unmergeable; the next run rebuilds
+  it (mechanism: `.github/workflows/bump-webhooks-mcp.yml`).
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
@@ -73,13 +71,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   ingest) is tailnet-only too and not in the firewall, but its ingest handle still sits behind `import tailnet_only`, and
   `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in that site must not copy the handle without it.
   - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
-    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
     The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
     container would exit at start.
   - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
-  - The image pin is by digest only; see `docs/versions.md`.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.ts` 443 site behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
@@ -91,8 +88,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     images carry the same revision label and refuses a mismatched or unlabelled pair. Caddy's body cap (`body_limits.commsgun_enqueue`,
     262144 bytes) must equal the API's own cap.
   - `resend_api_key` must be a full-access Resend key: bounce tracking reads email status, and a sending-only key makes every status poll fail.
-  - The env files are written with single-quoted values and Compose treats `\'` as an escape inside them, so the deploy refuses (before
-    writing anything) a commsgun secret containing a quote, backslash or line break; `COMMSGUN_CONFIG` is rendered with `tojson` for the same reason.
+  - Compose treats `\'` as an escape inside the single-quoted env files, so the deploy refuses a commsgun secret containing a quote,
+    backslash or line break (`roles/stack/tasks/main.yml`, "Commsgun API environment").
   - **The dashboard's filters live in the URL query, and recipient addresses are in them.** Caddy's default JSON access log of a
     `*.ts` site would carry them, so the dashboard host has its own access log (`commsgun-ui.access.log`) that drops the query, `Referer` and
     `Location`. The trap that remained: Caddy's `http.handlers.reverse_proxy` logger (not per host) and the `http.log.error.*` loggers
@@ -117,9 +114,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   `2>&1`; the rescue block now prints Caddy's state, its loaded TLS names and its last log lines unfiltered.
 - **DNS-01 needs `propagation_delay`.** deSEC's anycast nodes converge after Caddy's own check passes; Let's
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
-  retry fails. `propagation_delay 2m` / `propagation_timeout 10m` in the `(acme)` snippet fixes it.
+  retry fails. The fix lives in the `(acme)` snippet of `roles/stack/templates/Caddyfile.j2`.
 - **`caddy reload` keeps ACME jobs already in backoff** on the old settings; only a restart drops them. The deploy
-  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, xstockstrat, `*.ts`).
+  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.ts`).
 - **Tailscale's STUN server ignores generic STUN probes.** A request needs SOFTWARE `tailnode` and a FINGERPRINT
   attribute; XOR-MAPPED-ADDRESS may come back as IPv4-mapped IPv6. `scripts/stun-probe.py` builds the right one.
 - **The verify test node must run userspace (`TS_USERSPACE=true`).** Kernel mode in a container fails on iptables,
@@ -133,8 +130,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   `tailscale up` failed for 4.5 days (headscale not serving) with no alert: `docker ps --filter health=unhealthy`
   does not list exited containers. `edge-deadman` now compares `compose config --services` with
   `compose ps --status running`. Why headscale did not restart: run node-admin → `diagnose-boot`.
-- **`Automatic-Reboot-Time` follows the host clock (UTC).** A Pacific reboot window needs a systemd timer with a
-  time zone in `OnCalendar` (`edge-reboot.timer`), which also tracks DST.
+- **`Automatic-Reboot-Time` follows the host clock (UTC)**, so the Pacific window is `edge-reboot.timer` (`roles/base/tasks/main.yml`).
 - **Bootstrap must be re-runnable.** Root's keys are removed partway; the play probes the deploy user first and
   connects as root only if that fails.
 - **Staging shares the DB server; isolation is in Postgres and PgBouncer, not the tailnet.** Grants name `tag:db`
@@ -158,7 +154,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   old inode: `caddy reload` exited 0 and Caddy kept the old config (staging's 8443 stayed tailnet-gated after deploy 21, and `unsafe_writes`
   does not help, it renames first). The stack role now also compares the container's hash of the file with the host's and restarts Caddy on a mismatch.
 - **Rate-limit zone names are global across sites.** Two `rate_limit` blocks with a zone called `login` share one counter per client IP, so six prod
-  login attempts left staging answering 429 to its first (verify run 40). `public_routes` prefixes every zone with a per-site label (`prod_`, `staging_`).
+  login attempts left staging answering 429 to its first (verify run 40). Every zone is prefixed with the site's `name` (`xstockstrat_`, `xstockstrat-staging_`, `webhooks-mcp_`).
 - **Workflows commit to `main` with the owner's fine-grained PAT, which bypasses the pull-request rule.** The rule blocked `init-secrets`,
   and `GITHUB_TOKEN` cannot be a bypass actor. The owner chose a PAT over a GitHub App and over branch-and-PR. What it costs: the token
   acts as the owner and expires; whoever can approve a `production` run and get workflow code onto `main` can change any file on `main`,
@@ -248,9 +244,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   console password) is created too, so manual work does not depend on the CI key. PostgreSQL's passwords are set only when a login with the SOPS value fails, and
   PgBouncer's user list is built from PostgreSQL's own SCRAM verifiers, so no cleartext reaches PgBouncer or the repo.
 - **Archiving follows the stanza.** `archive_command` against a missing stanza fails forever and WAL fills the data disk, and `stanza-create`
-  needs PostgreSQL running, so the first `db-host` run cannot archive. `archive.yml` asks the edge (`pgbackrest info`, status 1 = missing
-  stanza path) and turns `archive_mode` on only when the stanza exists, so the flags can stay on. The edge's backup service has
-  `ConditionPathExists` on the stanza's backup directory, so the timers are skipped, not failed, until then.
+  needs PostgreSQL running, so the first `db-host` run cannot archive. Mechanism: `roles/db_host/tasks/archive.yml`; the edge's backup
+  timers are skipped, not failed, until the stanza exists.
 - **The database TLS CA is not the pgBackRest CA.** A client cert from the pgBackRest CA must never open a SQL connection and a database
   server cert must never authenticate to the backup channel. The pull direction's extra certs (DB server, edge client) do come from the
   pgBackRest CA. `init_secrets.py --fill-missing` creates each set whole and refuses a partial one.
@@ -263,17 +258,17 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   alert, as `nightly-backup` does for headscale. The token is passed to curl on stdin (argv is world-readable) by a root-run `ExecStartPost=+`.
   A Gatus outage right after a good backup marks the unit failed and notifies; that is the same trade as `edge-backup.service`.
 - **Owner roles get `idle_in_transaction_session_timeout = 10min` and no `statement_timeout`.** A leaked transaction holds locks and pins
-  vacuum, and 60 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
+  vacuum, and 70 connections is not many to lose; a statement timeout would also apply to the migrator (same role) and to long bar scans.
 - **PgBouncer entries do not force `user=`.** With SCRAM verifiers in `userlist.txt`, a forced user makes the server login fail (`wrong password type`); passing
   the client's SCRAM keys through works. Isolation is the role's `CONNECT` grant and its `pg_hba` line, tested with both roles against both databases.
 - **Connection sizing follows the 3 GiB, 2-core container.** Worst case per environment: the 8 direct pool connections (ledger 2, identity 2,
-  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 5 = 23, so each role is limited to 25.
-  Both environments deploy together (the daily promotion): 2 x 25 + admin 3 + superadmin 3 + 3 reserved slots = 59, so `max_connections` is 60 (the
+  config 2, notify 1, ui 1) doubled by a rolling deploy, 2 for the migrator, and 1 PgBouncer pool of 10 = 28, so each role is limited to 30.
+  Both environments deploy together (the daily promotion): 2 x 30 + admin 3 + superadmin 3 + 3 reserved slots = 69, so `max_connections` is 70 (the
   playbook asserts it). The build guide's 100 would not fit in memory with swap off: roughly 10 MB per backend plus two `work_mem` nodes is 26 MB, so
-  60 x 26 MB + 768 MB of `shared_buffers` is about 2.3 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
-  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool stays 5 per database: xstockstrat bounds
-  `max_concurrent_bars_fetches` to [1, 5] with the marketdata PgBouncer pool as the ceiling, so a smaller pool queues work it allows, and 5 is
-  already 2 x cores + 1. Raise nothing before measuring.
+  70 x 26 MB + 768 MB of `shared_buffers` is about 2.5 GiB of 3 (an estimate, not measured), and 100 would be 3.4 GiB. Three autovacuum workers
+  at the 256 MB `maintenance_work_mem` could add 768 MB, so `autovacuum_work_mem` is 64 MB. The pool is 10 per database, doubled from 5 by the
+  owner on 2026-11-15 with the container measured at about 10% of memory and CPU: the six pooled xstockstrat services share one pool, so
+  marketdata's bars fetches (`max_concurrent_bars_fetches`, bounded to [1, 5]) and concurrent ingest backfill jobs contended for 5. Raise nothing further before measuring.
 - **Traps:** a Debian LXC without a UTF-8 locale creates a `SQL_ASCII` cluster, so `createcluster.d` forces `--encoding=UTF8`;
   PostgreSQL and PgBouncer bind the tailnet address, which tailscaled brings up after boot, so their units wait for it
   (`wait-tailnet-ip`); a `postgres` login with `ALTER ROLE … PASSWORD` can log the statement on error, so it sets

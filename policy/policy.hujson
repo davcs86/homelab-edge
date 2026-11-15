@@ -28,7 +28,7 @@
 
     // Edge -> app: only the UI and agent ports (public /agent + OAuth routes, tailnet UI, Gatus probes).
     {"src": ["tag:edge"], "dst": ["tag:xstockstrat"], "ip": ["tcp:3000", "tcp:9000"]},
-    // Edge -> staging app: UI and agent ports for the tailnet-only staging route.
+    // Edge -> staging app: UI and agent ports for the public staging route (its own name on 443).
     {"src": ["tag:edge"], "dst": ["tag:xstockstrat-staging"], "ip": ["tcp:3000", "tcp:9000"]},
     // Edge -> Proxmox: Gatus TCP probe of the web UI port only.
     {"src": ["tag:edge"], "dst": ["tag:pve"], "ip": ["tcp:8006"]},
