@@ -37,6 +37,7 @@ Read only the row that matches the task.
 | Bumping or adding a pin, including the bot-opened webhooks-mcp and commsgun digest bumps | `docs/versions.md` |
 | Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C8) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
+| SSO (Authelia): people, groups, emails, linking app accounts, recovery | `docs/runbooks/sso.md`, `docs/decisions.md` § SSO |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
 | Deploy a Compose app (xstockstrat or other) to the homelab; build or change an app VM | `docs/runbooks/deploy-compose-app.md`, `templates/app-deploy/`, `playbooks/app.yml` |

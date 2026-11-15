@@ -36,6 +36,35 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   }
   respond @not_anthropic 403
   ```
+- **SSO is Authelia, not a custom identity provider (decided 2026-11-15, not deployed).** Admin reference: `docs/runbooks/sso.md`.
+  - Why not custom: xstockstrat's own OAuth server (agent facade + identity) covers MCP OAuth only (no ID tokens, JWKS, key rotation
+    or logout), and its MFA and lockout never got built (see "Login hardening is upstream's gap"). Why not Authentik, Keycloak or
+    Zitadel: each needs 0.5–1.5 GB or its own Postgres on a 2 GB droplet. Pocket ID has no `forward_auth`. Authelia is one Go
+    binary with OIDC, `forward_auth`, WebAuthn/TOTP and brute-force regulation, storing its state in SQLite (a handful of users).
+  - Scope: the public apps only: xstockstrat and xstockstrat-staging (web + MCP), the commsgun dashboard (made public), webhooks-mcp `/mcp`
+    (its static bearer key is removed). Gatus and Proxmox are a later phase. headscale device login never uses SSO, so Authelia
+    can be down or lost without touching the tailnet or the break-glass path.
+  - `auth.<domain>` is public on 443 (new deSEC token policy, its own rate-limit zone, Gatus probe from 1.1.1.1).
+  - Authelia is the only token issuer. Clients are pre-registered (Authelia has no released RFC 7591 registration; Claude.ai
+    connectors accept a pre-registered public client). MCP resource servers validate its JWT access tokens against its JWKS,
+    with the token audience bound to the resource (RFC 8707). Fallback if the spike fails: keep xstockstrat's own OAuth server
+    and only delegate its login to Authelia.
+  - Release: v4.39.28. v4.39.21–22 rejected RFC 8707 `resource` in the code flow (authelia#12970, #13113), and v4.39.23 shipped the
+    resource-indicator fix. `TODO(verify)` in the spike before the digest pin lands in `versions.yml`: MCP clients pass with
+    `resource`, JWT access tokens, custom scopes in the token, group re-check on refresh, Claude.ai and Claude Code with a
+    pre-registered client, `sub` bound to the username.
+  - Access is one group per app, with `default_policy: deny` and `two_factor` everywhere; a person may hold several groups.
+    Authelia knows nothing of xstockstrat's environments: `xstockstrat` and `xstockstrat-staging` are separate apps.
+  - xstockstrat keeps `identity.users` (migrations and FKs depend on it) and its roles per environment. A login links by `sub`,
+    else by exactly one matching email, else creates a user with roles written as `{trader}`. Email is copied from Authelia at
+    each login. MCP effective scope = roles ∩ OAuth scopes granted to the client (read-only connectors against prompt
+    injection), with a ~60 s fail-closed role cache. Password login stays behind a flag as the rollback path, so the Caddy login
+    limits stay until the flag is removed. The xstockstrat side goes through its SDD pipeline.
+  - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`; its password login goes. This only holds if Caddy
+    deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
+    and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four.
+  - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
+    nightly backup: losing it loses every `sub` and second factor.
 
 ## Known traps
 
