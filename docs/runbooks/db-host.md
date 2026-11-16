@@ -88,9 +88,9 @@ The container has 3 GiB, 2 cores and no swap. Where each number lives and why (t
 
 | Setting | Value | Where |
 |---|---|---|
-| `max_connections` | 70 | `roles/db_host/defaults/main.yml` (`db_pg_settings`) |
-| Role connection limits | 30 per workload, 3 `admin`, 3 `superadmin` | `db_workloads`, `db_admin_connection_limit`, `db_superadmin_connection_limit` |
-| PgBouncer pool | 10 per database (server connections); `max_client_conn` 200 | `db_pgbouncer_pool_size`; `templates/pgbouncer.ini.j2` |
+| `max_connections` | 90 | `roles/db_host/defaults/main.yml` (`db_pg_settings`) |
+| Role connection limits | 40 per workload, 3 `admin`, 3 `superadmin` | `db_workloads`, `db_admin_connection_limit`, `db_superadmin_connection_limit` |
+| PgBouncer pool | 20 per database (server connections); `max_client_conn` 200 | `db_pgbouncer_pool_size`; `templates/pgbouncer.ini.j2` |
 | `shared_buffers`, `work_mem`, `maintenance_work_mem`, `autovacuum_work_mem` | 768MB, 8MB, 256MB, 64MB | `db_pg_settings` |
 
 The playbook refuses to run when the role limits plus 3 reserved slots exceed `max_connections`. Change the container size and these together.

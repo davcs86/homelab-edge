@@ -9,7 +9,7 @@ db_pg_settings:
   work_mem: 8MB
   maintenance_work_mem: 256MB
   autovacuum_work_mem: 64MB
-  max_connections: 70
+  max_connections: 90
   max_locks_per_transaction: 1024
   wal_compression: "on"
   checkpoint_timeout: 15min
