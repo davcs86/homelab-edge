@@ -125,6 +125,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Add a workload (tag, grants, shared Postgres, staging route) | [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) |
 | Deploy, configure or operate commsgun (email/SMS hub) | [`docs/runbooks/commsgun.md`](docs/runbooks/commsgun.md) |
+| SSO (Authelia) admin reference: people, groups, linking app accounts (design, not deployed) | [`docs/runbooks/sso.md`](docs/runbooks/sso.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | A workflow fails to push to `main` (GH013); the commit-back token | [`docs/runbooks/github-push-token.md`](docs/runbooks/github-push-token.md) |
 | Grants and tags (test with `scripts/policy-test.sh`) | [`policy/policy.hujson`](policy/policy.hujson) |
