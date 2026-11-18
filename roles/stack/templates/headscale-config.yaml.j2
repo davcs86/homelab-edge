@@ -64,7 +64,10 @@ dns:
   override_local_dns: false
   nameservers:
     global: []
-    split: {}
+    # SPIKE (throwaway): routes the zone to the client resolver on every OS; extra records answer first.
+    split:
+      private.{{ domain }}:
+        - 1.1.1.1
   search_domains: []
   extra_records_path: /etc/headscale/extra-records.json
 
