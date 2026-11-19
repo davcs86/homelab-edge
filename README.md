@@ -42,6 +42,7 @@ Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SS
 (`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint,
 the OAuth login routes and the read-only `GET /trader/api/health` that Gatus probes; tailnet clients get the whole app through the same name (split-horizon DNS).
 The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: the whole app to the internet behind the same per-IP rate limits as prod, and unlimited to the tailnet. Every 443 hostname is an entry in `edge_sites`.
+Two wildcard zones take new portals without any DNS or token registration: `<service>.public.<domain>` (internet) and `<service>.private.<domain>` (tailnet-only); see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map
 
@@ -94,8 +95,11 @@ the VPS waits for approval on the `production` environment.
      | `_acme-challenge.ts` | CNAME | `ts.acme.natanddavehouse.com` (wildcard `*.ts…`) |
      | `xstockstrat-staging` | A | reserved IPv4 |
      | `_acme-challenge.xstockstrat-staging` | CNAME | `xstockstrat-staging.acme.natanddavehouse.com` |
+     | `*.public` | A | reserved IPv4 (wildcard zone; every `zone: public` site) |
+     | `_acme-challenge.public` | CNAME | `public.acme.natanddavehouse.com` (wildcard `*.public…`) |
+     | `_acme-challenge.private` | CNAME | `private.acme.natanddavehouse.com` (wildcard `*.private…`; the zone itself has no public records) |
 
-   - deSEC: create a token that can only write those five TXT RRsets (`hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts`), only from the droplet's egress addresses
+   - deSEC: create a token that can only write those seven TXT RRsets (`hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts`, `public`, `private`), only from the droplet's egress addresses
      (see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)). Store it as environment secret `DESEC_TOKEN`.
    - healthchecks.io: one check, period 5 min, grace 10 min, email to you; ping URL → secret `HC_PING_URL`
      ([`docs/runbooks/alerts.md`](docs/runbooks/alerts.md)).

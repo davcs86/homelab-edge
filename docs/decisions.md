@@ -85,6 +85,13 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
     container would exit at start.
   - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
+- **Portals live under two wildcard zones, `*.public.<domain>` and `*.private.<domain>`.** One certificate per zone over the
+  existing DNS-01 chain (labels `public`, `private`), as `*.ts` already works, so a new portal needs no Cloudflare or deSEC change.
+  Rejected: per-host certificates with API-driven registration (needs a Cloudflare DNS token and a deSEC token that can manage
+  policies), and on-demand TLS (a second issuance path that does not fit tailnet-only names). `*.private` resolves through headscale
+  extra records plus a DNS route for the zone (`dns.nameservers.split`, upstream `1.1.1.1`); rejected: a public wildcard record
+  pointing at the edge's tailnet address (publishes it, sends looked-up service names to public resolvers, fails behind
+  DNS-rebinding filters, goes stale on a rebuild). `hs` and `auth` stay outside the zones. Spec: `docs/superpowers/specs/2026-11-18-wildcard-portal-zones-design.md`.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.ts` 443 site behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
@@ -179,6 +186,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Gatus endpoints are named after the workload tag, staging included.** `xstockstrat-ui`, `xstockstrat-staging-agent`, … in group
   `home`, matching the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
   alert like prod, so the staging VM must be registered before the deploy that adds them.
+- **Linux nodes ignore extra records outside a DNS route.** systemd-resolved only sends routed zones to the tailnet resolver;
+  Apple and Android clients send everything. Measured 2026-11-18 on the staging VM: `xstockstrat.<domain>` returned the reserved
+  IPv4, while a name under `private.<domain>` returned the edge's tailnet address once the zone had a route. `tailscale dns query`
+  bypasses the OS resolver and hides this; test with `getent hosts`.
+- **An app with a single origin serves one name at a time.** The commsgun dashboard answers 400 on every path except `/healthz`
+  when the host is not `ORIGIN`; xstockstrat binds its OAuth resource to `APP_URL`. A second route proves routing and health only.
 - **A route name cannot equal a node's MagicDNS name.** `xstockstrat-staging.ts.<domain>` resolves to the staging VM;
   an extra record for it would contend with the node record. The edge-facing name is `xstockstrat-staging-ui`.
 - **Hostnames follow tags, and duplicates register as `name-1`.** `app_tailnet_host` and `staging_tailnet_host` are the
