@@ -111,7 +111,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     print the full URI and `Referer` on an upstream error, bypassing the per-host filter. The default logger therefore excludes them and a
     second logger, `redacted_requests`, takes them with the query and `Referer` stripped. `caddy-routing-test.sh` checks the canary address does not appear.
   - The dashboard builds its origin and its login rate-limit key from Caddy's default `X-Forwarded-Proto`, `-Host` and `-For` and answers 400
-    unless the derived origin equals its `ORIGIN` (`https://commsgun_ui_hostname`); never strip or override those headers on that handle.
+    unless the derived origin equals its `ORIGIN` (`https://commsgun_ui_private_hostname`); never strip or override those headers on that handle.
   - Staging: app `xstockstrat-staging` is registered (own key, lower limits) but has no route: the staging VM is denied on the `*.ts` 443 site,
     so it cannot reach `comms.ts.<domain>`, and the 8443 site answers 404 for both commsgun names.
   - "Tailnet-only" means every tailnet identity with a grant on `tag:edge:443` (`policy/policy.hujson`: `group:admins`,
