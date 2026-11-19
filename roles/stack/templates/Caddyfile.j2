@@ -14,7 +14,7 @@
 		output stderr
 		format json
 		level INFO
-		exclude http.log.error.commsgun_ui http.handlers.reverse_proxy
+		exclude http.log.error.commsgun_ui http.log.error.commsgun_ui_private http.handlers.reverse_proxy
 	}
 	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
 	log redacted_requests {
@@ -25,7 +25,7 @@
 			wrap json
 		}
 		level INFO
-		include http.log.error.commsgun_ui http.handlers.reverse_proxy
+		include http.log.error.commsgun_ui http.log.error.commsgun_ui_private http.handlers.reverse_proxy
 	}
 }
 
@@ -334,6 +334,55 @@
 {{ app_body(site) if site.kind == 'app' else bearer_mcp_body(site) }}}
 
 {% endfor %}
+# One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.
+*.{{ public_zone }} {
+	import acme public.{{ acme_zone }}
+	import access_log public
+
+{% for site in edge_sites if site.zone | default('') == 'public' %}
+	@site_{{ site.name | replace('-', '_') }} host {{ site.hostname }}
+	handle @site_{{ site.name | replace('-', '_') }} {
+{{ (app_body(site) if site.kind == 'app' else bearer_mcp_body(site)) | indent(width='\t', first=true) }}	}
+
+{% endfor %}
+	handle {
+		respond "Not Found" 404
+	}
+}
+
+# Tailnet-only; the zone has no public DNS records, tailnet clients resolve it through headscale.
+*.{{ private_zone }} {
+	import acme private.{{ acme_zone }}
+	import access_log private
+	import deny_staging_vm
+	import tailnet_only
+
+	# The dashboard keeps recipient addresses in its query (and so in Referer and redirects); its own logger drops all three.
+	log commsgun_ui_private {
+		hostnames {{ commsgun_ui_private_hostname }}
+		output file /var/log/caddy/commsgun-ui-private.access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			resp_headers>Location delete
+			wrap json
+		}
+	}
+	# The dashboard derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
+	@commsgun_ui host {{ commsgun_ui_private_hostname }}
+	handle @commsgun_ui {
+		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
+
 *.{{ magicdns_base_domain }} {
 	import acme ts.{{ acme_zone }}
 	import access_log tailnet
