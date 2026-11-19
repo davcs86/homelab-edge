@@ -187,7 +187,7 @@ class EnvFiles(unittest.TestCase):
         self.assertEqual(env, {
             "ADMIN_PASSWORD": fake("commsgun_admin_password"), "SESSION_SECRET": fake("commsgun_session_secret"),
             "ADMIN_API_TOKEN": fake("commsgun_admin_api_token"), "API_BASE_URL": "http://commsgun-api:9201",
-            "ORIGIN": f"https://{V['commsgun_ui_hostname']}"})
+            "ORIGIN": f"https://{V['commsgun_ui_private_hostname']}"})
 
     def test_files_are_private_and_the_block_hides_its_output(self):
         self.assertIs(BLOCK.get("no_log"), True)

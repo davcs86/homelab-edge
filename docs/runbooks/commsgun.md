@@ -7,12 +7,12 @@ Two containers on the edge, behind Caddy on tailnet-only names (no ACME work nee
 | Name | Container | Host port | Use |
 |---|---|---|---|
 | `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz`, `/healthz/backlog` |
-| `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard; `/healthz` for Gatus |
-| `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's second name; only `/healthz` answers until `ORIGIN` names it |
+| `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard (its `ORIGIN`); `/healthz` for Gatus |
+| `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's former name; only `/healthz` answers, for Gatus |
 
 The dashboard answers `400 Bad origin` on every path except `/healthz` when the request's host is not its `ORIGIN`, so it is
-usable on one name at a time. Moving it to the private name is one change: `ORIGIN` in `roles/stack/tasks/main.yml`
-("Commsgun dashboard environment"); after that the `*.ts` name is the one that answers only `/healthz`.
+usable on one name at a time. `ORIGIN` is set in `roles/stack/tasks/main.yml` ("Commsgun dashboard environment"); to roll
+back to the `*.ts` name, point it at `commsgun_ui_hostname` and deploy.
 
 The admin port 9201 is never published. The service's own docs: `README.md` and `docs/superpowers/specs/` in
 `davcs86/commsgun`. Traps: `docs/decisions.md` § Known traps. Secret shapes: `secrets/README.md`.
@@ -81,7 +81,7 @@ key and body again (`"duplicate":true`), 401 unknown app or wrong key, 403 chann
 different body, 413 over 256 KiB, 422 invalid body or sender, 429 over the app's limit (`Retry-After`), 503 busy
 (retry with the same key).
 
-Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, password from
+Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admin`, password from
 `sops decrypt --extract '["commsgun_admin_password"]' secrets/edge.sops.yaml`. Then check each of these:
 
 - **Delivered.** The send above returns `202`. The dashboard (default range 1h) shows it as Sent, then `delivered`
@@ -96,8 +96,9 @@ Log in to the dashboard at `https://commsgun.ts.<domain>/login`: user `admin`, p
   answer means wait a minute; it does not prove the day limit.
 - **Unreachable from outside.** From a device off the tailnet (phone on mobile data, tailscale off):
   `curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' https://comms.ts.<domain>/healthz` and the same for
-  `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; neither may return an HTTP status.
-- **Gatus.** `https://status.ts.<domain>`, group `edge`: `commsgun-api`, `commsgun-backlog` and `commsgun-ui` are green.
+  `https://commsgun.private.<domain>/healthz` and `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; none may
+  return an HTTP status.
+- **Gatus.** `https://status.ts.<domain>`, group `edge`: `commsgun-api`, `commsgun-backlog`, `commsgun-ui` and `commsgun-ui-private` are green.
 - **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.ts.<domain>/v1/messages -d '{}'`
   (from the tailnet) prints `401`.
 

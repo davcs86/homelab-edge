@@ -203,7 +203,7 @@
           SESSION_SECRET='{{ edge_secrets.commsgun_session_secret }}'
           ADMIN_API_TOKEN='{{ edge_secrets.commsgun_admin_api_token }}'
           API_BASE_URL='http://commsgun-api:9201'
-          ORIGIN='https://{{ commsgun_ui_hostname }}'
+          ORIGIN='https://{{ commsgun_ui_private_hostname }}'
         mode: "0600"
 
 - name: Compose file

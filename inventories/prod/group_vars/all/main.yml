@@ -85,8 +85,8 @@ webhooks_ingest_port: 9101
 
 # ---------- commsgun (email/SMS delivery hub) ----------
 commsgun_enqueue_hostname: "comms.{{ magicdns_base_domain }}"
-commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"
-commsgun_ui_private_hostname: "commsgun.{{ private_zone }}"   # answers only /healthz until ORIGIN names it
+commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"            # former dashboard name; answers only /healthz (not the ORIGIN)
+commsgun_ui_private_hostname: "commsgun.{{ private_zone }}"   # the dashboard's ORIGIN
 commsgun_enqueue_port: 9200
 commsgun_ui_port: 9202
 # `key` names the SOPS key holding the app's bearer key; every email app needs an entry in the SOPS map commsgun_senders.
