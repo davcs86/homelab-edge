@@ -122,6 +122,16 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
+  - name: commsgun-ui-private
+    group: edge
+    url: https://{{ commsgun_ui_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
   - name: public-default-404
     group: public
     url: https://{{ public_app_hostname }}/
@@ -145,6 +155,17 @@ endpoints:
   - name: xstockstrat-staging-ui-public
     group: public
     url: https://{{ staging_public_hostname }}/trader/api/health
+    interval: 2m
+    <<: *public
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].status == ok"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: xstockstrat-staging-portal-ui-public
+    group: public
+    url: https://{{ staging_portal_hostname }}/trader/api/health
     interval: 2m
     <<: *public
     conditions:
