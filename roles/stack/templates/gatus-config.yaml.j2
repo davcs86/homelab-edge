@@ -122,6 +122,15 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
+  - name: commsgun-api-private
+    group: edge
+    url: https://{{ commsgun_enqueue_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
   - name: commsgun-ui-private
     group: edge
     url: https://{{ commsgun_ui_private_hostname }}/healthz

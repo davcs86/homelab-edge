@@ -98,7 +98,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   `known_hosts`, the apps' deploy and database addresses). The `*.ts` services still served are a fixed list in
   `scripts/portal-zones-test.py` that only shrinks. Sequence: `docs/superpowers/specs/2026-11-19-zone-split-design.md`.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
-  `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.ts` 443 site behind `import tailnet_only`
+  `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` 443 site (and, as `comms.ts.<domain>`, still in the `*.ts` one) behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
   - Admin port 9201 is never published. The two containers sit on their own compose network (`commsgun`), so no other stack
     container can reach 9201 or send the dashboard forged `X-Forwarded-*` headers; the admin API is also guarded by `commsgun_admin_api_token`.

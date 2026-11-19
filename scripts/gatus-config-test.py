@@ -126,6 +126,12 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
+    def test_the_private_enqueue_name_is_probed_over_the_tailnet(self):
+        e = ENDPOINTS["commsgun-api-private"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['commsgun_enqueue_private_hostname']}/healthz", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+
     def test_the_staging_portal_name_is_probed_from_the_internet_resolver(self):
         e = ENDPOINTS["xstockstrat-staging-portal-ui-public"]
         self.assertEqual((e["group"], e["url"]), ("public", f"https://{V['staging_portal_hostname']}/trader/api/health"))

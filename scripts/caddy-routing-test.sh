@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'portal_host={{ staging_portal_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'portal_host={{ staging_portal_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" portal_host="" cgpriv_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" portal_host="" cgpriv_host="" cmpriv_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -181,6 +181,15 @@ expect "private dashboard gets Caddy's X-Forwarded-*, not the client's" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$v/echo-headers")"
 expect "private dashboard upstream keeps the query" "200 commsgun-ui GET /messages?recipient=canary@example.test" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$v/messages?recipient=canary@example.test")"
+# The enqueue API's second name, also under *.private: same cap, same isolation, its own upstream.
+e="https://$cmpriv_host"
+expect "private enqueue aborts publicly"       "000"                              "$(req "$cmpriv_host" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue from the tailnet"      "200 commsgun-api POST /v1/messages" "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue body at exactly 262144 bytes" "200 commsgun-api POST /v1/messages" "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$e/v1/messages")"
+expect "private enqueue body over 262144 bytes" "413"                             "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$e/v1/messages")"
+expect "staging VM denied on the private enqueue" "000"                           "$(req "$cmpriv_host" --interface "$staging_vm_ip" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue name reaches only the API" "200 commsgun-api GET /login"  "$(req "$cmpriv_host" --interface "$tailnet_ip" "$e/login")"
+expect "private dashboard name reaches only the UI" "200 commsgun-ui POST /v1/messages" "$(req "$cgpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$v/v1/messages")"
 # Caddy matches hosts case-insensitively but picks a per-host logger by exact name: the whole zone must redact.
 mixed="C${cgpriv_host#c}"
 expect "private dashboard, mixed-case host"   "200 commsgun-ui GET /messages?recipient=canary@example.test" \

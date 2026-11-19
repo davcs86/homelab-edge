@@ -6,7 +6,8 @@ Two containers on the edge, behind Caddy on tailnet-only names (no ACME work nee
 
 | Name | Container | Host port | Use |
 |---|---|---|---|
-| `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz`, `/healthz/backlog` |
+| `comms.private.<domain>` (`commsgun_enqueue_private_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz` |
+| `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | legacy name of the same API, served until its callers have moved; Gatus probes `/healthz`, `/healthz/backlog` |
 | `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard (its `ORIGIN`); `/healthz` for Gatus |
 | `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's former name; only `/healthz` answers, for Gatus |
 
@@ -66,7 +67,7 @@ for the idempotency key (`verify-<suffix>`) and the JSON body:
 ```sh
 KEY=$(sops decrypt --extract '["commsgun_app_key_ops"]' secrets/edge.sops.yaml)
 send() {
-  curl -sS -i -X POST "https://comms.ts.<domain>/v1/messages" \
+  curl -sS -i -X POST "https://comms.private.<domain>/v1/messages" \
     -H 'X-Commsgun-App: ops' -H "Authorization: Bearer $KEY" \
     -H "Idempotency-Key: verify-$1" -H 'Content-Type: application/json' -d "$2"
 }
@@ -95,11 +96,13 @@ Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admi
   `send 7` returns `429` with a `Retry-After` header and `{"error":"rate_limited","window":"day"}`. A `"window":"minute"`
   answer means wait a minute; it does not prove the day limit.
 - **Unreachable from outside.** From a device off the tailnet (phone on mobile data, tailscale off):
-  `curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' https://comms.ts.<domain>/healthz` and the same for
+  `curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' https://comms.private.<domain>/healthz` and the same for
+  `https://comms.ts.<domain>/healthz`,
   `https://commsgun.private.<domain>/healthz` and `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; none may
   return an HTTP status.
-- **Gatus.** `https://status.ts.<domain>`, group `edge`: `commsgun-api`, `commsgun-backlog`, `commsgun-ui` and `commsgun-ui-private` are green.
-- **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.ts.<domain>/v1/messages -d '{}'`
+- **Gatus.** `https://status.ts.<domain>`, group `edge`: `commsgun-api`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui` and
+  `commsgun-ui-private` are green.
+- **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.private.<domain>/v1/messages -d '{}'`
   (from the tailnet) prints `401`.
 
 ## 2. Add a subscriber app
@@ -130,7 +133,7 @@ Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admi
 5. Wait for CI on the PR to be green (CI does not check senders; the deploy does). Merge the PR, then run
    **Actions → deploy** (`tailnet`).
 6. Hand the subscriber its app id, the key (`sops decrypt --extract '["commsgun_app_key_<app>"]' secrets/edge.sops.yaml`)
-   and `https://comms.ts.<domain>/v1/messages`. Its tag needs a grant to `tag:edge:443`, as for `tag:xstockstrat`
+   and `https://comms.private.<domain>/v1/messages`. Its tag needs a grant to `tag:edge:443`, as for `tag:xstockstrat`
    (`docs/runbooks/onboard-service.md`).
 
 A step missed fails early, not at runtime: CI (`scripts/secrets-keys-test.py`) fails when the inventory names a key the
