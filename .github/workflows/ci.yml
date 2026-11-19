@@ -42,6 +42,8 @@ jobs:
         run: python3 scripts/secrets-keys-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
         run: python3 scripts/gatus-config-test.py
+      - name: Portal zones (*.public, *.private) - names, first tenants, tailnet DNS route
+        run: python3 scripts/portal-zones-test.py
       - name: Commsgun config, env files (read back by docker compose), assertions and compose services
         env:
           COMMSGUN_TEST_REQUIRE_DOCKER: "1"

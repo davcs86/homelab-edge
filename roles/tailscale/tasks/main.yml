@@ -83,7 +83,8 @@
   vars:
     _names: >-
       {{ edge_sites | map(attribute='hostname') | list
-         + [status_hostname, ntfy_hostname, webhooks_ingest_hostname, commsgun_enqueue_hostname, commsgun_ui_hostname] }}
+         + [status_hostname, ntfy_hostname, webhooks_ingest_hostname, commsgun_enqueue_hostname, commsgun_ui_hostname,
+            commsgun_ui_private_hostname] }}
     _records: >-
       {{ _names | map('community.general.dict_kv', 'name') | map('combine', {'type': 'A', 'value': edge_tailnet_ipv4}) | list
          + _names | map('community.general.dict_kv', 'name') | map('combine', {'type': 'AAAA', 'value': edge_tailnet_ipv6}) | list }}

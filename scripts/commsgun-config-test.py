@@ -140,6 +140,7 @@ class Inventory(unittest.TestCase):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
         self.assertIn("commsgun_enqueue_hostname", names)
         self.assertIn("commsgun_ui_hostname", names)
+        self.assertIn("commsgun_ui_private_hostname", names)
 
 
 class Config(unittest.TestCase):

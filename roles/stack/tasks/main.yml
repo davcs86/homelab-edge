@@ -308,10 +308,10 @@
 
 - name: Publicly trusted certificates for every site, with ACME diagnostics on failure
   vars:
-    # One SNI per certificate Caddy manages; status.* and webhooks.* are served by the *.{{ magicdns_base_domain }} wildcard.
+    # One SNI per certificate Caddy manages; the wildcards (*.{{ magicdns_base_domain }}, *.{{ public_zone }}, *.{{ private_zone }}) through one name each.
     _cert_check: >-
       {{ playbook_dir }}/../scripts/tls-check.py {{ headscale_hostname }} {{ edge_sites | map(attribute='hostname') | join(' ') }}
-      {{ status_hostname }} {{ webhooks_ingest_hostname }}
+      {{ status_hostname }} {{ webhooks_ingest_hostname }} {{ commsgun_ui_private_hostname }}
   block:
     - name: Probe the certificates
       ansible.builtin.script:
