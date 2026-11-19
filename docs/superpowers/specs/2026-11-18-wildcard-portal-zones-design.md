@@ -102,8 +102,9 @@ address, leak looked-up service names to public resolvers, break behind DNS-rebi
 - `commsgun.private.<domain>` is added to the generated headscale extra records (`roles/tailscale/tasks/main.yml`,
   `_names`). No public DNS record exists for the zone, so that is the only way the name resolves.
 - Proven by a throwaway test on 2026-11-18 (route + one record, since reverted): on the Debian staging VM
-  `getent hosts dns-test.private.<domain>` returned the edge's tailnet address. macOS, iOS and an off-tailnet lookup
-  were not reported; they are in the success condition below.
+  `getent hosts dns-test.private.<domain>` returned the edge's tailnet address, and the owner's Android phone
+  (Chrome) resolved the name and reached the edge (TLS error, as no site serves it yet). macOS and an off-tailnet
+  lookup were not reported; they are in the success condition below.
 - Nodes joined with `--accept-dns=false` (the edge itself, the Proxmox host) cannot resolve `.private` names, as with
   `*.ts` today.
 - `xstockstrat-staging.public.<domain>` **also** gets an extra record and keeps the tailnet bypass, exactly like the
