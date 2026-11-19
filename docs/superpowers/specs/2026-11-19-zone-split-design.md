@@ -10,8 +10,8 @@ DNS or token registration.
 | Zone | Holds | Named by | Reachable from |
 |---|---|---|---|
 | `*.ts.<domain>` | machines (tailnet nodes) | headscale (MagicDNS base domain) | tailnet |
-| `*.private.<domain>` | services on the edge | this repo | tailnet |
-| `*.public.<domain>` | services on the edge | this repo | internet |
+| `*.private.<domain>` | services, served by the edge's Caddy wherever they run | this repo | tailnet |
+| `*.public.<domain>` | services, served by the edge's Caddy wherever they run | this repo | internet |
 
 ## Decisions (owner, 2026-11-19)
 
@@ -73,7 +73,7 @@ Before PR 3 and PR 4: check that Gatus and ntfy answer correctly under a second 
 ## PR 1 — zone rules (design)
 
 - **`CLAUDE.md` § Rules, new rule 8:** one kind of name per zone — `*.ts` machines, `*.private` tailnet-only services
-  on the edge, `*.public` internet services; never a service under `*.ts` nor a machine under a portal zone.
+  and `*.public` internet services, wherever they run (the edge's Caddy serves the name); never a service under `*.ts` nor a machine under a portal zone.
 - **`docs/context-constitution.md`, `EDGE-14`:** the rule with its reason and evidence.
 - **CI guard in `scripts/portal-zones-test.py`:**
   - every inventory variable whose value is under `*.ts` is either a machine (`*_tailnet_host`) or one of the legacy

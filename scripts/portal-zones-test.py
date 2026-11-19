@@ -81,7 +81,7 @@ def under(value, zone):
 
 
 class ZoneRules(unittest.TestCase):
-    """*.ts holds machines, *.private tailnet-only services on the edge, *.public internet services."""
+    """*.ts holds machines; *.private tailnet-only and *.public internet services, served by the edge wherever they run."""
 
     def test_only_machines_and_the_legacy_services_live_under_the_machine_zone(self):
         services = {k for k, v in V.items() if under(v, V["magicdns_base_domain"]) and not k.endswith("_tailnet_host")}
