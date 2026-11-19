@@ -106,7 +106,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - Compose treats `\'` as an escape inside the single-quoted env files, so the deploy refuses a commsgun secret containing a quote,
     backslash or line break (`roles/stack/tasks/main.yml`, "Commsgun API environment").
   - **The dashboard's filters live in the URL query, and recipient addresses are in them.** Caddy's default JSON access log of a
-    `*.ts` site would carry them, so the dashboard host has its own access log (`commsgun-ui.access.log`) that drops the query, `Referer` and
+    `*.ts` site would carry them, so the dashboard host has its own access log (`commsgun-ui.access.log`; the whole `*.private` zone logs that way, in `private.access.log`) that drops the query, `Referer` and
     `Location`. The trap that remained: Caddy's `http.handlers.reverse_proxy` logger (not per host) and the `http.log.error.*` loggers
     print the full URI and `Referer` on an upstream error, bypassing the per-host filter. The default logger therefore excludes them and a
     second logger, `redacted_requests`, takes them with the query and `Referer` stripped. `caddy-routing-test.sh` checks the canary address does not appear.
@@ -131,7 +131,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. The fix lives in the `(acme)` snippet of `roles/stack/templates/Caddyfile.j2`.
 - **`caddy reload` keeps ACME jobs already in backoff** on the old settings; only a restart drops them. The deploy
-  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.ts`).
+  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.ts`, `*.private`).
 - **Tailscale's STUN server ignores generic STUN probes.** A request needs SOFTWARE `tailnode` and a FINGERPRINT
   attribute; XOR-MAPPED-ADDRESS may come back as IPv4-mapped IPv6. `scripts/stun-probe.py` builds the right one.
 - **The verify test node must run userspace (`TS_USERSPACE=true`).** Kernel mode in a container fails on iptables,
@@ -186,10 +186,13 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Gatus endpoints are named after the workload tag, staging included.** `xstockstrat-ui`, `xstockstrat-staging-agent`, … in group
   `home`, matching the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
   alert like prod, so the staging VM must be registered before the deploy that adds them.
-- **Linux nodes ignore extra records outside a DNS route.** systemd-resolved only sends routed zones to the tailnet resolver;
-  Apple and Android clients send everything. Measured 2026-11-18 on the staging VM: `xstockstrat.<domain>` returned the reserved
+- **Linux nodes ignore extra records outside a DNS route.** systemd-resolved only sends routed zones to the tailnet resolver.
+  Measured 2026-11-18 on the staging VM: `xstockstrat.<domain>` returned the reserved
   IPv4, while a name under `private.<domain>` returned the edge's tailnet address once the zone had a route. `tailscale dns query`
   bypasses the OS resolver and hides this; test with `getent hosts`.
+- **A per-host Caddy logger matches the exact lowercase name only.** The host matcher is case-insensitive, so `Commsgun.…` is
+  proxied but logged by the site's logger. The `*.private` site therefore redacts as a whole (logger `private_zone`); the `*.ts`
+  site still has this gap for the dashboard's old name, as do port 80 redirects, which log the full URI on stderr.
 - **An app with a single origin serves one name at a time.** The commsgun dashboard answers 400 on every path except `/healthz`
   when the host is not `ORIGIN`; xstockstrat binds its OAuth resource to `APP_URL`. A second route proves routing and health only.
 - **A route name cannot equal a node's MagicDNS name.** `xstockstrat-staging.ts.<domain>` resolves to the staging VM;

@@ -181,6 +181,10 @@ expect "private dashboard gets Caddy's X-Forwarded-*, not the client's" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$v/echo-headers")"
 expect "private dashboard upstream keeps the query" "200 commsgun-ui GET /messages?recipient=canary@example.test" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$v/messages?recipient=canary@example.test")"
+# Caddy matches hosts case-insensitively but picks a per-host logger by exact name: the whole zone must redact.
+mixed="C${cgpriv_host#c}"
+expect "private dashboard, mixed-case host"   "200 commsgun-ui GET /messages?recipient=canary@example.test" \
+  "$(req "$mixed" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "https://$mixed/messages?recipient=canary@example.test")"
 expect "other *.ts name, with a query"         "200 ingest GET /hooks?keep=visible" "$(req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/hooks?keep=visible")"
 
 # Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
@@ -289,7 +293,9 @@ expect "dashboard upstream down"               "502" "$(req "$cgui_host" --inter
 wait_for_line "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" access_logs || true
 expect "private dashboard upstream down"       "502" "$(req "$cgpriv_host" --interface "$tailnet_ip" -H "$canary_hdr" "$v/upstream-down?recipient=canary@example.test")"
 wait_for_line "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down\"" access_logs || true
-wait_for_line 'http.log.error.commsgun_ui_private.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
+expect "private dashboard upstream down, mixed-case host" "502" "$(req "$mixed" --interface "$tailnet_ip" -H "$canary_hdr" "https://$mixed/upstream-down?recipient=canary@example.test")"
+wait_for_line "\"host\":\"$mixed\",\"uri\":\"/upstream-down" access_logs || true
+wait_for_line 'http.log.error.private_zone.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
 wait_for_line 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
 if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
   echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
@@ -298,7 +304,7 @@ fi
 if read_log '*.access.log'; then
   if ! grep -q "\"host\":\"$cgui_host\",\"uri\":\"/upstream-down\"" "$work/log"; then
     echo "FAIL  the dashboard's 502 request was not logged at all"; fail=1
-  elif ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/messages\"" "$work/log" || ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down\"" "$work/log"; then
+  elif ! grep -q "\"host\":\"$mixed\",\"uri\":\"/messages" "$work/log" || ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/messages" "$work/log" || ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down" "$work/log"; then
     echo "FAIL  the private dashboard name's requests were not logged"; fail=1
   elif grep -q canary "$work/log"; then
     echo "FAIL  access log leaks the dashboard's query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
@@ -318,7 +324,7 @@ if grep -q canary "$work/caddy.stderr"; then
 else
   echo "PASS  Caddy's stderr carries no dashboard query or Referer"
 fi
-for want in 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' 'http.log.error.commsgun_ui_private.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
+for want in 'http.log.error.commsgun_ui.*"uri":"/upstream-down"' 'http.log.error.private_zone.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgui_host\",\"uri\":\"/reset\"" \
             "http.handlers.reverse_proxy.*\"host\":\"$ingest_host\",\"uri\":\"/reset\""; do
   if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
 done

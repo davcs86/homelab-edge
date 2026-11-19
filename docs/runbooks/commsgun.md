@@ -2,7 +2,7 @@
 
 Tailnet services POST a message to `commsgun`; it queues it durably, sends email through Resend within the app and
 provider limits, tracks bounces and shows the outcome on a dashboard. SMS is accepted and held: no provider exists yet.
-Two containers on the edge, behind Caddy on two tailnet-only names (`*.ts.<domain>`, no ACME work needed):
+Two containers on the edge, behind Caddy on tailnet-only names (no ACME work needed):
 
 | Name | Container | Host port | Use |
 |---|---|---|---|
@@ -225,6 +225,7 @@ The containers log message ids only (no addresses, subjects or bodies):
 ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs --since 1h commsgun-api commsgun-ui'
 ```
 
-The dashboard host has its own Caddy access log, `/var/log/caddy/commsgun-ui.access.log` on the edge, with query strings,
+The dashboard host has its own Caddy access log, `/var/log/caddy/commsgun-ui.access.log` on the edge
+(`private.access.log` for its `*.private` name), with query strings,
 `Referer` and redirect `Location` removed (the dashboard's filters carry recipient addresses). The enqueue name logs to the
 shared tailnet access log like the other `*.ts` names.

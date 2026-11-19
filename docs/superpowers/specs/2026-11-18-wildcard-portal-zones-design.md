@@ -1,6 +1,6 @@
 # Wildcard portal zones (`*.public`, `*.private`) — design
 
-Status: awaiting owner approval. Phase 1 only; phase 2 (migration) is listed, not designed.
+Status: approved by the owner 2026-11-19. Phase 1 only; phase 2 (migration) is listed, not designed.
 
 ## Intent
 

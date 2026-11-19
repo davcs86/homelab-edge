@@ -86,5 +86,6 @@ in the rule until the next deploy.
 |---|---|---|
 | `xstockstrat-staging.ts.<domain>` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
 | `xstockstrat-staging.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+| `xstockstrat-staging.public.<domain>` | the same app under the `*.public` wildcard (`staging_portal_hostname`) | routing and health only, until `APP_URL` is moved to it |
 
 The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the public name.
