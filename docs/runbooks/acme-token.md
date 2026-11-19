@@ -8,7 +8,8 @@ changing the GitHub secret alone changes nothing on the edge.
 
 Each public hostname with its own certificate has its own label in `acme.natanddavehouse.com` (the `import acme
 <label>.{{ acme_zone }}` line of its site in the Caddyfile), and the token may write only the labels it has a policy
-for. Add the policy to the **existing** token: it is already on the edge, so no secret changes. In the deSEC web UI
+for. A name under `*.public.<domain>` or `*.private.<domain>` needs nothing here: the labels `public` and `private`
+already cover every name in those zones. Add the policy to the **existing** token: it is already on the edge, so no secret changes. In the deSEC web UI
 create a temporary token with *Can manage tokens* (no subnet lock needed: it is the one your machine authenticates
 with), then (`$T` = that temporary token, `$LABEL` = the new label, e.g. `webhooks-mcp`):
 
@@ -31,7 +32,7 @@ and the roles after `stack` do not run. Creating a new token instead does not he
 
 ## Rotate
 
-The token lives in deSEC, can write only `TXT` at `hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts` in `acme.natanddavehouse.com`, and is
+The token lives in deSEC, can write only `TXT` at `hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts`, `public`, `private` in `acme.natanddavehouse.com`, and is
 accepted only from the droplet's **egress** addresses. These are not the reserved IP: DigitalOcean sends outbound
 traffic from the droplet's own public IPv4 and IPv6 (the droplet page in the DO console, or `networks` in the DO API;
 not the reserved IP), and desec.io has an AAAA record, so Caddy reaches it over IPv6. Both must be allowed. In the deSEC web UI
@@ -46,7 +47,7 @@ ID=$(echo "$NEW" | jq -r .id); echo "$NEW" | jq -r .token   # -> GitHub secret D
 P="$API/$ID/policies/rrsets/"
 curl -fsS -X POST $P -H "Authorization: Token $T" -H 'Content-Type: application/json' \
   -d '{"domain":null,"subname":null,"type":null,"perm_write":false}'
-for s in hs xstockstrat xstockstrat-staging webhooks-mcp ts; do
+for s in hs xstockstrat xstockstrat-staging webhooks-mcp ts public private; do
   curl -fsS -X POST $P -H "Authorization: Token $T" -H 'Content-Type: application/json' \
     -d "{\"domain\":\"acme.natanddavehouse.com\",\"subname\":\"$s\",\"type\":\"TXT\",\"perm_write\":true}"
 done

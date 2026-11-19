@@ -5,6 +5,9 @@ headscale_hostname: "hs.{{ domain }}"
 public_app_hostname: "xstockstrat.{{ domain }}"
 magicdns_base_domain: "ts.{{ domain }}"
 acme_zone: "acme.{{ domain }}"          # delegated to deSEC; holds only ACME TXT records
+# One wildcard certificate each (ACME labels `public`, `private`). private_zone has no public DNS records.
+public_zone: "public.{{ domain }}"
+private_zone: "private.{{ domain }}"
 acme_email: davcs86@gmail.com
 status_hostname: "status.{{ magicdns_base_domain }}"
 ntfy_hostname: "ntfy.{{ magicdns_base_domain }}"
@@ -43,6 +46,7 @@ app_tailnet_host: "xstockstrat.{{ magicdns_base_domain }}"
 staging_tailnet_host: "xstockstrat-staging.{{ magicdns_base_domain }}"
 # Public name of the staging app; differs from the node's MagicDNS name (xstockstrat-staging.ts.<domain>).
 staging_public_hostname: "xstockstrat-staging.{{ domain }}"
+staging_portal_hostname: "xstockstrat-staging.{{ public_zone }}"
 staging_edge_port: 8443                  # tailnet-only listener for the staging webhooks ingest; not in the DO firewall
 staging_vm_ips: []                       # set at deploy from headscale; Caddy keeps these tailnet addresses off every non-staging site
 pve_tailnet_host: "pve.{{ magicdns_base_domain }}"
@@ -82,6 +86,7 @@ webhooks_ingest_port: 9101
 # ---------- commsgun (email/SMS delivery hub) ----------
 commsgun_enqueue_hostname: "comms.{{ magicdns_base_domain }}"
 commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"
+commsgun_ui_private_hostname: "commsgun.{{ private_zone }}"   # answers only /healthz until ORIGIN names it
 commsgun_enqueue_port: 9200
 commsgun_ui_port: 9202
 # `key` names the SOPS key holding the app's bearer key; every email app needs an entry in the SOPS map commsgun_senders.
@@ -106,12 +111,14 @@ commsgun_apps:
       email: {per_minute: 2, per_day: 5}
       sms: {per_minute: 5, per_day: 50}
 
-# Public hostnames served on 443, one certificate each. `name` is the ACME label (CNAME target <name>.<acme_zone>), the
-# access-log name and the rate-limit zone prefix. kind app: OAuth routes + tailnet bypass; bearer_mcp: one path behind a static key.
+# Public hostnames on 443. `name`: rate-limit zone prefix and, without `zone`, the ACME label and access-log name (own certificate);
+# `zone: public`: served under the *.public wildcard. kind app: OAuth routes + tailnet bypass; bearer_mcp: one path behind a static key.
 edge_sites:
   - {name: xstockstrat, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}"}
   - {name: xstockstrat-staging, kind: app, hostname: "{{ staging_public_hostname }}", upstream: "{{ staging_tailnet_host }}",
      ui_public: true, isolate_staging_vm: false}
+  - {name: xstockstrat-staging-portal, kind: app, hostname: "{{ staging_portal_hostname }}", upstream: "{{ staging_tailnet_host }}",
+     ui_public: true, isolate_staging_vm: false, zone: public}
   - {name: webhooks-mcp, kind: bearer_mcp, hostname: "{{ webhooks_mcp_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}", limits: webhooks_mcp}
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s

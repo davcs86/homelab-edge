@@ -35,7 +35,7 @@
     // Edge -> backup host: rsync over SSH, forced to rrsync on the far side.
     {"src": ["tag:edge"], "dst": ["tag:backup"], "ip": ["tcp:22"]},
 
-    // App -> edge: the UI calls its own public hostname (split-horizon) for /accounts probes.
+    // App -> edge: tailnet-only names on 443. The UI's calls to its own public hostname do not use this: Linux nodes resolve it publicly.
     {"src": ["tag:xstockstrat"], "dst": ["tag:edge"], "ip": ["tcp:443"]},
     // Postgres (5432) and PgBouncer (6432): the tailnet cannot tell prod from staging databases, so isolation
     // is in Postgres and PgBouncer (docs/runbooks/onboard-service.md).

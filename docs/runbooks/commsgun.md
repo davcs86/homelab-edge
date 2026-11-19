@@ -2,12 +2,17 @@
 
 Tailnet services POST a message to `commsgun`; it queues it durably, sends email through Resend within the app and
 provider limits, tracks bounces and shows the outcome on a dashboard. SMS is accepted and held: no provider exists yet.
-Two containers on the edge, behind Caddy on two tailnet-only names (`*.ts.<domain>`, no ACME work needed):
+Two containers on the edge, behind Caddy on tailnet-only names (no ACME work needed):
 
 | Name | Container | Host port | Use |
 |---|---|---|---|
 | `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz`, `/healthz/backlog` |
 | `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard; `/healthz` for Gatus |
+| `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's second name; only `/healthz` answers until `ORIGIN` names it |
+
+The dashboard answers `400 Bad origin` on every path except `/healthz` when the request's host is not its `ORIGIN`, so it is
+usable on one name at a time. Moving it to the private name is one change: `ORIGIN` in `roles/stack/tasks/main.yml`
+("Commsgun dashboard environment"); after that the `*.ts` name is the one that answers only `/healthz`.
 
 The admin port 9201 is never published. The service's own docs: `README.md` and `docs/superpowers/specs/` in
 `davcs86/commsgun`. Traps: `docs/decisions.md` § Known traps. Secret shapes: `secrets/README.md`.
@@ -220,6 +225,7 @@ The containers log message ids only (no addresses, subjects or bodies):
 ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs --since 1h commsgun-api commsgun-ui'
 ```
 
-The dashboard host has its own Caddy access log, `/var/log/caddy/commsgun-ui.access.log` on the edge, with query strings,
+The dashboard host has its own Caddy access log, `/var/log/caddy/commsgun-ui.access.log` on the edge
+(`private.access.log` for its `*.private` name), with query strings,
 `Referer` and redirect `Location` removed (the dashboard's filters carry recipient addresses). The enqueue name logs to the
 shared tailnet access log like the other `*.ts` names.

@@ -120,6 +120,19 @@ class Gatus(unittest.TestCase):
             self.assertEqual(e["alerts"], [{"type": "ntfy"}])
             self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
+    def test_the_private_dashboard_name_is_probed_over_the_tailnet(self):
+        e = ENDPOINTS["commsgun-ui-private"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['commsgun_ui_private_hostname']}/healthz", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+
+    def test_the_staging_portal_name_is_probed_from_the_internet_resolver(self):
+        e = ENDPOINTS["xstockstrat-staging-portal-ui-public"]
+        self.assertEqual((e["group"], e["url"]), ("public", f"https://{V['staging_portal_hostname']}/trader/api/health"))
+        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
+        self.assertNotIn("ignore-redirect", e["client"])
+        self.assertEqual(e["conditions"], ["[STATUS] == 200", "[BODY].status == ok", "[CERTIFICATE_EXPIRATION] > 336h"])
+
     def test_every_polled_endpoint_alerts_through_ntfy(self):
         for name, e in ENDPOINTS.items():
             self.assertEqual(e["alerts"], [{"type": "ntfy"}], name)
