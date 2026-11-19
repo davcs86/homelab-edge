@@ -127,6 +127,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   `webhooks-mcp` this way. Add the policy to the existing token (`docs/runbooks/acme-token.md` § Add a name).
 - **The deploy's certificate-failure evidence printed no Caddy lines** through a filtered `grep`, with and without
   `2>&1`; the rescue block now prints Caddy's state, its loaded TLS names and its last log lines unfiltered.
+- **The first deploy of a new certificate name can fail at the certificate check; re-run it.** Seen 2026-11-19 with `*.public` and
+  `*.private`: the deploy starts Caddy three times within ~25 s (stack start, Caddyfile restart, "restart issuance"), Let's Encrypt
+  then answered `Incorrect TXT record … (and 1 more)` and Caddy's own retries kept failing for two hours. The challenge records
+  were empty by then, and a second deploy (one restart, a fresh attempt) issued both. Cause not established: the diagnostics'
+  `tail -n 40` was filled by unrelated 502 lines.
 - **DNS-01 needs `propagation_delay`.** deSEC's anycast nodes converge after Caddy's own check passes; Let's
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. The fix lives in the `(acme)` snippet of `roles/stack/templates/Caddyfile.j2`.
