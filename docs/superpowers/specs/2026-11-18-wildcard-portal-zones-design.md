@@ -42,9 +42,14 @@ Cloudflare `_acme-challenge.<label>` CNAME, and a deSEC TXT write policy on the 
 - The commsgun dashboard's query strings carry recipient addresses; every route to it must use the redacting logger
   (`Caddyfile.j2`, `log commsgun_ui`).
 - The dashboard's `ORIGIN` and staging's `APP_URL` each hold exactly one URL (EDGE-11; staging's is set in the app's
-  own deploy). Login and OAuth can therefore be fully correct on only one name at a time.
-- The xstockstrat UI calls its own public hostname from its VM and relies on the split-horizon answer
-  (`policy/policy.hujson`, "App -> edge").
+  own deploy). The dashboard answers `400 Bad origin` on every path except `/healthz` when the host differs from
+  `ORIGIN` (`davcs86/commsgun`, `ui/src/hooks.server.ts`); staging's OAuth resource is bound to `APP_URL`. Each app is
+  therefore usable on only one name at a time.
+- A headscale extra record outside a DNS route is not used by Linux nodes (systemd-resolved): they ask their normal
+  resolver. Measured 2026-11-18 on the staging VM: `xstockstrat.<domain>` returned the reserved IPv4, not the edge's
+  tailnet address. Apple clients do use such records. So `policy/policy.hujson`'s "App -> edge … (split-horizon)"
+  comment does not describe what the app VMs do today: their self-calls arrive over the internet.
+- A headscale config change restarts headscale (existing handler).
 
 ## Approaches
 
@@ -88,12 +93,23 @@ The owner picked A. Per-host certificates isolate little here: one Caddy process
 
 ### Resolution inside the tailnet
 
+Owner's choice (over a public wildcard record pointing at the edge's tailnet address, which would publish that
+address, leak looked-up service names to public resolvers, break behind DNS-rebinding filters and go stale on a rebuild):
+
+- headscale gets a DNS route for `{{ private_zone }}` (`dns.nameservers.split`), so every client OS sends the zone to
+  the Tailscale resolver. Upstream for names with no record: `1.1.1.1`. *My call* — the resolver Gatus already uses
+  for public probes; the owner has not named one.
 - `commsgun.private.<domain>` is added to the generated headscale extra records (`roles/tailscale/tasks/main.yml`,
-  `_names`). That is the only way the name resolves anywhere.
+  `_names`). No public DNS record exists for the zone, so that is the only way the name resolves.
+- Proven by a throwaway test on 2026-11-18 (route + one record, since reverted): on the Debian staging VM
+  `getent hosts dns-test.private.<domain>` returned the edge's tailnet address. macOS, iOS and an off-tailnet lookup
+  were not reported; they are in the success condition below.
+- Nodes joined with `--accept-dns=false` (the edge itself, the Proxmox host) cannot resolve `.private` names, as with
+  `*.ts` today.
 - `xstockstrat-staging.public.<domain>` **also** gets an extra record and keeps the tailnet bypass, exactly like the
-  existing staging name. *My call:* phase 1 changes only how the name is registered and certified, not what tailnet
-  clients see; the app's self-calls depend on this. "A `.public` name always shows the internet view" belongs with
-  dual exposure in phase 2.
+  existing staging name. *My call:* parity — phase 1 changes only how the name is registered and certified, not what
+  any client sees (Apple clients get the full app, Linux nodes the internet view, as today). "A `.public` name
+  always shows the internet view" belongs with dual exposure in phase 2.
 
 ### Checks wired in
 
@@ -107,7 +123,8 @@ The owner picked A. Per-host certificates isolate little here: one Caddy process
 ### Testing in two steps per tenant
 
 **Step 1 — parallel name (this change).** Proves DNS, certificate, routing, rate limits and health on the new names.
-Expected and documented: dashboard login and Claude.ai's MCP/OAuth flow still work only on the old names.
+Expected and documented: on the new names only the health routes answer usefully — the dashboard returns 400 on
+every other path, and Claude.ai's MCP/OAuth flow works only on the old staging name.
 
 **Step 2 — cutover (separate change per tenant, on the owner's go).** Flip the one variable; the old route stays
 served as rollback, and after the flip it is the old name that loses login/OAuth.
@@ -123,7 +140,8 @@ Old DNS records, certificates and token policies are removed only in phase 2.
 1. `ci` green, including the extended `caddy-routing-test.sh`, `gatus-config-test.py`, `commsgun-config-test.py`.
 2. `deploy` (`tailnet`) green: "Every site presents a publicly trusted certificate" lists both new names.
 3. `verify` green; both new Gatus endpoints healthy.
-4. From a tailnet device: `https://commsgun.private.<domain>/healthz` → 200. From the internet: the name does not resolve.
+4. `https://commsgun.private.<domain>/healthz` → 200 from a Debian tailnet node, the owner's Mac and phone (OS
+   resolver, not `tailscale dns query`). From a device off the tailnet: the name does not resolve.
 5. From the internet: `https://xstockstrat-staging.public.<domain>/trader/api/health` → 200;
    `https://nonexistent.public.<domain>/` → 404 with a valid certificate.
 6. Every pre-existing Gatus endpoint still healthy.
@@ -132,7 +150,8 @@ Old DNS records, certificates and token policies are removed only in phase 2.
 
 `README.md` (DNS table, § Rebuild), `docs/runbooks/onboard-service.md` § 4 (the zero-registration path),
 `docs/runbooks/acme-token.md` (label list, rotate loop), `docs/runbooks/commsgun.md` (second name, login caveat),
-`docs/decisions.md` (the decision; the one-URL-per-app trap), `docs/context-constitution.md` (EDGE-07 gains the zones).
+`docs/decisions.md` (the decision; the one-URL-per-app trap), `docs/context-constitution.md` (EDGE-07 gains the zones),
+`docs/context-constitution-findings.md` (Linux nodes ignore extra records outside a DNS route; the policy comment).
 
 ## Left to the builder
 
@@ -145,5 +164,6 @@ Old DNS records, certificates and token policies are removed only in phase 2.
 ## Phase 2 (listed, not designed)
 
 Move prod `xstockstrat`, `webhooks-mcp` (cross-repo contracts C1–C9), `status`, `ntfy`, `webhooks`, `comms`; retire
-the old names, their DNS records and token policies; optionally dual exposure, where the `.private` name carries the
+the old names, their DNS records and token policies; decide whether app VMs' self-calls should stay on the internet
+path (the Linux finding above); optionally dual exposure, where the `.private` name carries the
 full app and the `.public` name only the internet route set, replacing same-name split-horizon.
