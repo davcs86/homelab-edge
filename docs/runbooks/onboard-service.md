@@ -44,7 +44,9 @@ The DB server is shared, so the tailnet cannot separate databases. `playbooks/db
 
 ## 4. Edge exposure (only if it needs a public or tailnet name)
 
-**New portals go under the two wildcard zones; nothing is registered in Cloudflare or deSEC for them.**
+**New portals go under the two wildcard zones; nothing is registered in Cloudflare or deSEC for them.** `*.ts` is for
+machines only: a new service is never added there, and a machine never gets a `*.private` or `*.public` name
+(`CLAUDE.md` rule 8; CI enforces it).
 
 - `<service>.public.<domain>` (internet): an `edge_sites` entry with `zone: public`. Its Caddy handle inside the `*.public` site,
   `tls-check` and the split-horizon record are generated from it; add a Gatus probe. Any other name under the zone answers 404.
