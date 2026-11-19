@@ -259,11 +259,8 @@
 	}
 }
 
-{% for site in edge_sites %}
-{% if site.kind == 'app' %}
-{{ site.hostname }} {
-	import acme {{ site.name }}.{{ acme_zone }}
-	import access_log {{ site.name }}
+{# Site bodies by kind: everything after a site's `import acme` and `import access_log`. #}
+{% macro app_body(site) %}
 {% if site.isolate_staging_vm | default(true) %}
 	import deny_staging_vm
 {% endif %}
@@ -303,12 +300,8 @@
 		}
 	}
 {% endif %}
-}
-
-{% elif site.kind == 'bearer_mcp' %}
-{{ site.hostname }} {
-	import acme {{ site.name }}.{{ acme_zone }}
-	import access_log {{ site.name }}
+{% endmacro %}
+{% macro bearer_mcp_body(site) %}
 	import deny_staging_vm
 
 	# Only {{ site.path }} is public; any other listener on the same container is tailnet-only.
@@ -333,9 +326,13 @@
 	handle {
 		respond "Not Found" 404
 	}
-}
+{% endmacro %}
+{% for site in edge_sites if site.zone is not defined %}
+{{ site.hostname }} {
+	import acme {{ site.name }}.{{ acme_zone }}
+	import access_log {{ site.name }}
+{{ app_body(site) if site.kind == 'app' else bearer_mcp_body(site) }}}
 
-{% endif %}
 {% endfor %}
 *.{{ magicdns_base_domain }} {
 	import acme ts.{{ acme_zone }}
