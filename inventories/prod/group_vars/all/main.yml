@@ -9,7 +9,8 @@ acme_zone: "acme.{{ domain }}"          # delegated to deSEC; holds only ACME TX
 public_zone: "public.{{ domain }}"
 private_zone: "private.{{ domain }}"
 acme_email: davcs86@gmail.com
-status_hostname: "status.{{ magicdns_base_domain }}"
+status_hostname: "status.{{ magicdns_base_domain }}"   # legacy name; the heartbeat pushers on the home hosts still use it
+status_private_hostname: "status.{{ private_zone }}"
 ntfy_hostname: "ntfy.{{ magicdns_base_domain }}"
 
 # ---------- DigitalOcean ----------
