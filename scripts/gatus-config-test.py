@@ -88,11 +88,7 @@ class Gatus(unittest.TestCase):
             self.assertNotIn("ignore-redirect", e["client"], name)
             self.assertEqual(e["conditions"], ["[STATUS] == 200", "[BODY].status == ok", "[CERTIFICATE_EXPIRATION] > 336h"], name)
 
-    def test_webhooks_mcp_is_probed_publicly_for_401_and_its_ingest_over_the_tailnet(self):
-        mcp = ENDPOINTS["webhooks-mcp-requires-auth"]
-        self.assertEqual((mcp["group"], mcp["method"], mcp["url"]), ("public", "POST", f"https://{V['webhooks_mcp_hostname']}/mcp"))
-        self.assertEqual(mcp["client"]["dns-resolver"], "tcp://1.1.1.1:53")
-        self.assertEqual(mcp["conditions"], ["[STATUS] == 401", "[CERTIFICATE_EXPIRATION] > 336h"])
+    def test_the_legacy_ingest_name_keeps_the_tailnet_wildcard_expiry_check(self):
         ing = ENDPOINTS["webhooks-ingest"]
         self.assertEqual((ing["group"], ing["url"]), ("edge", f"https://{V['webhooks_ingest_hostname']}/healthz"))
         self.assertEqual(ing["client"]["dns-resolver"], "udp://100.100.100.100:53")
@@ -110,15 +106,27 @@ class Gatus(unittest.TestCase):
                   and "[CERTIFICATE_EXPIRATION] > 336h" in e["conditions"]]
         self.assertTrue(probed)
 
-    def test_commsgun_is_probed_over_the_tailnet(self):
-        for name, url in (("commsgun-api", f"https://{V['commsgun_enqueue_hostname']}/healthz"),
-                          ("commsgun-backlog", f"https://{V['commsgun_enqueue_hostname']}/healthz/backlog"),
-                          ("commsgun-ui", f"https://{V['commsgun_ui_hostname']}/healthz")):
-            e = ENDPOINTS[name]
-            self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", url, "1m"))
-            self.assertEqual(e["conditions"], ["[STATUS] == 200"])
-            self.assertEqual(e["alerts"], [{"type": "ntfy"}])
-            self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+    def test_the_commsgun_backlog_is_probed_on_the_private_name(self):
+        e = ENDPOINTS["commsgun-backlog"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['commsgun_enqueue_private_hostname']}/healthz/backlog", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+
+    # Probes still aimed at a *.ts service name. This list may only shrink; it empties when the *.ts wildcard is retired.
+    LEGACY_TS_PROBES = {"webhooks-ingest", "webhooks-ingest-staging"}
+
+    def test_no_probe_targets_a_ts_service_name_except_the_listed_ones(self):
+        machines = {v for k, v in V.items() if k.endswith("_tailnet_host")}
+        on_ts = set()
+        for name, e in ENDPOINTS.items():
+            host = e["url"].split("//", 1)[1].split("/")[0].split(":")[0]
+            if host.endswith("." + V["magicdns_base_domain"]) and host not in machines:
+                on_ts.add(name)
+        self.assertEqual(on_ts, self.LEGACY_TS_PROBES)
+
+    def test_services_with_a_portal_zone_probe_are_not_probed_twice(self):
+        for old in ("commsgun-api", "commsgun-ui", "webhooks-mcp-requires-auth"):
+            self.assertFalse(old in ENDPOINTS, old)
 
     def test_the_private_dashboard_name_is_probed_over_the_tailnet(self):
         e = ENDPOINTS["commsgun-ui-private"]

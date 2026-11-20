@@ -65,17 +65,6 @@ endpoints:
       - "[STATUS] == 401"
     alerts: [{type: ntfy}]
 
-  - name: webhooks-mcp-requires-auth
-    group: public
-    url: https://{{ webhooks_mcp_hostname }}/mcp
-    method: POST
-    interval: 2m
-    <<: *public
-    conditions:
-      - "[STATUS] == 401"
-      - "[CERTIFICATE_EXPIRATION] > 336h"
-    alerts: [{type: ntfy}]
-
   - name: webhooks-mcp-portal-requires-auth
     group: public
     url: https://{{ webhooks_mcp_public_hostname }}/mcp
@@ -114,27 +103,9 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
-  - name: commsgun-api
-    group: edge
-    url: https://{{ commsgun_enqueue_hostname }}/healthz
-    interval: 1m
-    <<: *tailnet
-    conditions:
-      - "[STATUS] == 200"
-    alerts: [{type: ntfy}]
-
   - name: commsgun-backlog
     group: edge
-    url: https://{{ commsgun_enqueue_hostname }}/healthz/backlog
-    interval: 1m
-    <<: *tailnet
-    conditions:
-      - "[STATUS] == 200"
-    alerts: [{type: ntfy}]
-
-  - name: commsgun-ui
-    group: edge
-    url: https://{{ commsgun_ui_hostname }}/healthz
+    url: https://{{ commsgun_enqueue_private_hostname }}/healthz/backlog
     interval: 1m
     <<: *tailnet
     conditions:
