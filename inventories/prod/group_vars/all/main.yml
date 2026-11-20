@@ -79,7 +79,6 @@ body_limits:
 # ---------- Monitoring ----------
 ntfy_alert_topic: homelab-alerts
 gatus_port: 8081
-webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"                 # former name; served until the MCP clients are re-pointed
 webhooks_mcp_public_hostname: "webhooks-mcp.{{ public_zone }}"
 webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"   # legacy name; served until URLs minted under it have expired
 webhooks_ingest_private_hostname: "webhooks.{{ private_zone }}"   # the name in newly minted webhook URLs
@@ -115,15 +114,13 @@ commsgun_apps:
       email: {per_minute: 2, per_day: 5}
       sms: {per_minute: 5, per_day: 50}
 
-# Public hostnames on 443. `name`: rate-limit zone prefix and, without `zone`, the ACME label and access-log name (own certificate);
-# `zone: public`: served under the *.public wildcard, one view for every client. kind app: OAuth routes (+ the whole UI with `ui_public`);
-# bearer_mcp: one path behind a static key.
+# Public hostnames on 443, all under the *.public wildcard certificate, one view for every client. `name`: rate-limit zone prefix.
+# kind app: MCP and OAuth routes (+ the whole UI with `ui_public`); bearer_mcp: one path behind a static key.
 edge_sites:
   - {name: xstockstrat-portal, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}",
      ui_public: true, zone: public}
   - {name: xstockstrat-staging-portal, kind: app, hostname: "{{ staging_public_hostname }}", upstream: "{{ staging_tailnet_host }}",
      ui_public: true, zone: public}
-  - {name: webhooks-mcp, kind: bearer_mcp, hostname: "{{ webhooks_mcp_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}", limits: webhooks_mcp}
   - {name: webhooks-mcp-portal, kind: bearer_mcp, hostname: "{{ webhooks_mcp_public_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}",
      limits: webhooks_mcp, zone: public}
 # Gatus raises an alert when a pusher is silent for longer than its interval.

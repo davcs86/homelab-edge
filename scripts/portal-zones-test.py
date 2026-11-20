@@ -76,13 +76,17 @@ class PortalZones(unittest.TestCase):
         self.assertNotIn("@tailnet remote_ip", template)
         self.assertNotIn("isolate_staging_vm", template)
 
-    def test_the_webhooks_mcp_is_served_under_the_public_zone_beside_its_old_name(self):
+    def test_the_webhooks_mcp_is_served_only_under_the_public_zone(self):
         sites = {s["name"]: s for s in resolved_sites()}
-        old, new = sites["webhooks-mcp"], sites["webhooks-mcp-portal"]
-        self.assertEqual((new["zone"], new["hostname"]), ("public", V["webhooks_mcp_public_hostname"]))
-        self.assertNotIn("zone", old)
-        for k in ("kind", "path", "port", "limits"):
-            self.assertEqual(new[k], old[k], k)
+        self.assertNotIn("webhooks-mcp", sites)
+        self.assertNotIn("webhooks_mcp_hostname", V)
+        new = sites["webhooks-mcp-portal"]
+        self.assertEqual((new["kind"], new["zone"], new["hostname"], new["path"]), ("bearer_mcp", "public", V["webhooks_mcp_public_hostname"], "/mcp"))
+
+    def test_every_public_site_is_served_under_the_public_wildcard(self):
+        self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone") != "public"], [])
+        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
+        self.assertNotIn("site.zone is not defined", template)
 
     def test_the_apps_former_names_are_not_served(self):
         hostnames = [s["hostname"] for s in resolved_sites()]
@@ -94,7 +98,7 @@ class PortalZones(unittest.TestCase):
 
     def test_public_zone_names_get_no_split_horizon_record(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
-        self.assertIn("edge_sites | rejectattr('zone', 'defined') | map(attribute='hostname')", names)
+        self.assertNotIn("edge_sites", names)
 
     def test_existing_names_are_unchanged(self):
         d = V["domain"]
