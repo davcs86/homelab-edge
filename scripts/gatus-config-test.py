@@ -149,6 +149,15 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
         self.assertEqual(e["conditions"], ["[STATUS] == 401"])
 
+    def test_an_unknown_public_zone_name_is_probed_for_404(self):
+        e = ENDPOINTS["public-default-404"]
+        self.assertEqual((e["group"], e["url"]), ("public", f"https://unknown.{V['public_zone']}/"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 404"])
+
+    def test_production_is_probed_on_its_public_zone_name(self):
+        for name in ("xstockstrat-ui-public", "mcp-oauth-metadata", "mcp-requires-auth"):
+            self.assertTrue(ENDPOINTS[name]["url"].startswith(f"https://xstockstrat.public.{V['domain']}/"), name)
+
     def test_the_private_ingest_name_is_probed_on_443_only(self):
         e = ENDPOINTS["webhooks-ingest-private"]
         self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['webhooks_ingest_private_hostname']}/healthz", "1m"))

@@ -85,7 +85,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   that site must not copy the handle without it.
   - Only `/mcp` of the public host is proxied, to 9100 (`webhooks_mcp_public_hostname`, `webhooks-mcp.public.<domain>`; the former
     `webhooks-mcp.<domain>` stays served, on its own certificate, until the MCP clients are re-pointed), and it is protected by a static bearer key
-    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): as on the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
     The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
@@ -110,11 +110,13 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The status page is `status.private.<domain>`; `status.ts.<domain>` stays for the heartbeat pushers.** Gatus answers its page,
   API and `external` pushes identically under any hostname (checked against v5.37.0), so both names are served. The pushers on
   Proxmox and the DB host were installed by hand with the old name and pin the edge's address; they move when re-installed.
-- **Staging is `xstockstrat-staging.public.<domain>`, one view for every client.** No tailnet bypass, no exemption for the staging VM
+- **The apps are `xstockstrat.public.<domain>` and `xstockstrat-staging.public.<domain>`, one view for every client.** Production
+  mimics staging (owner, 2026-11-19): the whole UI is internet-facing behind the per-IP rate limits, with login protected by those
+  limits alone. No tailnet bypass, no exemption for the staging VM
   and no split-horizon record: a `zone: public` app entry never gets them. The bypass existed so the UI's server could read the agent's
   unauthenticated tool catalog through its public name, but that call resolves publicly inside the container and arrives as an
   internet client (measured 2026-11-19), so it never used it; the fix is in xstockstrat. `xstockstrat-staging.<domain>` answers 308 to
-  the new name for browsers. Production keeps its bypass until it moves the same way.
+  the new name for browsers, as `xstockstrat.<domain>` does; MCP clients do not follow it and are re-pointed by hand.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` 443 site (and, as `comms.ts.<domain>`, still in the `*.ts` one) behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.

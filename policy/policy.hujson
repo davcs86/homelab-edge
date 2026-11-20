@@ -23,7 +23,7 @@
     // Admin devices: full reach, including SSH, Postgres, LLM and Proxmox.
     {"src": ["group:admins"], "dst": ["*"], "ip": ["*"]},
 
-    // Everyday devices: only the edge's HTTPS (split-horizon xstockstrat UIs, Gatus, ntfy) and the tailnet-only 8443 ingest listener.
+    // Everyday devices: only the edge's HTTPS (the *.private services: Gatus, ntfy, commsgun) and the tailnet-only 8443 ingest listener.
     {"src": ["group:members"], "dst": ["tag:edge"], "ip": ["tcp:443", "tcp:8443"]},
 
     // Edge -> app: only the UI and agent ports (public /agent + OAuth routes, tailnet UI, Gatus probes).

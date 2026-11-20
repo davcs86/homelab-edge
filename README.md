@@ -25,7 +25,7 @@ flowchart LR
     backuphost["backup.ts…<br/>tag:backup"]
   end
 
-  claude -- "https xstockstrat.natanddavehouse.com" --> caddy
+  claude -- "https xstockstrat.public.natanddavehouse.com" --> caddy
   devices -- "https hs.natanddavehouse.com" --> caddy
   devices -. "STUN 3478/udp" .-> headscale
   caddy --> headscale
@@ -39,9 +39,9 @@ flowchart LR
 ```
 
 Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
-(`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint,
-the OAuth login routes and the read-only `GET /trader/api/health` that Gatus probes; tailnet clients get the whole app through the same name (split-horizon DNS).
-The staging app is `xstockstrat-staging.public.<domain>` on 443: the whole app behind the same per-IP rate limits as prod, one view for every client (no tailnet bypass). Its former name `xstockstrat-staging.<domain>` only redirects there. Every 443 hostname is an entry in `edge_sites`.
+(`tag:deploy` runners and admin devices). The apps are `xstockstrat.public.<domain>` and `xstockstrat-staging.public.<domain>` on 443: the whole UI plus the MCP and OAuth routes,
+behind per-IP rate limits, one view for every client (no tailnet bypass); other `/agent` paths, the unauthenticated tool catalog among
+them, are 404. Their former names `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` only redirect there. Every 443 hostname is an entry in `edge_sites`.
 Two wildcard zones take new portals without any DNS or token registration: `<service>.public.<domain>` (internet) and `<service>.private.<domain>` (tailnet-only); see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map

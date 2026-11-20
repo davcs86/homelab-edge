@@ -2,12 +2,13 @@
 # ---------- Naming ----------
 domain: natanddavehouse.com
 headscale_hostname: "hs.{{ domain }}"
-public_app_hostname: "xstockstrat.{{ domain }}"
 magicdns_base_domain: "ts.{{ domain }}"
 acme_zone: "acme.{{ domain }}"          # delegated to deSEC; holds only ACME TXT records
 # One wildcard certificate each (ACME labels `public`, `private`). private_zone has no public DNS records.
 public_zone: "public.{{ domain }}"
 private_zone: "private.{{ domain }}"
+public_app_hostname: "xstockstrat.{{ public_zone }}"   # production's APP_URL
+app_legacy_hostname: "xstockstrat.{{ domain }}"        # only redirects to the name above
 acme_email: davcs86@gmail.com
 status_hostname: "status.{{ magicdns_base_domain }}"   # legacy name; the heartbeat pushers on the home hosts still use it
 status_private_hostname: "status.{{ private_zone }}"
@@ -117,10 +118,12 @@ commsgun_apps:
       sms: {per_minute: 5, per_day: 50}
 
 # Public hostnames on 443. `name`: rate-limit zone prefix and, without `zone`, the ACME label and access-log name (own certificate);
-# `zone: public`: served under the *.public wildcard, one view for every client. kind app: OAuth routes (+ tailnet bypass without `zone`);
+# `zone: public`: served under the *.public wildcard, one view for every client. kind app: OAuth routes (+ the whole UI with `ui_public`);
 # bearer_mcp: one path behind a static key; redirect: 308 to `to`.
 edge_sites:
-  - {name: xstockstrat, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}"}
+  - {name: xstockstrat, kind: redirect, hostname: "{{ app_legacy_hostname }}", to: "{{ public_app_hostname }}"}
+  - {name: xstockstrat-portal, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}",
+     ui_public: true, zone: public}
   - {name: xstockstrat-staging, kind: redirect, hostname: "{{ staging_legacy_hostname }}", to: "{{ staging_public_hostname }}"}
   - {name: xstockstrat-staging-portal, kind: app, hostname: "{{ staging_public_hostname }}", upstream: "{{ staging_tailnet_host }}",
      ui_public: true, zone: public}

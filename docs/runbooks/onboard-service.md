@@ -49,7 +49,7 @@ machines only: a new service is never added there, and a machine never gets a `*
 (`CLAUDE.md` rule 8; CI enforces it).
 
 - `<service>.public.<domain>` (internet): an `edge_sites` entry with `zone: public`. Its Caddy handle inside the `*.public` site,
-  `tls-check` and the split-horizon record are generated from it; add a Gatus probe. Any other name under the zone answers 404.
+  and `tls-check` are generated from it (it gets no split-horizon record); add a Gatus probe. Any other name under the zone answers 404.
 - `<service>.private.<domain>` (tailnet-only): four places, as for a `*.ts` name (EDGE-07) — a hostname var, a `host` handle in the
   `*.private` site of `Caddyfile.j2`, the name in `_names` (`roles/tailscale/tasks/main.yml`), and a Gatus probe. The zone has no
   public DNS records; tailnet nodes resolve it through headscale's DNS route for the zone, so a node joined with
@@ -59,8 +59,8 @@ An app that holds a single origin (commsgun's `ORIGIN`, xstockstrat's `APP_URL`)
 name proves DNS, certificate, routing and health only, and login or OAuth move with the origin.
 
 Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/group_vars/all/main.yml`): its Caddy site, `tls-check`
-and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (OAuth routes, tailnet
-bypass; `ui_public` also serves the whole UI), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
+and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (MCP and OAuth
+routes; `ui_public` also serves the whole UI; no tailnet bypass), `kind: redirect` answers 308 to another name, `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
 are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443, one URL for every
 environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`). `webhooks.ts.<domain>` is the legacy
 name, on 443 and on the tailnet-only 8443 listener (not in the firewall; its handle must keep `import tailnet_only`), served until the

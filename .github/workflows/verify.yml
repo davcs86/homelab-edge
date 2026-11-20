@@ -29,7 +29,7 @@ jobs:
           {
             echo "ip=$(awk -F'"' '/^do_reserved_ipv4:/{print $2}' inventories/prod/group_vars/all/generated.yml)"
             echo "hs=hs.$d"
-            echo "app=xstockstrat.$d"
+            echo "app=xstockstrat.public.$d"
             echo "staging=xstockstrat-staging.public.$d"
             echo "other=other.$d"
           } >> "$GITHUB_OUTPUT"
@@ -62,7 +62,7 @@ jobs:
           echo | openssl s_client -connect "${{ steps.t.outputs.hs }}:443" -servername "${{ steps.t.outputs.hs }}" 2>/dev/null \
             | openssl x509 -noout -issuer -subject -enddate
 
-      - name: Public routes - /agent proxied, UI health public, everything else 404, login rate limited
+      - name: Public routes - /agent proxied, UI public, other agent paths 404, login rate limited
         run: |
           u="https://${{ steps.t.outputs.app }}"
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
@@ -70,7 +70,7 @@ jobs:
           [ "$a" != 404 ]
           m="$(curl -fsS "$u/agent/.well-known/oauth-protected-resource" || true)"; echo "metadata: ${m:-<app offline>}"
           c="$(code "$u/trader/api/health")"; echo "GET /trader/api/health -> $c"; [ "$c" = 200 ]
-          for p in / /anything-else /agent/api/tools /trader /api/health; do
+          for p in /agent/api/tools /agent/anything; do
             c="$(code "$u$p")"; echo "GET $p -> $c"; [ "$c" = 404 ]
           done
           codes=""; for _ in 1 2 3 4 5 6 7; do codes+="$(code -X POST -H 'content-type: application/json' -d '{}' "$u/api/auth/login") "; done
