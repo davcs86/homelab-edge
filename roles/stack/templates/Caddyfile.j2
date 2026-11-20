@@ -313,13 +313,6 @@
 		respond "Not Found" 404
 	}
 {% endmacro %}
-{% for site in edge_sites if site.zone is not defined %}
-{{ site.hostname }} {
-	import acme {{ site.name }}.{{ acme_zone }}
-	import access_log {{ site.name }}
-{{ app_body(site) if site.kind == 'app' else bearer_mcp_body(site) }}}
-
-{% endfor %}
 # One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.
 *.{{ public_zone }} {
 	import acme public.{{ acme_zone }}

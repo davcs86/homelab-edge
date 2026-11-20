@@ -84,8 +84,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   handle still sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in
   that site must not copy the handle without it.
   - Only `/mcp` of the public host is proxied, to 9100 (`webhooks_mcp_public_hostname`, `webhooks-mcp.public.<domain>`; the former
-    `webhooks-mcp.<domain>` stays served, on its own certificate, until the MCP clients are re-pointed), and it is protected by a static bearer key
-    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): as on the xstockstrat sites, there is no tailnet bypass.
+    `webhooks-mcp.<domain>` is no longer served, the MCP clients having been re-pointed on 2026-11-20), and it is protected by a static bearer key
+    (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp-portal_webhooks_mcp`): as on the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
     The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
