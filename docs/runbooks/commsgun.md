@@ -6,10 +6,10 @@ Two containers on the edge, behind Caddy on tailnet-only names (no ACME work nee
 
 | Name | Container | Host port | Use |
 |---|---|---|---|
-| `comms.private.<domain>` (`commsgun_enqueue_private_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz` |
-| `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | legacy name of the same API, served until its callers have moved; Gatus probes `/healthz`, `/healthz/backlog` |
+| `comms.private.<domain>` (`commsgun_enqueue_private_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz`, `/healthz/backlog` |
+| `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | legacy name of the same API, served until its callers have moved; not probed |
 | `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard (its `ORIGIN`); `/healthz` for Gatus |
-| `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's former name; only `/healthz` answers, for Gatus |
+| `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's former name; only `/healthz` answers; not probed |
 
 The dashboard answers `400 Bad origin` on every path except `/healthz` when the request's host is not its `ORIGIN`, so it is
 usable on one name at a time. `ORIGIN` is set in `roles/stack/tasks/main.yml` ("Commsgun dashboard environment"); to roll
@@ -58,7 +58,7 @@ Then in this repository:
 
    On the first deploy Gatus may alert once for the commsgun probes and then resolve: they start before the deploy
    writes the split-horizon records for the two names. Nothing in the deploy itself proves the new routes work; the proof
-   is the three Gatus probes (`commsgun-api`, `commsgun-backlog`, `commsgun-ui`) green and the checks below.
+   is the three Gatus probes (`commsgun-api-private`, `commsgun-backlog`, `commsgun-ui-private`) green and the checks below.
 
 Verify from a tailnet device that may reach the edge on 443 (your own devices, or `tag:xstockstrat`). Replace
 `<domain>` and `<your address>`; the `ops` app key is read from SOPS. The `send` function takes two arguments: a suffix
@@ -100,8 +100,7 @@ Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admi
   `https://comms.ts.<domain>/healthz`,
   `https://commsgun.private.<domain>/healthz` and `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; none may
   return an HTTP status.
-- **Gatus.** `https://status.private.<domain>`, group `edge`: `commsgun-api`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui` and
-  `commsgun-ui-private` are green.
+- **Gatus.** `https://status.private.<domain>`, group `edge`: `commsgun-api-private`, `commsgun-backlog` and `commsgun-ui-private` are green.
 - **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.private.<domain>/v1/messages -d '{}'`
   (from the tailnet) prints `401`.
 
