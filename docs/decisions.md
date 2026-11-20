@@ -92,6 +92,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   extra records plus a DNS route for the zone (`dns.nameservers.split`, upstream `1.1.1.1`); rejected: a public wildcard record
   pointing at the edge's tailnet address (publishes it, sends looked-up service names to public resolvers, fails behind
   DNS-rebinding filters, goes stale on a rebuild). `hs` and `auth` stay outside the zones. Spec: `docs/superpowers/specs/2026-11-18-wildcard-portal-zones-design.md`.
+- **Each zone holds one kind of name.** `*.ts` machines, `*.private` tailnet-only services, `*.public` internet services. A
+  service's name is served by the edge's Caddy whether it runs on the edge or on a home node (as xstockstrat does), so a
+  home-to-home call by service name travels through the edge. The machine zone keeps the name `ts` (renaming it would change every node's name at once: pgBackRest certificates,
+  `known_hosts`, the apps' deploy and database addresses). The `*.ts` services still served are a fixed list in
+  `scripts/portal-zones-test.py` that only shrinks. Sequence: `docs/superpowers/specs/2026-11-19-zone-split-design.md`.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.ts` 443 site behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.

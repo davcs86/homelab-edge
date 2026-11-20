@@ -47,6 +47,10 @@ public entry point, Gatus, ntfy, nightly age backups, a pgBackRest repo. Human o
    or the playbook), and report its output. A green lint is not a working edge.
 7. **Comments state constraints only, ≤ 2 lines.** How something works or why it got that way goes in the PR
    description or `docs/decisions.md`.
+8. **One kind of name per zone.** `*.ts` holds machines only (named by headscale); `*.private` holds tailnet-only
+   services and `*.public` internet services, wherever they run (edge or home): the edge's Caddy serves the name and
+   proxies to the service. Never add a service under `*.ts` or a machine under `*.private` / `*.public`;
+   `scripts/portal-zones-test.py` fails CI on either.
 
 ## Context Guide
 

@@ -72,5 +72,47 @@ class PortalZones(unittest.TestCase):
         self.assertIn("commsgun_ui_private_hostname", check)
 
 
+# Service names still under the machine zone. This list may only shrink: a migration removes its entry here.
+LEGACY_TS_SERVICES = {"status_hostname", "ntfy_hostname", "webhooks_ingest_hostname", "commsgun_enqueue_hostname", "commsgun_ui_hostname"}
+
+
+def under(value, zone):
+    return isinstance(value, str) and value.endswith("." + zone)
+
+
+class ZoneRules(unittest.TestCase):
+    """*.ts holds machines; *.private tailnet-only and *.public internet services, served by the edge wherever they run."""
+
+    def test_only_machines_and_the_legacy_services_live_under_the_machine_zone(self):
+        services = {k for k, v in V.items() if under(v, V["magicdns_base_domain"]) and not k.endswith("_tailnet_host")}
+        self.assertEqual(services, LEGACY_TS_SERVICES)
+
+    def test_caddy_serves_only_the_legacy_services_under_the_machine_zone(self):
+        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
+        sites = re.findall(r"^\*\.\{\{ magicdns_base_domain \}\}[^\n]*\{\n(.*?)^\}", template, re.M | re.S)
+        self.assertEqual(len(sites), 2)
+        hosts = {h for body in sites for h in re.findall(r"^\s+(?:@\w+ host|hostnames) (.+)$", body, re.M)}
+        self.assertTrue(hosts)
+        self.assertLessEqual(hosts, {"{{ %s }}" % name for name in LEGACY_TS_SERVICES})
+
+    def test_no_machine_lives_under_a_portal_zone(self):
+        machines = {k: v for k, v in V.items() if k.endswith("_tailnet_host")}
+        self.assertTrue(machines)
+        for name, value in machines.items():
+            self.assertTrue(under(value, V["magicdns_base_domain"]), name)
+        hosts = (ROOT / "inventories/prod/hosts.yml").read_text()
+        for zone in ("public_zone", "private_zone"):
+            self.assertNotIn(zone, hosts)
+
+    def test_the_three_zones_are_distinct_and_headscale_names_only_machines(self):
+        zones = [V["magicdns_base_domain"], V["public_zone"], V["private_zone"]]
+        for a in zones:
+            for b in zones:
+                if a is not b:
+                    self.assertFalse(a == b or a.endswith("." + b), (a, b))
+        dns = yaml.safe_load(render("roles/stack/templates/headscale-config.yaml.j2"))["dns"]
+        self.assertEqual(dns["base_domain"], V["magicdns_base_domain"])
+
+
 if __name__ == "__main__":
     unittest.main()
