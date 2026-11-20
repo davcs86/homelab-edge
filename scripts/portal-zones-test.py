@@ -45,21 +45,30 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["commsgun_enqueue_private_hostname"], f"comms.private.{d}")
         self.assertEqual(V["status_private_hostname"], f"status.private.{d}")
         self.assertEqual(V["ntfy_private_hostname"], f"ntfy.private.{d}")
-        self.assertEqual(V["staging_portal_hostname"], f"xstockstrat-staging.public.{d}")
+        self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.public.{d}")
+        self.assertEqual(V["staging_legacy_hostname"], f"xstockstrat-staging.{d}")
 
-    def test_staging_portal_is_a_public_zone_twin_of_staging(self):
+    def test_staging_lives_under_the_public_zone_with_one_view_for_everyone(self):
         sites = {s["name"]: s for s in resolved_sites()}
-        old, new = sites["xstockstrat-staging"], sites["xstockstrat-staging-portal"]
-        self.assertEqual(new["zone"], "public")
-        self.assertEqual(new["hostname"], V["staging_portal_hostname"])
-        self.assertNotIn("zone", old)
-        for k in ("kind", "upstream", "ui_public", "isolate_staging_vm"):
-            self.assertEqual(new[k], old[k], k)
+        app = sites["xstockstrat-staging-portal"]
+        self.assertEqual((app["kind"], app["zone"], app["hostname"]), ("app", "public", V["staging_public_hostname"]))
+        self.assertIs(app["ui_public"], True)
+        # No exemption for the staging VM and no tailnet bypass: the template drops the bypass for every zone entry.
+        self.assertNotIn("isolate_staging_vm", app)
         self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone")], ["xstockstrat-staging-portal"])
+
+    def test_the_old_staging_name_only_redirects(self):
+        old = {s["name"]: s for s in resolved_sites()}["xstockstrat-staging"]
+        self.assertEqual(old, {"name": "xstockstrat-staging", "kind": "redirect", "hostname": V["staging_legacy_hostname"],
+                               "to": V["staging_public_hostname"]})
+
+    def test_public_zone_names_get_no_split_horizon_record(self):
+        names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
+        self.assertIn("edge_sites | rejectattr('zone', 'defined') | map(attribute='hostname')", names)
 
     def test_existing_names_are_unchanged(self):
         d = V["domain"]
-        self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.{d}")
+        self.assertEqual(V["public_app_hostname"], f"xstockstrat.{d}")
         self.assertEqual(V["commsgun_ui_hostname"], f"commsgun.ts.{d}")
 
     def test_headscale_routes_the_private_zone_and_nothing_else(self):

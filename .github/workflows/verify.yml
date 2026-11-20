@@ -30,7 +30,7 @@ jobs:
             echo "ip=$(awk -F'"' '/^do_reserved_ipv4:/{print $2}' inventories/prod/group_vars/all/generated.yml)"
             echo "hs=hs.$d"
             echo "app=xstockstrat.$d"
-            echo "staging=xstockstrat-staging.$d"
+            echo "staging=xstockstrat-staging.public.$d"
             echo "other=other.$d"
           } >> "$GITHUB_OUTPUT"
       - run: sudo apt-get install -y -q nmap

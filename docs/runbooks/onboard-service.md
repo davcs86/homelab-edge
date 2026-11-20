@@ -77,8 +77,8 @@ that introduces it:
 
 Skip step 3 and the deploy fails at the certificate check; a `*.ts`, `*.public` or `*.private` name needs none of the three.
 
-Staging is `xstockstrat-staging.<domain>` on 443 like any other entry: label `xstockstrat-staging`, the three steps above, then redeploy
-the staging VM with `APP_URL` set to it. Its tailnet address is denied on every other hostname by `deny_staging_vm` (grants are per port,
+Staging is `xstockstrat-staging.public.<domain>`, a `zone: public` entry: no DNS or token step, one view for every client, and the
+staging VM's `APP_URL` is set to it. The VM's tailnet address is denied on every 443 site, its own included, by `deny_staging_vm` (grants are per port,
 so the grant alone cannot do it); Caddy learns the address from headscale on each deploy, so a re-registered VM keeps the old address
 in the rule until the next deploy.
 
@@ -87,7 +87,7 @@ in the rule until the next deploy.
 | Name | Is | Use for |
 |---|---|---|
 | `xstockstrat-staging.ts.<domain>` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
-| `xstockstrat-staging.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
-| `xstockstrat-staging.public.<domain>` | the same app under the `*.public` wildcard (`staging_portal_hostname`) | routing and health only, until `APP_URL` is moved to it |
+| `xstockstrat-staging.public.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+| `xstockstrat-staging.<domain>` | the former public name (`staging_legacy_hostname`) | nothing new: it answers 308 to the name above. MCP clients do not follow it; re-point them |
 
 The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the public name.

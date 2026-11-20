@@ -48,7 +48,7 @@ the app's public name resolves to the reserved IPv4, so that request arrives as 
 bypass and the staging-VM exemption never served it. Their only effect is on the owner's Apple and Android devices.
 The fix belongs in xstockstrat (fetch the catalog from the agent inside the VM); the edge does not wait for it.
 
-To correct when PR 6 touches the app sites: `docs/decisions.md` says "the UI's server reads it over the tailnet".
+Corrected in `docs/decisions.md` with step 6.
 
 ## Calls that are mine (correct them if wrong)
 

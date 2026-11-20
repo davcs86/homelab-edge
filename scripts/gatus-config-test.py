@@ -135,12 +135,10 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
-    def test_the_staging_portal_name_is_probed_from_the_internet_resolver(self):
-        e = ENDPOINTS["xstockstrat-staging-portal-ui-public"]
-        self.assertEqual((e["group"], e["url"]), ("public", f"https://{V['staging_portal_hostname']}/trader/api/health"))
-        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
-        self.assertNotIn("ignore-redirect", e["client"])
-        self.assertEqual(e["conditions"], ["[STATUS] == 200", "[BODY].status == ok", "[CERTIFICATE_EXPIRATION] > 336h"])
+    def test_staging_is_probed_once_per_check_on_its_public_zone_name(self):
+        self.assertNotIn("xstockstrat-staging-portal-ui-public", ENDPOINTS)
+        for name in ("xstockstrat-staging-ui-public", "staging-mcp-oauth-metadata", "staging-mcp-requires-auth"):
+            self.assertTrue(ENDPOINTS[name]["url"].startswith(f"https://xstockstrat-staging.public.{V['domain']}/"), name)
 
     def test_every_polled_endpoint_alerts_through_ntfy(self):
         for name, e in ENDPOINTS.items():
