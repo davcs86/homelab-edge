@@ -115,9 +115,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   limits alone. No tailnet bypass, no exemption for the staging VM
   and no split-horizon record: a `zone: public` app entry never gets them. The bypass existed so the UI's server could read the agent's
   unauthenticated tool catalog through its public name, but that call resolves publicly inside the container and arrives as an
-  internet client (measured 2026-11-19), so it never used it; the fix is in xstockstrat. `xstockstrat-staging.<domain>` answers 308 to
-  the new name for browsers; MCP clients do not follow it and are re-pointed by hand. Production's former name
-  `xstockstrat.<domain>` was never used, so it is not served at all: no redirect, no certificate, no DNS record.
+  internet client (measured 2026-11-19), so it never used it; the fix is in xstockstrat. The former names
+  `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served at all (owner, 2026-11-20): no redirect, no certificate,
+  no DNS record. A redirect helped browsers only; MCP clients do not follow one and are re-pointed by hand.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` 443 site (and, as `comms.ts.<domain>`, still in the `*.ts` one) behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.

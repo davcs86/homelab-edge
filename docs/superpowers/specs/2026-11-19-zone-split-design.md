@@ -21,7 +21,8 @@ DNS or token registration.
 4. Production xstockstrat mimics staging on its `.public` name: the whole UI is served to the internet behind the
    per-IP rate limits (`ui_public: true`). Accepted with login protected by rate limits alone; the production node is
    not set up yet.
-5. After an app's `APP_URL` moves to its `.public` name, the old name redirects there. This serves browsers only.
+5. After an app's `APP_URL` moves to its `.public` name, the old name is dropped. A redirect was built for staging first and
+   removed on 2026-11-20: neither old name was in use, and a redirect serves browsers only.
 6. The apps' `.public` names show one view to everyone: no tailnet bypass, no staging-VM exemption, no split-horizon
    record. `/agent/api/tools` stays 404 for every client.
 7. Order: rules first, then the edge services, then the apps, then retiring the `*.ts` wildcard.

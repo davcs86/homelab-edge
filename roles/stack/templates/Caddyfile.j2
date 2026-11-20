@@ -317,12 +317,7 @@
 {{ site.hostname }} {
 	import acme {{ site.name }}.{{ acme_zone }}
 	import access_log {{ site.name }}
-{% if site.kind == 'redirect' %}
-	redir https://{{ site.to }}{uri} 308
-}
-{% else %}
 {{ app_body(site) if site.kind == 'app' else bearer_mcp_body(site) }}}
-{% endif %}
 
 {% endfor %}
 # One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.

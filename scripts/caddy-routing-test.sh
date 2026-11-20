@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -254,11 +254,6 @@ expect "prod login limit trips for a fresh client" "200 200 200 200 200 429" "$c
 expect "staging login limit is independent of prod" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.7 -X POST -d '{}' "$s/api/auth/login")"
 expect "unknown public-zone host is 404"       "404"                              "$(req "nope.${staging_host#*.}" "https://nope.${staging_host#*.}/")"
 expect "unknown public-zone host is 404 from the tailnet" "404"                   "$(req "nope.${staging_host#*.}" --interface "$tailnet_ip" "https://nope.${staging_host#*.}/")"
-# The app's former name only redirects, path and query kept; it reaches no upstream.
-redir() { curl -sk --noproxy "*" --max-time 5 --resolve "$legacy_host:443:127.0.0.1" -o /dev/null -w '%{http_code} %{redirect_url}' "$@" || true; }
-expect "old staging name redirects"            "308 https://$staging_host/trader?x=1" "$(redir "https://$legacy_host/trader?x=1")"
-expect "old staging name redirects POST /agent" "308 https://$staging_host/agent"  "$(redir -X POST "https://$legacy_host/agent")"
-expect "old staging name redirects tailnet clients" "308 https://$staging_host/"   "$(redir --interface "$tailnet_ip" "https://$legacy_host/")"
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
 expect "tailnet listener 404s other names"      "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
 expect "tailnet listener does not serve status"   "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"

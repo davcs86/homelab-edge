@@ -60,7 +60,7 @@ name proves DNS, certificate, routing and health only, and login or OAuth move w
 
 Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/group_vars/all/main.yml`): its Caddy site, `tls-check`
 and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (MCP and OAuth
-routes; `ui_public` also serves the whole UI; no tailnet bypass), `kind: redirect` answers 308 to another name, `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
+routes; `ui_public` also serves the whole UI; no tailnet bypass), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
 are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443, one URL for every
 environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`). `webhooks.ts.<domain>` is the legacy
 name, on 443 and on the tailnet-only 8443 listener (not in the firewall; its handle must keep `import tailnet_only`), served until the
@@ -90,6 +90,6 @@ in the rule until the next deploy.
 |---|---|---|
 | `xstockstrat-staging.ts.<domain>` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
 | `xstockstrat-staging.public.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
-| `xstockstrat-staging.<domain>` | the former public name (`staging_legacy_hostname`) | nothing new: it answers 308 to the name above. MCP clients do not follow it; re-point them |
+| `xstockstrat-staging.<domain>` | the former public name | nothing: it is no longer served. Point MCP clients and bookmarks at the name above |
 
 The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the public name.

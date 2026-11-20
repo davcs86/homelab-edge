@@ -48,7 +48,6 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["webhooks_ingest_private_hostname"], f"webhooks.private.{d}")
         self.assertEqual(V["webhooks_mcp_public_hostname"], f"webhooks-mcp.public.{d}")
         self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.public.{d}")
-        self.assertEqual(V["staging_legacy_hostname"], f"xstockstrat-staging.{d}")
         self.assertEqual(V["public_app_hostname"], f"xstockstrat.public.{d}")
 
     def test_staging_lives_under_the_public_zone_with_one_view_for_everyone(self):
@@ -85,10 +84,13 @@ class PortalZones(unittest.TestCase):
         for k in ("kind", "path", "port", "limits"):
             self.assertEqual(new[k], old[k], k)
 
-    def test_the_old_staging_name_only_redirects(self):
-        old = {s["name"]: s for s in resolved_sites()}["xstockstrat-staging"]
-        self.assertEqual(old, {"name": "xstockstrat-staging", "kind": "redirect", "hostname": V["staging_legacy_hostname"],
-                               "to": V["staging_public_hostname"]})
+    def test_the_apps_former_names_are_not_served(self):
+        hostnames = [s["hostname"] for s in resolved_sites()]
+        for old in ("xstockstrat", "xstockstrat-staging"):
+            self.assertNotIn(f"{old}.{V['domain']}", hostnames)
+        self.assertNotIn("staging_legacy_hostname", V)
+        self.assertEqual({s["kind"] for s in V["edge_sites"]}, {"app", "bearer_mcp"})
+        self.assertNotIn("redirect", (ROOT / "roles/stack/templates/Caddyfile.j2").read_text().replace("Referer and redirects", ""))
 
     def test_public_zone_names_get_no_split_horizon_record(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
