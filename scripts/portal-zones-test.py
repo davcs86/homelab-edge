@@ -78,13 +78,16 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(dns["nameservers"]["global"], [])
         self.assertIs(dns["override_local_dns"], False)
 
-    def test_minted_webhook_urls_use_the_private_ingest_name_on_both_ports(self):
+    def test_minted_webhook_urls_use_one_private_ingest_url(self):
         tasks = yaml.safe_load((ROOT / "roles/stack/tasks/main.yml").read_text())
         raw = next(t for t in tasks if t.get("name") == "Webhooks-mcp secrets")["vars"]["_ingest_base_urls"]
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
         bases = {k: env.from_string(v).render(**V) for k, v in raw.items()}
-        host = V["webhooks_ingest_private_hostname"]
-        self.assertEqual(bases, {"default": f"https://{host}", "staging": f"https://{host}:{V['staging_edge_port']}"})
+        self.assertEqual(bases, {"default": f"https://{V['webhooks_ingest_private_hostname']}"})
+
+    def test_only_the_legacy_ingest_name_uses_the_staging_port(self):
+        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
+        self.assertEqual(re.findall(r"^(.+):\{\{ staging_edge_port \}\} \{$", template, re.M), ["*.{{ magicdns_base_domain }}"])
 
     def test_ntfy_names_itself_by_its_private_name(self):
         # iOS wake-ups hash base-url + topic, so an iOS subscriber must use exactly this name.

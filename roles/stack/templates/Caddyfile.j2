@@ -14,7 +14,7 @@
 		output stderr
 		format json
 		level INFO
-		exclude http.log.error.commsgun_ui http.log.error.private_zone http.log.error.private_zone_staging http.handlers.reverse_proxy
+		exclude http.log.error.commsgun_ui http.log.error.private_zone http.handlers.reverse_proxy
 	}
 	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
 	log redacted_requests {
@@ -25,7 +25,7 @@
 			wrap json
 		}
 		level INFO
-		include http.log.error.commsgun_ui http.log.error.private_zone http.log.error.private_zone_staging http.handlers.reverse_proxy
+		include http.log.error.commsgun_ui http.log.error.private_zone http.handlers.reverse_proxy
 	}
 }
 
@@ -68,24 +68,6 @@
 	}
 }
 
-# Queries on *.private carry recipient addresses, ntfy credentials and webhook tokens (and so do Referer and redirects).
-# Per-host loggers match the exact lowercase name only, so each *.private site drops all three. args: logger name, log file.
-(private_log) {
-	log {args[0]} {
-		output file /var/log/caddy/{args[1]}.access.log {
-			roll_size 50MiB
-			roll_keep 5
-			roll_keep_for 720h
-		}
-		format filter {
-			request>uri regexp \?.* ""
-			request>headers>Referer delete
-			resp_headers>Location delete
-			wrap json
-		}
-	}
-}
-
 # Must be the first handle in its scope: `handle` blocks with non-path matchers run in written order.
 (tailnet_only) {
 	@outside_tailnet not remote_ip {{ tailnet_v4_prefix }} {{ tailnet_v6_prefix }}
@@ -94,7 +76,8 @@
 	}
 }
 
-# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every site except its own. First handle in its scope.
+# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every 443 name but the *.private ingest.
+# Import it before any handle the staging VM must not reach.
 (deny_staging_vm) {
 {% if staging_vm_ips | length > 0 %}
 	@staging_vm remote_ip {{ staging_vm_ips | join(' ') }}
@@ -377,10 +360,34 @@
 # Tailnet-only; the zone has no public DNS records, tailnet clients resolve it through headscale.
 *.{{ private_zone }} {
 	import acme private.{{ acme_zone }}
-	import deny_staging_vm
 	import tailnet_only
 
-	import private_log private_zone private
+	# Must stay between tailnet_only and deny_staging_vm: the ingest is the one name here the staging VM may reach.
+	@webhooks_ingest host {{ webhooks_ingest_private_hostname }}
+	handle @webhooks_ingest {
+		request_body {
+			max_size {{ body_limits.webhooks_ingest }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
+	}
+
+	import deny_staging_vm
+
+	# Queries here carry recipient addresses, ntfy credentials and webhook tokens (and so do Referer and redirects).
+	# Per-host loggers match the exact lowercase name only, so the whole zone drops all three.
+	log private_zone {
+		output file /var/log/caddy/private.access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			resp_headers>Location delete
+			wrap json
+		}
+	}
 	# The dashboard derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
 	@commsgun_ui host {{ commsgun_ui_private_hostname }}
 	handle @commsgun_ui {
@@ -397,14 +404,6 @@
 		reverse_proxy 127.0.0.1:2586 {
 			flush_interval -1
 		}
-	}
-
-	@webhooks_ingest host {{ webhooks_ingest_private_hostname }}
-	handle @webhooks_ingest {
-		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
-		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
 	}
 
 	@commsgun_enqueue host {{ commsgun_enqueue_private_hostname }}
@@ -473,25 +472,6 @@
 	@commsgun_ui host {{ commsgun_ui_hostname }}
 	handle @commsgun_ui {
 		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
-	}
-
-	handle {
-		respond "Not Found" 404
-	}
-}
-
-# Tailnet-only (not in the cloud firewall): the staging environment's webhooks ingest under *.private, on its own port.
-*.{{ private_zone }}:{{ staging_edge_port }} {
-	import acme private.{{ acme_zone }}
-	import private_log private_zone_staging private-staging
-
-	@webhooks_ingest host {{ webhooks_ingest_private_hostname }}
-	handle @webhooks_ingest {
-		import tailnet_only
-		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
-		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
 	}
 
 	handle {

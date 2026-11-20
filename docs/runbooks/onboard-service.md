@@ -61,9 +61,10 @@ name proves DNS, certificate, routing and health only, and login or OAuth move w
 Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/group_vars/all/main.yml`): its Caddy site, `tls-check`
 and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (OAuth routes, tailnet
 bypass; `ui_public` also serves the whole UI), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
-are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443 and, for staging, on the
-tailnet-only 8443 listener; its handle in each 8443 site (not in the firewall) must keep `import tailnet_only` (see `docs/decisions.md`).
-`webhooks.ts.<domain>` is the legacy name, served until the URLs minted under it have expired.
+are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443, one URL for every
+environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`). `webhooks.ts.<domain>` is the legacy
+name, on 443 and on the tailnet-only 8443 listener (not in the firewall; its handle must keep `import tailnet_only`), served until the
+URLs minted under it have expired.
 A workload that must send email or SMS needs no route of its own: it POSTs to commsgun's tailnet-only enqueue name
 (`commsgun_enqueue_private_hostname`, `comms.private.<domain>`) with its own app key, over the `tag:edge:443` grant its tag already needs;
 register the app as in `docs/runbooks/commsgun.md` § 2.

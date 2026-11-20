@@ -135,14 +135,12 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
-    def test_the_private_ingest_name_is_probed_on_both_listeners(self):
-        host = V["webhooks_ingest_private_hostname"]
-        for name, url in (("webhooks-ingest-private", f"https://{host}/healthz"),
-                          ("webhooks-ingest-staging-private", f"https://{host}:{V['staging_edge_port']}/healthz")):
-            e = ENDPOINTS[name]
-            self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", url, "1m"))
-            self.assertEqual(e["conditions"], ["[STATUS] == 200"])
-            self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+    def test_the_private_ingest_name_is_probed_on_443_only(self):
+        e = ENDPOINTS["webhooks-ingest-private"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['webhooks_ingest_private_hostname']}/healthz", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+        self.assertNotIn("webhooks-ingest-staging-private", ENDPOINTS)
 
     def test_staging_is_probed_once_per_check_on_its_public_zone_name(self):
         self.assertNotIn("xstockstrat-staging-portal-ui-public", ENDPOINTS)

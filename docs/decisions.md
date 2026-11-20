@@ -77,9 +77,12 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
   `webhooks_ingest_private_hostname`, `webhooks.private.<domain>`, and the legacy `webhooks.ts.<domain>`) has no auth and must stay
   tailnet-only. Newly minted URLs carry the `.private` name (`INGEST_BASE_URLS`); the service never reads the Host header, so URLs
-  minted earlier keep working on the legacy name until they expire. Each `:8443` site (the staging environment's
-  ingest) is tailnet-only too and not in the firewall, but its ingest handle still sits behind `import tailnet_only`, and
-  `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in that site must not copy the handle without it.
+  minted earlier keep working on the legacy name until they expire. The `.private` name is one URL on 443 for every environment:
+  in the `*.private` site its handle sits after `import tailnet_only` and before `import deny_staging_vm`, so the staging VM reaches
+  the ingest and nothing else there (both ports proxied to the same listener and store, so a second port bought no separation).
+  The legacy `*.ts:8443` site (the staging environment's former ingest) is tailnet-only too and not in the firewall, but its ingest
+  handle still sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in
+  that site must not copy the handle without it.
   - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key
     (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp_webhooks_mcp`): unlike the xstockstrat sites, there is no tailnet bypass.
   - Caddy's ingest body cap (`body_limits.webhooks_ingest`, 262144 bytes) must equal the listener's own cap (`MAX_BODY_BYTES` in its repo).
