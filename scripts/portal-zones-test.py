@@ -103,7 +103,6 @@ class PortalZones(unittest.TestCase):
     def test_existing_names_are_unchanged(self):
         d = V["domain"]
         self.assertEqual(V["headscale_hostname"], f"hs.{d}")
-        self.assertEqual(V["commsgun_ui_hostname"], f"commsgun.ts.{d}")
 
     def test_headscale_routes_the_private_zone_and_nothing_else(self):
         dns = yaml.safe_load(render("roles/stack/templates/headscale-config.yaml.j2"))["dns"]
@@ -118,9 +117,10 @@ class PortalZones(unittest.TestCase):
         bases = {k: env.from_string(v).render(**V) for k, v in raw.items()}
         self.assertEqual(bases, {"default": f"https://{V['webhooks_ingest_private_hostname']}"})
 
-    def test_only_the_legacy_ingest_name_uses_the_staging_port(self):
-        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
-        self.assertEqual(re.findall(r"^(.+):\{\{ staging_edge_port \}\} \{$", template, re.M), ["*.{{ magicdns_base_domain }}"])
+    def test_nothing_listens_on_a_second_port(self):
+        self.assertNotIn("staging_edge_port", V)
+        self.assertNotIn("staging_edge_port", (ROOT / "roles/stack/templates/Caddyfile.j2").read_text())
+        self.assertNotIn("8443", (ROOT / "policy/policy.hujson").read_text())
 
     def test_ntfy_names_itself_by_its_private_name(self):
         # iOS wake-ups hash base-url + topic, so an iOS subscriber must use exactly this name.
@@ -140,8 +140,8 @@ class PortalZones(unittest.TestCase):
         self.assertIn("commsgun_ui_private_hostname", check)
 
 
-# Service names still under the machine zone. This list may only shrink: a migration removes its entry here.
-LEGACY_TS_SERVICES = {"status_hostname", "ntfy_hostname", "webhooks_ingest_hostname", "commsgun_enqueue_hostname", "commsgun_ui_hostname"}
+# Service names under the machine zone. Empty since the *.ts services were retired; it must stay empty.
+LEGACY_TS_SERVICES = set()
 
 
 def under(value, zone):
@@ -155,13 +155,10 @@ class ZoneRules(unittest.TestCase):
         services = {k for k, v in V.items() if under(v, V["magicdns_base_domain"]) and not k.endswith("_tailnet_host")}
         self.assertEqual(services, LEGACY_TS_SERVICES)
 
-    def test_caddy_serves_only_the_legacy_services_under_the_machine_zone(self):
-        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
-        sites = re.findall(r"^\*\.\{\{ magicdns_base_domain \}\}[^\n]*\{\n(.*?)^\}", template, re.M | re.S)
-        self.assertEqual(len(sites), 2)
-        hosts = {h for body in sites for h in re.findall(r"^\s+(?:@\w+ host|hostnames) (.+)$", body, re.M)}
-        self.assertTrue(hosts)
-        self.assertLessEqual(hosts, {"{{ %s }}" % name for name in LEGACY_TS_SERVICES})
+    def test_caddy_serves_nothing_under_the_machine_zone(self):
+        self.assertNotIn("magicdns_base_domain", (ROOT / "roles/stack/templates/Caddyfile.j2").read_text())
+        names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
+        self.assertEqual(sorted(re.findall(r"[a-z_]+_hostname", names)), sorted(k for k, v in V.items() if under(v, V["private_zone"])))
 
     def test_no_machine_lives_under_a_portal_zone(self):
         machines = {k: v for k, v in V.items() if k.endswith("_tailnet_host")}

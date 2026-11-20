@@ -95,7 +95,7 @@
             echo "## node health (names a failed DNS config step)"; docker exec {{ _node }} tailscale status --peers=false
             echo "## node resolv.conf and pre-tailscale backup"
             docker exec {{ _node }} sh -c 'ls -l /etc/resolv*; cat /etc/resolv.conf; cat /etc/resolv.pre-tailscale-backup.conf 2>/dev/null'
-            echo "## in-domain name"; docker exec {{ _node }} tailscale dns query {{ status_hostname }} A
+            echo "## in-domain name"; docker exec {{ _node }} tailscale dns query {{ edge_tailnet_hostname }}.{{ magicdns_base_domain }} A
           args:
             executable: /bin/bash
           register: _dns_evidence

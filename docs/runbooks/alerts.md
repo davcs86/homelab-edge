@@ -20,8 +20,7 @@ so a stopped headscale emails within ~15 min.
 ## ntfy on the phone (everything else)
 
 The phone must be on the tailnet (`ntfy.private.natanddavehouse.com` is tailnet-only). Use exactly that name: it is ntfy's
-`base-url`, and an iOS wake-up only matches a subscription made under it. `ntfy.ts.natanddavehouse.com` still answers for
-Android subscribers that have not moved.
+`base-url`, and an iOS wake-up only matches a subscription made under it.
 
 1. Install **ntfy** (Play Store / F-Droid; iOS App Store).
 2. Settings → **Manage users** → add server `https://ntfy.private.natanddavehouse.com`, user `david`, password

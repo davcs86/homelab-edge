@@ -66,8 +66,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`; its password login goes. This only holds if Caddy
     deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
     and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four. The move also
-    crosses three constitution seams: no `trusted_proxies` on the new public site (EDGE-02); the `*.ts` four-place wiring is
-    undone for `commsgun_ui_hostname` (EDGE-07); and the dashboard's `ORIGIN` follows the new hostname (EDGE-11, a commsgun-side
+    crosses three constitution seams: no `trusted_proxies` on the new public site (EDGE-02); the four-place wiring is
+    undone for `commsgun_ui_private_hostname` (EDGE-07); and the dashboard's `ORIGIN` follows the new hostname (EDGE-11, a commsgun-side
     change).
   - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
     nightly backup: losing it loses every `sub` and second factor.
@@ -75,14 +75,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 ## Known traps
 
 - **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
-  `webhooks_ingest_private_hostname`, `webhooks.private.<domain>`, and the legacy `webhooks.ts.<domain>`) has no auth and must stay
-  tailnet-only. Newly minted URLs carry the `.private` name (`INGEST_BASE_URLS`); the service never reads the Host header, so URLs
-  minted earlier keep working on the legacy name until they expire. The `.private` name is one URL on 443 for every environment:
+  `webhooks_ingest_private_hostname`, `webhooks.private.<domain>`) has no auth and must stay
+  tailnet-only. Minted URLs carry that name (`INGEST_BASE_URLS`). It is one URL on 443 for every environment:
   in the `*.private` site its handle sits after `import tailnet_only` and before `import deny_staging_vm`, so the staging VM reaches
-  the ingest and nothing else there (both ports proxied to the same listener and store, so a second port bought no separation).
-  The legacy `*.ts:8443` site (the staging environment's former ingest) is tailnet-only too and not in the firewall, but its ingest
-  handle still sits behind `import tailnet_only`, and `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in
-  that site must not copy the handle without it.
+  the ingest and nothing else there. The former `webhooks.ts.<domain>` name and its second listener on 8443 are gone: both ports
+  proxied to the same listener and store, so the second port bought no separation. `scripts/caddy-routing-test.sh` pins the order.
   - Only `/mcp` of the public host is proxied, to 9100 (`webhooks_mcp_public_hostname`, `webhooks-mcp.public.<domain>`; the former
     `webhooks-mcp.<domain>` is no longer served, the MCP clients having been re-pointed on 2026-11-20), and it is protected by a static bearer key
     (`webhooks_mcp_auth_key`), not OAuth. Tailnet clients are rate-limited there too (zone `webhooks-mcp-portal_webhooks_mcp`): as on the xstockstrat sites, there is no tailnet bypass.
@@ -92,7 +89,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     container would exit at start.
   - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
 - **Portals live under two wildcard zones, `*.public.<domain>` and `*.private.<domain>`.** One certificate per zone over the
-  existing DNS-01 chain (labels `public`, `private`), as `*.ts` already works, so a new portal needs no Cloudflare or deSEC change.
+  existing DNS-01 chain (labels `public`, `private`), so a new portal needs no Cloudflare or deSEC change.
   Rejected: per-host certificates with API-driven registration (needs a Cloudflare DNS token and a deSEC token that can manage
   policies), and on-demand TLS (a second issuance path that does not fit tailnet-only names). `*.private` resolves through headscale
   extra records plus a DNS route for the zone (`dns.nameservers.split`, upstream `1.1.1.1`); rejected: a public wildcard record
@@ -101,15 +98,15 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **Each zone holds one kind of name.** `*.ts` machines, `*.private` tailnet-only services, `*.public` internet services. A
   service's name is served by the edge's Caddy whether it runs on the edge or on a home node (as xstockstrat does), so a
   home-to-home call by service name travels through the edge. The machine zone keeps the name `ts` (renaming it would change every node's name at once: pgBackRest certificates,
-  `known_hosts`, the apps' deploy and database addresses). The `*.ts` services still served are a fixed list in
-  `scripts/portal-zones-test.py` that only shrinks. Sequence: `docs/superpowers/specs/2026-11-19-zone-split-design.md`.
+  `known_hosts`, the apps' deploy and database addresses). Caddy serves nothing under `*.ts` since the last
+  services moved (`scripts/portal-zones-test.py` keeps it so). Sequence: `docs/superpowers/specs/2026-11-19-zone-split-design.md`.
 - **ntfy is `ntfy.private.<domain>`, and that is its `base-url`.** Publishing, polling and auth answer identically under any
-  hostname (checked against v2.28.0), so `ntfy.ts.<domain>` stays served for subscribers not yet moved. The name matters for iOS
+  hostname (checked against v2.28.0). The name matters for iOS
   only: the ntfy.sh wake-up carries a hash of `base-url` + topic, so an iOS subscription must be made under the `base-url` name.
-  ntfy accepts credentials in `?auth=`; the `*.private` site's logger drops queries, the `*.ts` one does not.
-- **The status page is `status.private.<domain>`; `status.ts.<domain>` stays for the heartbeat pushers.** Gatus answers its page,
-  API and `external` pushes identically under any hostname (checked against v5.37.0), so both names are served. The pushers on
-  Proxmox and the DB host were installed by hand with the old name and pin the edge's address; they move when re-installed.
+  ntfy accepts credentials in `?auth=`; the `*.private` site's logger drops queries.
+- **The status page is `status.private.<domain>`, and the heartbeat pushers call that name.** Gatus answers its page,
+  API and `external` pushes identically under any hostname (checked against v5.37.0). The pushers on Proxmox and the DB host are
+  installed by hand and pin the edge's address; a pusher installed with the former `status.ts.<domain>` goes silent until re-installed.
 - **The apps are `xstockstrat.public.<domain>` and `xstockstrat-staging.public.<domain>`, one view for every client.** Production
   mimics staging (owner, 2026-11-19): the whole UI is internet-facing behind the per-IP rate limits, with login protected by those
   limits alone. No tailnet bypass, no exemption for the staging VM
@@ -118,8 +115,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   internet client (measured 2026-11-19), so it never used it; the fix is in xstockstrat. The former names
   `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served at all (owner, 2026-11-20): no redirect, no certificate,
   no DNS record. A redirect helped browsers only; MCP clients do not follow one and are re-pointed by hand.
-- **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
-  `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` 443 site (and, as `comms.ts.<domain>`, still in the `*.ts` one) behind `import tailnet_only`
+- **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_private_hostname`,
+  `comms.private.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` site behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
   - Admin port 9201 is never published. The two containers sit on their own compose network (`commsgun`), so no other stack
     container can reach 9201 or send the dashboard forged `X-Forwarded-*` headers; the admin API is also guarded by `commsgun_admin_api_token`.
@@ -131,15 +128,15 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - `resend_api_key` must be a full-access Resend key: bounce tracking reads email status, and a sending-only key makes every status poll fail.
   - Compose treats `\'` as an escape inside the single-quoted env files, so the deploy refuses a commsgun secret containing a quote,
     backslash or line break (`roles/stack/tasks/main.yml`, "Commsgun API environment").
-  - **The dashboard's filters live in the URL query, and recipient addresses are in them.** Caddy's default JSON access log of a
-    `*.ts` site would carry them, so the dashboard host has its own access log (`commsgun-ui.access.log`; the whole `*.private` zone logs that way, in `private.access.log`) that drops the query, `Referer` and
+  - **The dashboard's filters live in the URL query, and recipient addresses are in them.** Caddy's default JSON access log
+    would carry them, so the whole `*.private` site logs to its own access log (`private.access.log`) that drops the query, `Referer` and
     `Location`. The trap that remained: Caddy's `http.handlers.reverse_proxy` logger (not per host) and the `http.log.error.*` loggers
     print the full URI and `Referer` on an upstream error, bypassing the per-host filter. The default logger therefore excludes them and a
     second logger, `redacted_requests`, takes them with the query and `Referer` stripped. `caddy-routing-test.sh` checks the canary address does not appear.
   - The dashboard builds its origin and its login rate-limit key from Caddy's default `X-Forwarded-Proto`, `-Host` and `-For` and answers 400
     unless the derived origin equals its `ORIGIN` (`https://commsgun_ui_private_hostname`); never strip or override those headers on that handle.
-  - Staging: app `xstockstrat-staging` is registered (own key, lower limits) but has no route: the staging VM is denied on the `*.ts` 443 site,
-    so it cannot reach `comms.ts.<domain>`, and the 8443 site answers 404 for both commsgun names.
+  - Staging: app `xstockstrat-staging` is registered (own key, lower limits) but has no route: `deny_staging_vm` aborts the staging VM
+    on every `*.private` name except the webhooks ingest, so it cannot reach `comms.private.<domain>`.
   - "Tailnet-only" means every tailnet identity with a grant on `tag:edge:443` (`policy/policy.hujson`: `group:admins`,
     `group:members`, `tag:xstockstrat`, `tag:db`, `tag:pve`) reaches the dashboard login and the enqueue route; both are
     authenticated (dashboard password, per-app key). `tag:xstockstrat-staging` holds that grant too and is denied only once the
@@ -162,7 +159,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   Encrypt's multi-perspective lookup then sees NXDOMAIN and caches it for the zone's negative TTL (300 s), so every
   retry fails. The fix lives in the `(acme)` snippet of `roles/stack/templates/Caddyfile.j2`.
 - **`caddy reload` keeps ACME jobs already in backoff** on the old settings; only a restart drops them. The deploy
-  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.ts`, `*.private`).
+  restarts Caddy only while some site lacks a certificate, and probes every managed SNI (hs, every `edge_sites` hostname, `*.private`).
 - **Tailscale's STUN server ignores generic STUN probes.** A request needs SOFTWARE `tailnode` and a FINGERPRINT
   attribute; XOR-MAPPED-ADDRESS may come back as IPv4-mapped IPv6. `scripts/stun-probe.py` builds the right one.
 - **The verify test node must run userspace (`TS_USERSPACE=true`).** Kernel mode in a container fails on iptables,
@@ -190,7 +187,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   ingest. `deny_staging_vm` aborts the VM's tailnet addresses (read from headscale on each deploy, as the DB host's is) on every site except
   its own; `caddy-routing-test.sh` pins that. If the VM is not registered yet the rule is empty and the deploy says so (fail-open on a fresh
   build); a re-registered VM keeps its old address in the rule until the next deploy. Public surface: back to 80, 443 and 3478.
-  Staging keeps `tag:edge:8443`, now only the tailnet-only listener for its webhooks ingest (separate from prod's ingest on 443).
+  The 8443 listener and `tag:edge:8443` are gone: staging's webhooks ingest is the shared `webhooks.private.<domain>` on 443.
   Costs: the whole staging UI is internet-facing behind app auth alone, and `/agent/*` outside the MCP/OAuth set is 404 publicly because the
   agent's `GET /api/tools` catalog is unauthenticated (the UI's server asks for it through its public name and, arriving from the
   internet, gets that 404: see "Staging is `xstockstrat-staging.public.<domain>`" above). `general` is 3000 requests/min per IP.
@@ -223,8 +220,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IPv4, while a name under `private.<domain>` returned the edge's tailnet address once the zone had a route. `tailscale dns query`
   bypasses the OS resolver and hides this; test with `getent hosts`.
 - **A per-host Caddy logger matches the exact lowercase name only.** The host matcher is case-insensitive, so `Commsgun.…` is
-  proxied but logged by the site's logger. The `*.private` site therefore redacts as a whole (logger `private_zone`); the `*.ts`
-  site still has this gap for the dashboard's old name, as do port 80 redirects, which log the full URI on stderr.
+  proxied but logged by the site's logger. The `*.private` site therefore redacts as a whole (logger `private_zone`).
+  Port 80 redirects still have this gap: they log the full URI on stderr.
 - **An app with a single origin serves one name at a time.** The commsgun dashboard answers 400 on every path except `/healthz`
   when the host is not `ORIGIN`; xstockstrat binds its OAuth resource to `APP_URL`. A second route proves routing and health only.
 - **A route name cannot equal a node's MagicDNS name.** `xstockstrat-staging.ts.<domain>` resolves to the staging VM;
@@ -258,7 +255,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   are verified and planned but never applied (a wrong `/etc/pve` or `interfaces` file takes effect at once).
 - **The Proxmox host joins as `pve` with Tailscale DNS off.** The edge probes `pve.ts.<domain>:8006` and names its heartbeat for
   `pve`; MagicDNS would rewrite `/etc/resolv.conf`, which apt and the guests depend on. With DNS off the heartbeat cannot resolve
-  `status.ts.<domain>`, so its curl config pins the edge's tailnet IP.
+  `status.private.<domain>`, so its curl config pins the edge's tailnet IP.
 - **The SSH hardening is judged by `sshd -T`, not by the file it wrote.** sshd takes the first value it sees and includes
   `sshd_config.d/*.conf` in name order, so an earlier-sorted drop-in can silently win. `sshd -T` prints `without-password`
   for `prohibit-password`, so both spellings count. A failed `sshd -t` removes the drop-in again, because the next start

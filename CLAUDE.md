@@ -71,7 +71,7 @@ Read only the row that matches the task.
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | SSO (Authelia): people, groups, emails, linking app accounts, recovery | `docs/runbooks/sso.md`, `docs/decisions.md` § SSO |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
-| Patterns between the traps an edit can silently break (pin-line quoting, XFF trust, restart/handler shape, `*.ts` four-place wiring, secret-read shapes, apt pin recipe, owner-app seams) — `EDGE-*` — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
+| Patterns between the traps an edit can silently break (pin-line quoting, XFF trust, restart/handler shape, `*.private` four-place wiring, secret-read shapes, apt pin recipe, owner-app seams) — `EDGE-*` — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |
 | Deploy a Compose app (xstockstrat or other) to the homelab; build or change an app VM | `docs/runbooks/deploy-compose-app.md`, `templates/app-deploy/`, `playbooks/app.yml` |
 | Set up the local Proxmox host by hand | `docs/runbooks/proxmox-setup.md`, `tools/pve-setup.py` |

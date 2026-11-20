@@ -14,7 +14,7 @@
 		output stderr
 		format json
 		level INFO
-		exclude http.log.error.commsgun_ui http.log.error.private_zone http.handlers.reverse_proxy
+		exclude http.log.error.private_zone http.handlers.reverse_proxy
 	}
 	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
 	log redacted_requests {
@@ -25,7 +25,7 @@
 			wrap json
 		}
 		level INFO
-		include http.log.error.commsgun_ui http.log.error.private_zone http.handlers.reverse_proxy
+		include http.log.error.private_zone http.handlers.reverse_proxy
 	}
 }
 
@@ -384,85 +384,6 @@
 			max_size {{ body_limits.commsgun_enqueue }}
 		}
 		reverse_proxy 127.0.0.1:{{ commsgun_enqueue_port }}
-	}
-
-	handle {
-		respond "Not Found" 404
-	}
-}
-
-*.{{ magicdns_base_domain }} {
-	import acme ts.{{ acme_zone }}
-	import access_log tailnet
-	import deny_staging_vm
-	import tailnet_only
-
-	@status host {{ status_hostname }}
-	handle @status {
-		reverse_proxy 127.0.0.1:{{ gatus_port }}
-	}
-
-	@ntfy host {{ ntfy_hostname }}
-	handle @ntfy {
-		reverse_proxy 127.0.0.1:2586 {
-			flush_interval -1
-		}
-	}
-
-	@webhooks_ingest host {{ webhooks_ingest_hostname }}
-	handle @webhooks_ingest {
-		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
-		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
-	}
-
-	@commsgun_enqueue host {{ commsgun_enqueue_hostname }}
-	handle @commsgun_enqueue {
-		request_body {
-			max_size {{ body_limits.commsgun_enqueue }}
-		}
-		reverse_proxy 127.0.0.1:{{ commsgun_enqueue_port }}
-	}
-
-	# The dashboard keeps recipient addresses in its query (and so in Referer and redirects); its own logger drops all three.
-	log commsgun_ui {
-		hostnames {{ commsgun_ui_hostname }}
-		output file /var/log/caddy/commsgun-ui.access.log {
-			roll_size 50MiB
-			roll_keep 5
-			roll_keep_for 720h
-		}
-		format filter {
-			request>uri regexp \?.* ""
-			request>headers>Referer delete
-			resp_headers>Location delete
-			wrap json
-		}
-	}
-	# The dashboard derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
-	@commsgun_ui host {{ commsgun_ui_hostname }}
-	handle @commsgun_ui {
-		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
-	}
-
-	handle {
-		respond "Not Found" 404
-	}
-}
-
-# Tailnet-only (not in the cloud firewall): the staging environment's webhooks ingest, reached on its own port so staging never needs 443 for it.
-*.{{ magicdns_base_domain }}:{{ staging_edge_port }} {
-	import acme ts.{{ acme_zone }}
-	import access_log staging
-
-	@webhooks_ingest host {{ webhooks_ingest_hostname }}
-	handle @webhooks_ingest {
-		import tailnet_only
-		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
-		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
 	}
 
 	handle {
