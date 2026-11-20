@@ -43,6 +43,7 @@ class PortalZones(unittest.TestCase):
         self.assertEqual((V["public_zone"], V["private_zone"]), (f"public.{d}", f"private.{d}"))
         self.assertEqual(V["commsgun_ui_private_hostname"], f"commsgun.private.{d}")
         self.assertEqual(V["commsgun_enqueue_private_hostname"], f"comms.private.{d}")
+        self.assertEqual(V["status_private_hostname"], f"status.private.{d}")
         self.assertEqual(V["staging_portal_hostname"], f"xstockstrat-staging.public.{d}")
 
     def test_staging_portal_is_a_public_zone_twin_of_staging(self):
@@ -70,6 +71,7 @@ class PortalZones(unittest.TestCase):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
         self.assertIn("commsgun_ui_private_hostname", names)
         self.assertIn("commsgun_enqueue_private_hostname", names)
+        self.assertIn("status_private_hostname", names)
         check = re.search(r"_cert_check: >-\n(.*?)\n  block:", (ROOT / "roles/stack/tasks/main.yml").read_text(), re.S).group(1)
         self.assertIn("commsgun_ui_private_hostname", check)
 

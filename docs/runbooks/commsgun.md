@@ -100,7 +100,7 @@ Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admi
   `https://comms.ts.<domain>/healthz`,
   `https://commsgun.private.<domain>/healthz` and `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; none may
   return an HTTP status.
-- **Gatus.** `https://status.ts.<domain>`, group `edge`: `commsgun-api`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui` and
+- **Gatus.** `https://status.private.<domain>`, group `edge`: `commsgun-api`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui` and
   `commsgun-ui-private` are green.
 - **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.private.<domain>/v1/messages -d '{}'`
   (from the tailnet) prints `401`.
