@@ -44,6 +44,7 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["commsgun_ui_private_hostname"], f"commsgun.private.{d}")
         self.assertEqual(V["commsgun_enqueue_private_hostname"], f"comms.private.{d}")
         self.assertEqual(V["status_private_hostname"], f"status.private.{d}")
+        self.assertEqual(V["ntfy_private_hostname"], f"ntfy.private.{d}")
         self.assertEqual(V["staging_portal_hostname"], f"xstockstrat-staging.public.{d}")
 
     def test_staging_portal_is_a_public_zone_twin_of_staging(self):
@@ -67,11 +68,19 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(dns["nameservers"]["global"], [])
         self.assertIs(dns["override_local_dns"], False)
 
+    def test_ntfy_names_itself_by_its_private_name(self):
+        # iOS wake-ups hash base-url + topic, so an iOS subscriber must use exactly this name.
+        secrets = {k: "x" for k in ("ntfy_david_password_bcrypt", "ntfy_alerts_password_bcrypt", "ntfy_alerts_token")}
+        text = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(
+            (ROOT / "roles/stack/templates/ntfy-server.yml.j2").read_text()).render(**V, edge_secrets=secrets, ansible_managed="test")
+        self.assertEqual(yaml.safe_load(text)["base-url"], f"https://{V['ntfy_private_hostname']}")
+
     def test_private_name_gets_a_record_and_a_certificate_probe(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
         self.assertIn("commsgun_ui_private_hostname", names)
         self.assertIn("commsgun_enqueue_private_hostname", names)
         self.assertIn("status_private_hostname", names)
+        self.assertIn("ntfy_private_hostname", names)
         check = re.search(r"_cert_check: >-\n(.*?)\n  block:", (ROOT / "roles/stack/tasks/main.yml").read_text(), re.S).group(1)
         self.assertIn("commsgun_ui_private_hostname", check)
 

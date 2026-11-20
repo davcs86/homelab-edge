@@ -11,7 +11,8 @@ private_zone: "private.{{ domain }}"
 acme_email: davcs86@gmail.com
 status_hostname: "status.{{ magicdns_base_domain }}"   # legacy name; the heartbeat pushers on the home hosts still use it
 status_private_hostname: "status.{{ private_zone }}"
-ntfy_hostname: "ntfy.{{ magicdns_base_domain }}"
+ntfy_hostname: "ntfy.{{ magicdns_base_domain }}"       # legacy name; still served for subscribers not yet moved
+ntfy_private_hostname: "ntfy.{{ private_zone }}"       # ntfy's base-url: iOS subscribers must use exactly this name
 
 # ---------- DigitalOcean ----------
 do_region: sfo3

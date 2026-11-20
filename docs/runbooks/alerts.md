@@ -19,14 +19,16 @@ so a stopped headscale emails within ~15 min.
 
 ## ntfy on the phone (everything else)
 
-The phone must be on the tailnet (`ntfy.ts.natanddavehouse.com` is tailnet-only).
+The phone must be on the tailnet (`ntfy.private.natanddavehouse.com` is tailnet-only). Use exactly that name: it is ntfy's
+`base-url`, and an iOS wake-up only matches a subscription made under it. `ntfy.ts.natanddavehouse.com` still answers for
+Android subscribers that have not moved.
 
 1. Install **ntfy** (Play Store / F-Droid; iOS App Store).
-2. Settings → **Manage users** → add server `https://ntfy.ts.natanddavehouse.com`, user `david`, password
+2. Settings → **Manage users** → add server `https://ntfy.private.natanddavehouse.com`, user `david`, password
    `NTFY_DAVID_PASSWORD`.
-3. **+** → topic `homelab-alerts`, *Use another server* → `https://ntfy.ts.natanddavehouse.com`. Android: enable
+3. **+** → topic `homelab-alerts`, *Use another server* → `https://ntfy.private.natanddavehouse.com`. Android: enable
    *Instant delivery* and exempt the app from battery optimisation. iOS wakes via ntfy.sh (`upstream-base-url`).
 4. Test from an admin device:
-   `curl -u david -H "Title: test" -d "hello" https://ntfy.ts.natanddavehouse.com/homelab-alerts`
+   `curl -u david -H "Title: test" -d "hello" https://ntfy.private.natanddavehouse.com/homelab-alerts`
 
 Current probe states: `https://status.private.natanddavehouse.com` (Gatus).

@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'portal_host={{ staging_portal_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'portal_host={{ staging_portal_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" portal_host="" cgpriv_host="" cmpriv_host="" stpriv_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" portal_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -59,7 +59,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 gatus:8081; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 gatus:8081 ntfy:2586; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
   if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
 done
@@ -197,6 +197,13 @@ expect "private status page from the tailnet"  "200 gatus GET /"                
 expect "private status takes a heartbeat push" "200 gatus POST /api/v1/endpoints/home_x/external?success=true" "$(req "$stpriv_host" --interface "$tailnet_ip" -X POST "$t/api/v1/endpoints/home_x/external?success=true")"
 expect "staging VM denied on the private status page" "000"                       "$(req "$stpriv_host" --interface "$staging_vm_ip" "$t/")"
 expect "status page on its *.ts name still served" "200 gatus GET /"              "$(req "$status_host" --interface "$tailnet_ip" "https://$status_host/")"
+# ntfy under *.private, beside its *.ts name. ntfy accepts credentials in ?auth=, which the zone's logger must drop.
+n="https://$ntpriv_host"
+expect "private ntfy aborts publicly"          "000"                              "$(req "$ntpriv_host" "$n/v1/health")"
+expect "private ntfy from the tailnet"         "200 ntfy GET /v1/health"          "$(req "$ntpriv_host" --interface "$tailnet_ip" "$n/v1/health")"
+expect "private ntfy keeps the query upstream" "200 ntfy GET /homelab-alerts/json?poll=1&auth=canarycredential" "$(req "$ntpriv_host" --interface "$tailnet_ip" "$n/homelab-alerts/json?poll=1&auth=canarycredential")"
+expect "staging VM denied on the private ntfy" "000"                              "$(req "$ntpriv_host" --interface "$staging_vm_ip" "$n/v1/health")"
+expect "ntfy on its *.ts name still served"    "200 ntfy GET /v1/health"          "$(req "$ntfy_host" --interface "$tailnet_ip" "https://$ntfy_host/v1/health")"
 # Caddy matches hosts case-insensitively but picks a per-host logger by exact name: the whole zone must redact.
 mixed="C${cgpriv_host#c}"
 expect "private dashboard, mixed-case host"   "200 commsgun-ui GET /messages?recipient=canary@example.test" \
