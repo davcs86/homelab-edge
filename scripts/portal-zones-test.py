@@ -48,7 +48,7 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["webhooks_ingest_private_hostname"], f"webhooks.private.{d}")
         self.assertEqual(V["webhooks_mcp_public_hostname"], f"webhooks-mcp.public.{d}")
         self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.public.{d}")
-        self.assertEqual(V["staging_legacy_hostname"], f"xstockstrat-staging.{d}")
+        self.assertEqual(V["public_app_hostname"], f"xstockstrat.public.{d}")
 
     def test_staging_lives_under_the_public_zone_with_one_view_for_everyone(self):
         sites = {s["name"]: s for s in resolved_sites()}
@@ -57,7 +57,24 @@ class PortalZones(unittest.TestCase):
         self.assertIs(app["ui_public"], True)
         # No exemption for the staging VM and no tailnet bypass: the template drops the bypass for every zone entry.
         self.assertNotIn("isolate_staging_vm", app)
-        self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone")], ["xstockstrat-staging-portal", "webhooks-mcp-portal"])
+        self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone")], ["xstockstrat-portal", "xstockstrat-staging-portal", "webhooks-mcp-portal"])
+
+    def test_production_mimics_staging_under_the_public_zone(self):
+        sites = {s["name"]: s for s in resolved_sites()}
+        prod, staging = sites["xstockstrat-portal"], sites["xstockstrat-staging-portal"]
+        self.assertEqual((prod["hostname"], prod["upstream"]), (V["public_app_hostname"], V["app_tailnet_host"]))
+        self.assertEqual({k: prod[k] for k in prod if k not in ("name", "hostname", "upstream")},
+                         {k: staging[k] for k in staging if k not in ("name", "hostname", "upstream")})
+        # Production's former name was never used, so nothing is served for it: no redirect, no certificate.
+        self.assertNotIn("xstockstrat", sites)
+        self.assertNotIn("app_legacy_hostname", V)
+        self.assertNotIn(f"xstockstrat.{V['domain']}", [s["hostname"] for s in sites.values()])
+
+    def test_no_app_site_has_a_tailnet_bypass(self):
+        template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()
+        self.assertEqual([s["name"] for s in V["edge_sites"] if s["kind"] == "app" and "zone" not in s], [])
+        self.assertNotIn("@tailnet remote_ip", template)
+        self.assertNotIn("isolate_staging_vm", template)
 
     def test_the_webhooks_mcp_is_served_under_the_public_zone_beside_its_old_name(self):
         sites = {s["name"]: s for s in resolved_sites()}
@@ -67,10 +84,13 @@ class PortalZones(unittest.TestCase):
         for k in ("kind", "path", "port", "limits"):
             self.assertEqual(new[k], old[k], k)
 
-    def test_the_old_staging_name_only_redirects(self):
-        old = {s["name"]: s for s in resolved_sites()}["xstockstrat-staging"]
-        self.assertEqual(old, {"name": "xstockstrat-staging", "kind": "redirect", "hostname": V["staging_legacy_hostname"],
-                               "to": V["staging_public_hostname"]})
+    def test_the_apps_former_names_are_not_served(self):
+        hostnames = [s["hostname"] for s in resolved_sites()]
+        for old in ("xstockstrat", "xstockstrat-staging"):
+            self.assertNotIn(f"{old}.{V['domain']}", hostnames)
+        self.assertNotIn("staging_legacy_hostname", V)
+        self.assertEqual({s["kind"] for s in V["edge_sites"]}, {"app", "bearer_mcp"})
+        self.assertNotIn("redirect", (ROOT / "roles/stack/templates/Caddyfile.j2").read_text().replace("Referer and redirects", ""))
 
     def test_public_zone_names_get_no_split_horizon_record(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
@@ -78,7 +98,7 @@ class PortalZones(unittest.TestCase):
 
     def test_existing_names_are_unchanged(self):
         d = V["domain"]
-        self.assertEqual(V["public_app_hostname"], f"xstockstrat.{d}")
+        self.assertEqual(V["headscale_hostname"], f"hs.{d}")
         self.assertEqual(V["commsgun_ui_hostname"], f"commsgun.ts.{d}")
 
     def test_headscale_routes_the_private_zone_and_nothing_else(self):

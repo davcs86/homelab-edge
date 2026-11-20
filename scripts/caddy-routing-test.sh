@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -119,15 +119,16 @@ expect "token endpoint"                        "200 agent POST /oauth/token"    
 expect "authorize keeps query"                 "200 agent GET /oauth/authorize?x=1" "$(req "$app_host" "$u/agent/oauth/authorize?x=1")"
 expect "login page"                            "200 ui GET /auth/oauth-login"     "$(req "$app_host" "$u/auth/oauth-login")"
 expect "UI health probe path is public"        "200 ui GET /trader/api/health"    "$(req "$app_host" "$u/trader/api/health")"
-expect "UI health: POST is 404"                "404"                              "$(req "$app_host" -X POST "$u/trader/api/health")"
-expect "UI health: sibling API paths are 404"  "404"                              "$(req "$app_host" "$u/trader/api/other")"
+expect "UI health: POST reaches the UI"         "200 ui POST /trader/api/health"   "$(req "$app_host" -X POST "$u/trader/api/health")"
+expect "UI health: sibling API paths reach the UI" "200 ui GET /trader/api/other"   "$(req "$app_host" "$u/trader/api/other")"
 expect "static assets"                         "200 ui GET /_next/static/a.js"    "$(req "$app_host" "$u/_next/static/a.js")"
-expect "UI root is not public"                 "404"                              "$(req "$app_host" "$u/")"
-expect "arbitrary path is 404"                 "404"                              "$(req "$app_host" "$u/anything-else")"
+expect "UI root is public"                     "200 ui GET /"                     "$(req "$app_host" "$u/")"
+expect "arbitrary path reaches the UI"         "200 ui GET /anything-else"        "$(req "$app_host" "$u/anything-else")"
 expect "unauthenticated tool list is private"  "404"                              "$(req "$app_host" "$u/agent/api/tools")"
-expect "login page for UI is private"          "404"                              "$(req "$app_host" "$u/auth/login")"
-expect "GET on login API is 404"               "404"                              "$(req "$app_host" "$u/api/auth/login")"
-expect "prefix lookalike is 404"               "404"                              "$(req "$app_host" "$u/agentx")"
+expect "login page for UI is public"           "200 ui GET /auth/login"           "$(req "$app_host" "$u/auth/login")"
+expect "GET on login API reaches the UI"       "200 ui GET /api/auth/login"       "$(req "$app_host" "$u/api/auth/login")"
+expect "agent prefix lookalike reaches the UI, not the agent" "200 ui GET /agentx"    "$(req "$app_host" "$u/agentx")"
+expect "other agent paths are 404"             "404"                              "$(req "$app_host" "$u/agent/anything")"
 codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
 expect "login rate limit (5/min) triggers 429" "200 200 200 200 200 429" "$codes"
@@ -253,11 +254,6 @@ expect "prod login limit trips for a fresh client" "200 200 200 200 200 429" "$c
 expect "staging login limit is independent of prod" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.7 -X POST -d '{}' "$s/api/auth/login")"
 expect "unknown public-zone host is 404"       "404"                              "$(req "nope.${staging_host#*.}" "https://nope.${staging_host#*.}/")"
 expect "unknown public-zone host is 404 from the tailnet" "404"                   "$(req "nope.${staging_host#*.}" --interface "$tailnet_ip" "https://nope.${staging_host#*.}/")"
-# The app's former name only redirects, path and query kept; it reaches no upstream.
-redir() { curl -sk --noproxy "*" --max-time 5 --resolve "$legacy_host:443:127.0.0.1" -o /dev/null -w '%{http_code} %{redirect_url}' "$@" || true; }
-expect "old staging name redirects"            "308 https://$staging_host/trader?x=1" "$(redir "https://$legacy_host/trader?x=1")"
-expect "old staging name redirects POST /agent" "308 https://$staging_host/agent"  "$(redir -X POST "https://$legacy_host/agent")"
-expect "old staging name redirects tailnet clients" "308 https://$staging_host/"   "$(redir --interface "$tailnet_ip" "https://$legacy_host/")"
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
 expect "tailnet listener 404s other names"      "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
 expect "tailnet listener does not serve status"   "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
@@ -279,8 +275,10 @@ else
 fi
 
 expect "tailnet sees full UI"                  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
-expect "tailnet reaches agent tools"           "200 agent GET /api/tools"         "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"
-expect "tailnet bypasses login rate limit"     "200 ui POST /api/auth/login"      "$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login")"
+expect "prod tool catalog is private from the tailnet too" "404"                 "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
+expect "prod login limit applies to tailnet clients" "200 200 200 200 200 429"    "$codes"
 
 # Isolation: tailnet grants are per port, so the staging VM may reach 443; Caddy keeps its address off every site but its own.
 expect "staging VM denied on its own app over the tailnet" "000"                  "$(sreq --interface "$staging_vm_ip" "$s/trader")"

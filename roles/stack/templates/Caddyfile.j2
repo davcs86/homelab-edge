@@ -1,5 +1,5 @@
 # {{ ansible_managed }}
-# The only reverse proxy on the edge. Public surface: headscale, plus an allowlist on {{ public_app_hostname }}.
+# The only reverse proxy on the edge. Internet-facing: headscale and the *.{{ public_zone }} sites; *.{{ private_zone }} is tailnet-only.
 {
 	email {{ acme_email }}
 {% if acme_ca_url | default('') %}
@@ -261,24 +261,8 @@
 }
 
 {% macro app_body(site) %}
-{% if site.isolate_staging_vm | default(true) %}
 	import deny_staging_vm
-{% endif %}
 
-{% if site.zone is not defined %}
-	# Tailnet clients reach this name via the split-horizon extra record and get the full app.
-	@tailnet remote_ip {{ tailnet_v4_prefix }} {{ tailnet_v6_prefix }}
-	handle @tailnet {
-		@agent_any path /agent /agent/*
-		handle @agent_any {
-			import agent {{ site.upstream }}
-		}
-		handle {
-			import app_ui {{ site.upstream }}
-		}
-	}
-
-{% endif %}
 {% if site.ui_public | default(false) %}
 	# Internet: the whole UI plus the MCP/OAuth set from public_routes. Other /agent paths (incl. the unauthenticated /api/tools) stay tailnet-only.
 	handle {
@@ -333,12 +317,7 @@
 {{ site.hostname }} {
 	import acme {{ site.name }}.{{ acme_zone }}
 	import access_log {{ site.name }}
-{% if site.kind == 'redirect' %}
-	redir https://{{ site.to }}{uri} 308
-}
-{% else %}
 {{ app_body(site) if site.kind == 'app' else bearer_mcp_body(site) }}}
-{% endif %}
 
 {% endfor %}
 # One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.
