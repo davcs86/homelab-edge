@@ -41,33 +41,33 @@ class Gatus(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), keys)
 
     def test_xstockstrat_probes_follow_the_workload_tags_and_no_app_names_remain(self):
-        for name in ("xstockstrat-ui", "xstockstrat-agent", "xstockstrat-staging-ui", "xstockstrat-staging-agent"):
+        for name in ("xstockstrat-ui-vm", "xstockstrat-agent-vm", "xstockstrat-staging-ui-vm", "xstockstrat-staging-agent-vm"):
             self.assertIn(name, ENDPOINTS)
-            self.assertEqual(ENDPOINTS[name]["group"], "home")
+            self.assertEqual(ENDPOINTS[name]["group"], "machines")
         self.assertFalse([n for n in {*ENDPOINTS, *EXTERNAL} if n.startswith("app-")])
 
     def test_prod_and_staging_probe_their_own_node_on_the_same_ports(self):
         d = V["magicdns_base_domain"]
-        self.assertEqual(ENDPOINTS["xstockstrat-ui"]["url"], f"http://xstockstrat.{d}:3000/trader/api/health")
-        self.assertEqual(ENDPOINTS["xstockstrat-staging-ui"]["url"], f"http://xstockstrat-staging.{d}:3000/trader/api/health")
-        self.assertTrue(ENDPOINTS["xstockstrat-agent"]["url"].startswith(f"http://xstockstrat.{d}:9000/"))
-        self.assertTrue(ENDPOINTS["xstockstrat-staging-agent"]["url"].startswith(f"http://xstockstrat-staging.{d}:9000/"))
+        self.assertEqual(ENDPOINTS["xstockstrat-ui-vm"]["url"], f"http://xstockstrat.{d}:3000/trader/api/health")
+        self.assertEqual(ENDPOINTS["xstockstrat-staging-ui-vm"]["url"], f"http://xstockstrat-staging.{d}:3000/trader/api/health")
+        self.assertTrue(ENDPOINTS["xstockstrat-agent-vm"]["url"].startswith(f"http://xstockstrat.{d}:9000/"))
+        self.assertTrue(ENDPOINTS["xstockstrat-staging-agent-vm"]["url"].startswith(f"http://xstockstrat-staging.{d}:9000/"))
 
     def test_staging_is_probed_over_the_tailnet_resolver_like_prod(self):
-        for name in ("xstockstrat-ui", "xstockstrat-staging-ui", "xstockstrat-agent", "xstockstrat-staging-agent"):
+        for name in ("xstockstrat-ui-vm", "xstockstrat-staging-ui-vm", "xstockstrat-agent-vm", "xstockstrat-staging-agent-vm"):
             self.assertEqual(ENDPOINTS[name]["client"]["dns-resolver"], "udp://100.100.100.100:53", name)
 
     def test_ui_probes_require_the_health_json_and_never_follow_a_login_redirect(self):
-        for name in ("xstockstrat-ui", "xstockstrat-staging-ui"):
+        for name in ("xstockstrat-ui-vm", "xstockstrat-staging-ui-vm"):
             self.assertIs(ENDPOINTS[name]["client"].get("ignore-redirect"), True, name)
             self.assertIn("[STATUS] == 200", ENDPOINTS[name]["conditions"], name)
             self.assertIn("[BODY].status == ok", ENDPOINTS[name]["conditions"], name)
 
     def test_agent_probes_pin_each_environments_public_resource_url(self):
         self.assertIn(f"[BODY].resource == https://{V['public_app_hostname']}/agent",
-                      ENDPOINTS["xstockstrat-agent"]["conditions"])
+                      ENDPOINTS["xstockstrat-agent-vm"]["conditions"])
         self.assertIn(f"[BODY].resource == https://{V['staging_public_hostname']}/agent",
-                      ENDPOINTS["xstockstrat-staging-agent"]["conditions"])
+                      ENDPOINTS["xstockstrat-staging-agent-vm"]["conditions"])
 
     def test_staging_public_route_is_probed_from_the_internet_resolver(self):
         base = f"https://{V['staging_public_hostname']}"
@@ -111,6 +111,16 @@ class Gatus(unittest.TestCase):
             if host.endswith("." + V["magicdns_base_domain"]) and host not in machines:
                 on_ts.add(name)
         self.assertEqual(on_ts, self.LEGACY_TS_PROBES)
+
+    def test_probes_aimed_at_a_machine_are_marked_by_group_and_suffix(self):
+        machines = {v for k, v in V.items() if k.endswith("_tailnet_host")}
+        direct = {n for n, e in ENDPOINTS.items() if e["url"].split("//", 1)[1].split("/")[0].split(":")[0] in machines}
+        self.assertEqual(direct, {"xstockstrat-ui-vm", "xstockstrat-agent-vm", "xstockstrat-staging-ui-vm",
+                                  "xstockstrat-staging-agent-vm", "proxmox-host"})
+        self.assertEqual({n for n, e in ENDPOINTS.items() if e["group"] == "machines"}, direct)
+        for name in direct:
+            self.assertTrue(name.endswith(("-vm", "-host")), name)
+        self.assertEqual({e["group"] for e in CONFIG["external-endpoints"]}, {"home", "edge"})
 
     def test_services_with_a_portal_zone_probe_are_not_probed_twice(self):
         for old in ("commsgun-api", "commsgun-ui", "webhooks-mcp-requires-auth"):
