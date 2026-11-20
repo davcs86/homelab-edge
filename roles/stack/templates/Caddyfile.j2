@@ -76,7 +76,8 @@
 	}
 }
 
-# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every site except its own. First handle in its scope.
+# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every 443 name but the *.private ingest.
+# Import it before any handle the staging VM must not reach.
 (deny_staging_vm) {
 {% if staging_vm_ips | length > 0 %}
 	@staging_vm remote_ip {{ staging_vm_ips | join(' ') }}
@@ -359,11 +360,21 @@
 # Tailnet-only; the zone has no public DNS records, tailnet clients resolve it through headscale.
 *.{{ private_zone }} {
 	import acme private.{{ acme_zone }}
-	import deny_staging_vm
 	import tailnet_only
 
-	# The dashboard keeps recipient addresses in its query (and so in Referer and redirects). Per-host loggers match
-	# the exact lowercase name only, so the whole zone drops all three.
+	# Must stay between tailnet_only and deny_staging_vm: the ingest is the one name here the staging VM may reach.
+	@webhooks_ingest host {{ webhooks_ingest_private_hostname }}
+	handle @webhooks_ingest {
+		request_body {
+			max_size {{ body_limits.webhooks_ingest }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
+	}
+
+	import deny_staging_vm
+
+	# Queries here carry recipient addresses, ntfy credentials and webhook tokens (and so do Referer and redirects).
+	# Per-host loggers match the exact lowercase name only, so the whole zone drops all three.
 	log private_zone {
 		output file /var/log/caddy/private.access.log {
 			roll_size 50MiB

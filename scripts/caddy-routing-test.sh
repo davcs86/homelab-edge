@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -148,6 +148,14 @@ expect "webhooks ingest aborts publicly"       "000"                            
 expect "webhooks ingest from the tailnet"      "200 ingest POST /hooks"           "$(req "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
 expect "webhooks ingest body over 256 KiB"     "413"                              "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host/hooks")"
 expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
+# The MCP's name under *.public: the same single path, its own rate-limit counters.
+w3="https://$wmpub_host"
+expect "public-zone webhooks MCP endpoint"     "200 wmcp POST /mcp"               "$(req "$wmpub_host" -X POST -d '{}' "$w3/mcp")"
+expect "public-zone webhooks MCP root is 404"  "404"                              "$(req "$wmpub_host" "$w3/")"
+expect "public-zone webhooks MCP /hooks is 404" "404"                             "$(req "$wmpub_host" -X POST -d '{}' "$w3/hooks")"
+expect "public-zone webhooks MCP sub-path /mcp/x" "404"                           "$(req "$wmpub_host" -X POST -d '{}' "$w3/mcp/x")"
+expect "public-zone webhooks MCP from the tailnet" "200 wmcp POST /mcp"           "$(req "$wmpub_host" --interface "$tailnet_ip" -X POST -d '{}' "$w3/mcp")"
+expect "staging VM denied on the public-zone webhooks MCP" "000"                  "$(req "$wmpub_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w3/mcp")"
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 
@@ -282,6 +290,22 @@ expect "staging VM denied on webhooks MCP"     "000"                            
 expect "staging VM denied on the ingest (443)" "000"                              "$(req "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
 expect "staging VM denied on status"           "000"                              "$(req "$status_host" --interface "$staging_vm_ip" "https://$status_host/")"
 expect "staging VM denied on headscale"        "000"                              "$(req "$hs_host" --interface "$staging_vm_ip" "https://$hs_host/health")"
+# The ingest's *.private name: one URL on 443 for every environment. The staging VM is admitted on this name only.
+w2="https://$whpriv_host"
+expect "private ingest aborts publicly"        "000"                              "$(req "$whpriv_host" -X POST -d '{}' "$w2/hooks")"
+expect "private ingest from the tailnet"       "200 ingest POST /hooks/minted.x-1" "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$w2/hooks/minted.x-1")"
+expect "private ingest body over 256 KiB"      "413"                              "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$w2/hooks")"
+expect "private ingest body at exactly 256 KiB" "200 ingest POST /hooks"          "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$w2/hooks")"
+expect "staging VM reaches the private ingest on 443" "200 ingest POST /hooks"    "$(req "$whpriv_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w2/hooks")"
+expect "staging VM body over 256 KiB on the private ingest" "413"                 "$(req "$whpriv_host" --interface "$staging_vm_ip" -X POST --data-binary "@$work/big_ingest" "$w2/hooks")"
+expect "staging VM still denied on an unknown private name" "000"                 "$(req "nope.${whpriv_host#*.}" --interface "$staging_vm_ip" "https://nope.${whpriv_host#*.}/")"
+expect "private ingest keeps the query upstream" "200 ingest POST /hooks/n?token=canarytoken" "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$w2/hooks/n?token=canarytoken")"
+whpriv_on_8443="$(wreq "$whpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$w2:$staging_port/hooks")"
+if [[ "$whpriv_on_8443" =~ (ui|agent|ingest|wmcp|gatus|ntfy|commsgun) ]]; then
+  echo "FAIL  the private ingest name reached an upstream on the staging port: $whpriv_on_8443"; fail=1
+else
+  echo "PASS  the private ingest name reaches no upstream on the staging port"
+fi
 expect "staging VM reaches the ingest on 8443" "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
 expect "other tailnet nodes still reach prod"  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
 staging_on_8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$staging_host:$staging_port:127.0.0.1" "https://$staging_host:$staging_port/trader" || true)"

@@ -135,6 +135,19 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
+    def test_the_webhooks_mcp_public_zone_name_is_probed_for_401(self):
+        e = ENDPOINTS["webhooks-mcp-portal-requires-auth"]
+        self.assertEqual((e["group"], e["method"], e["url"]), ("public", "POST", f"https://{V['webhooks_mcp_public_hostname']}/mcp"))
+        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
+        self.assertEqual(e["conditions"], ["[STATUS] == 401"])
+
+    def test_the_private_ingest_name_is_probed_on_443_only(self):
+        e = ENDPOINTS["webhooks-ingest-private"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['webhooks_ingest_private_hostname']}/healthz", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+        self.assertNotIn("webhooks-ingest-staging-private", ENDPOINTS)
+
     def test_staging_is_probed_once_per_check_on_its_public_zone_name(self):
         self.assertNotIn("xstockstrat-staging-portal-ui-public", ENDPOINTS)
         for name in ("xstockstrat-staging-ui-public", "staging-mcp-oauth-metadata", "staging-mcp-requires-auth"):

@@ -80,8 +80,10 @@ body_limits:
 # ---------- Monitoring ----------
 ntfy_alert_topic: homelab-alerts
 gatus_port: 8081
-webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
-webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
+webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"                 # former name; served until the MCP clients are re-pointed
+webhooks_mcp_public_hostname: "webhooks-mcp.{{ public_zone }}"
+webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"   # legacy name; served until URLs minted under it have expired
+webhooks_ingest_private_hostname: "webhooks.{{ private_zone }}"   # the name in newly minted webhook URLs
 webhooks_mcp_port: 9100
 webhooks_ingest_port: 9101
 
@@ -123,6 +125,8 @@ edge_sites:
   - {name: xstockstrat-staging-portal, kind: app, hostname: "{{ staging_public_hostname }}", upstream: "{{ staging_tailnet_host }}",
      ui_public: true, zone: public}
   - {name: webhooks-mcp, kind: bearer_mcp, hostname: "{{ webhooks_mcp_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}", limits: webhooks_mcp}
+  - {name: webhooks-mcp-portal, kind: bearer_mcp, hostname: "{{ webhooks_mcp_public_hostname }}", path: /mcp, port: "{{ webhooks_mcp_port }}",
+     limits: webhooks_mcp, zone: public}
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
