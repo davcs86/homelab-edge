@@ -50,7 +50,7 @@ machines only: a new service is never added there, and a machine never gets a `*
 
 - `<service>.public.<domain>` (internet): an `edge_sites` entry with `zone: public`. Its Caddy handle inside the `*.public` site,
   and `tls-check` are generated from it (it gets no split-horizon record); add a Gatus probe. Any other name under the zone answers 404.
-- `<service>.private.<domain>` (tailnet-only): four places, as for a `*.ts` name (EDGE-07) — a hostname var, a `host` handle in the
+- `<service>.private.<domain>` (tailnet-only): four places (EDGE-07) — a hostname var, a `host` handle in the
   `*.private` site of `Caddyfile.j2`, the name in `_names` (`roles/tailscale/tasks/main.yml`), and a Gatus probe. The zone has no
   public DNS records; tailnet nodes resolve it through headscale's DNS route for the zone, so a node joined with
   `--accept-dns=false` cannot resolve it.
@@ -62,9 +62,7 @@ Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/grou
 and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (MCP and OAuth
 routes; `ui_public` also serves the whole UI; no tailnet bypass), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
 are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443, one URL for every
-environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`). `webhooks.ts.<domain>` is the legacy
-name, on 443 and on the tailnet-only 8443 listener (not in the firewall; its handle must keep `import tailnet_only`), served until the
-URLs minted under it have expired.
+environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`).
 A workload that must send email or SMS needs no route of its own: it POSTs to commsgun's tailnet-only enqueue name
 (`commsgun_enqueue_private_hostname`, `comms.private.<domain>`) with its own app key, over the `tag:edge:443` grant its tag already needs;
 register the app as in `docs/runbooks/commsgun.md` § 2.
@@ -77,7 +75,7 @@ that introduces it:
 3. deSEC: a `TXT` write policy for `<label>` on the existing ACME token —
    [`acme-token.md` § Add a name](acme-token.md#add-a-name-required-before-the-first-deploy-of-a-new-public-hostname).
 
-Skip step 3 and the deploy fails at the certificate check; a `*.ts`, `*.public` or `*.private` name needs none of the three.
+Skip step 3 and the deploy fails at the certificate check; a `*.public` or `*.private` name needs none of the three.
 
 Staging is `xstockstrat-staging.public.<domain>`, a `zone: public` entry: no DNS or token step, one view for every client, and the
 staging VM's `APP_URL` is set to it. The VM's tailnet address is denied on every 443 site, its own included, by `deny_staging_vm` (grants are per port,

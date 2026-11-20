@@ -19,8 +19,8 @@ _None open._
 
 ## Open questions (unresolved *why* — needs a maintainer)
 
-- `roles/stack/templates/Caddyfile.j2#log default` excludes logger `http.log.error.commsgun_ui`, tied by name to the
-  per-host `log commsgun_ui`. Should a rename be guarded beyond the canary in `caddy-routing-test.sh`? Status: **open**.
+- `roles/stack/templates/Caddyfile.j2#log default` excludes logger `http.log.error.private_zone`, tied by name to the
+  `*.private` site's `log private_zone`. Should a rename be guarded beyond the canary in `caddy-routing-test.sh`? Status: **open**.
 - Open markers: `TODO(provide)` ×1 (`inventories/prod/group_vars/all/main.yml#backup_host_known_hosts`; empty = trust
   on first use) and `TODO(verify)` ×2 (Anthropic egress allowlist: `roles/stack/templates/Caddyfile.j2`,
   `docs/decisions.md`). Status: **open** (owner-only, per `CLAUDE.md`).

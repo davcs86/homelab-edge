@@ -122,8 +122,8 @@ COMPOSE = yaml.safe_load(ENV.get_template("compose.yml.j2").render(**V, ansible_
 
 class Inventory(unittest.TestCase):
     def test_names_ports_and_body_cap(self):
-        d = V["magicdns_base_domain"]
-        self.assertEqual((V["commsgun_enqueue_hostname"], V["commsgun_ui_hostname"]), (f"comms.{d}", f"commsgun.{d}"))
+        d = V["private_zone"]
+        self.assertEqual((V["commsgun_enqueue_private_hostname"], V["commsgun_ui_private_hostname"]), (f"comms.{d}", f"commsgun.{d}"))
         self.assertEqual((V["commsgun_enqueue_port"], V["commsgun_ui_port"]), (9200, 9202))
         self.assertEqual(V["body_limits"]["commsgun_enqueue"], 262144)
 
@@ -138,8 +138,7 @@ class Inventory(unittest.TestCase):
 
     def test_both_names_get_split_horizon_records(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
-        self.assertIn("commsgun_enqueue_hostname", names)
-        self.assertIn("commsgun_ui_hostname", names)
+        self.assertIn("commsgun_enqueue_private_hostname", names)
         self.assertIn("commsgun_ui_private_hostname", names)
 
 

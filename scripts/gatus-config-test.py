@@ -88,23 +88,11 @@ class Gatus(unittest.TestCase):
             self.assertNotIn("ignore-redirect", e["client"], name)
             self.assertEqual(e["conditions"], ["[STATUS] == 200", "[BODY].status == ok", "[CERTIFICATE_EXPIRATION] > 336h"], name)
 
-    def test_the_legacy_ingest_name_keeps_the_tailnet_wildcard_expiry_check(self):
-        ing = ENDPOINTS["webhooks-ingest"]
-        self.assertEqual((ing["group"], ing["url"]), ("edge", f"https://{V['webhooks_ingest_hostname']}/healthz"))
-        self.assertEqual(ing["client"]["dns-resolver"], "udp://100.100.100.100:53")
-        self.assertEqual(ing["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
-
-    def test_the_staging_ingest_listener_is_probed_over_the_tailnet(self):
-        e = ENDPOINTS["webhooks-ingest-staging"]
-        self.assertEqual((e["group"], e["url"]), ("edge", f"https://{V['webhooks_ingest_hostname']}:{V['staging_edge_port']}/healthz"))
-        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
-        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
-
-    def test_the_tailnet_wildcard_certificate_expiry_is_probed(self):
-        wildcard = "." + V["magicdns_base_domain"]
-        probed = [n for n, e in ENDPOINTS.items() if e["url"].startswith("https://") and e["url"].split("/")[2].split(":")[0].endswith(wildcard)
-                  and "[CERTIFICATE_EXPIRATION] > 336h" in e["conditions"]]
-        self.assertTrue(probed)
+    def test_each_wildcard_certificate_has_an_expiry_check(self):
+        for zone in (V["public_zone"], V["private_zone"]):
+            probed = [n for n, e in ENDPOINTS.items() if e["url"].startswith("https://") and e["url"].split("/")[2].split(":")[0].endswith("." + zone)
+                      and "[CERTIFICATE_EXPIRATION] > 336h" in e["conditions"]]
+            self.assertTrue(probed, zone)
 
     def test_the_commsgun_backlog_is_probed_on_the_private_name(self):
         e = ENDPOINTS["commsgun-backlog"]
@@ -112,8 +100,8 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
-    # Probes still aimed at a *.ts service name. This list may only shrink; it empties when the *.ts wildcard is retired.
-    LEGACY_TS_PROBES = {"webhooks-ingest", "webhooks-ingest-staging"}
+    # Probes aimed at a *.ts service name. Empty since the *.ts services were retired; it must stay empty.
+    LEGACY_TS_PROBES = set()
 
     def test_no_probe_targets_a_ts_service_name_except_the_listed_ones(self):
         machines = {v for k, v in V.items() if k.endswith("_tailnet_host")}

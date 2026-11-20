@@ -7,13 +7,10 @@ Two containers on the edge, behind Caddy on tailnet-only names (no ACME work nee
 | Name | Container | Host port | Use |
 |---|---|---|---|
 | `comms.private.<domain>` (`commsgun_enqueue_private_hostname`) | `commsgun-api` | `127.0.0.1:9200` | apps POST `/v1/messages`; Gatus probes `/healthz`, `/healthz/backlog` |
-| `comms.ts.<domain>` (`commsgun_enqueue_hostname`) | `commsgun-api` | `127.0.0.1:9200` | legacy name of the same API, served until its callers have moved; not probed |
 | `commsgun.private.<domain>` (`commsgun_ui_private_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | read-only dashboard (its `ORIGIN`); `/healthz` for Gatus |
-| `commsgun.ts.<domain>` (`commsgun_ui_hostname`) | `commsgun-ui` | `127.0.0.1:9202` | the dashboard's former name; only `/healthz` answers; not probed |
 
 The dashboard answers `400 Bad origin` on every path except `/healthz` when the request's host is not its `ORIGIN`, so it is
-usable on one name at a time. `ORIGIN` is set in `roles/stack/tasks/main.yml` ("Commsgun dashboard environment"); to roll
-back to the `*.ts` name, point it at `commsgun_ui_hostname` and deploy.
+usable on one name at a time. `ORIGIN` is set in `roles/stack/tasks/main.yml` ("Commsgun dashboard environment").
 
 The admin port 9201 is never published. The service's own docs: `README.md` and `docs/superpowers/specs/` in
 `davcs86/commsgun`. Traps: `docs/decisions.md` § Known traps. Secret shapes: `secrets/README.md`.
@@ -97,8 +94,7 @@ Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admi
   answer means wait a minute; it does not prove the day limit.
 - **Unreachable from outside.** From a device off the tailnet (phone on mobile data, tailscale off):
   `curl -sS --max-time 10 -o /dev/null -w '%{http_code}\n' https://comms.private.<domain>/healthz` and the same for
-  `https://comms.ts.<domain>/healthz`,
-  `https://commsgun.private.<domain>/healthz` and `https://commsgun.ts.<domain>/healthz` print `000` or fail to resolve; none may
+  `https://commsgun.private.<domain>/healthz` print `000` or fail to resolve; neither may
   return an HTTP status.
 - **Gatus.** `https://status.private.<domain>`, group `edge`: `commsgun-api-private`, `commsgun-backlog` and `commsgun-ui-private` are green.
 - **Unauthenticated.** `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://comms.private.<domain>/v1/messages -d '{}'`
@@ -228,7 +224,5 @@ The containers log message ids only (no addresses, subjects or bodies):
 ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs --since 1h commsgun-api commsgun-ui'
 ```
 
-The dashboard host has its own Caddy access log, `/var/log/caddy/commsgun-ui.access.log` on the edge
-(`private.access.log` for its `*.private` name), with query strings,
-`Referer` and redirect `Location` removed (the dashboard's filters carry recipient addresses). The enqueue name logs to the
-shared tailnet access log like the other `*.ts` names.
+Both names log to the `*.private` site's Caddy access log, `/var/log/caddy/private.access.log` on the edge, with query strings,
+`Referer` and redirect `Location` removed (the dashboard's filters carry recipient addresses).
