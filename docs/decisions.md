@@ -104,6 +104,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **The status page is `status.private.<domain>`; `status.ts.<domain>` stays for the heartbeat pushers.** Gatus answers its page,
   API and `external` pushes identically under any hostname (checked against v5.37.0), so both names are served. The pushers on
   Proxmox and the DB host were installed by hand with the old name and pin the edge's address; they move when re-installed.
+- **Staging is `xstockstrat-staging.public.<domain>`, one view for every client.** No tailnet bypass, no exemption for the staging VM
+  and no split-horizon record: a `zone: public` app entry never gets them. The bypass existed so the UI's server could read the agent's
+  unauthenticated tool catalog through its public name, but that call resolves publicly inside the container and arrives as an
+  internet client (measured 2026-11-19), so it never used it; the fix is in xstockstrat. `xstockstrat-staging.<domain>` answers 308 to
+  the new name for browsers. Production keeps its bypass until it moves the same way.
 - **commsgun (email/SMS hub) takes authenticated writes from the tailnet only.** The enqueue route (`commsgun_enqueue_hostname`,
   `comms.ts.<domain>`, container port 9200) checks a per-app bearer key, but it sits in the `*.private` 443 site (and, as `comms.ts.<domain>`, still in the `*.ts` one) behind `import tailnet_only`
   and `deny_staging_vm`, and `scripts/caddy-routing-test.sh` pins that; a new route there must keep both. Runbook: `docs/runbooks/commsgun.md`.
@@ -178,7 +183,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   build); a re-registered VM keeps its old address in the rule until the next deploy. Public surface: back to 80, 443 and 3478.
   Staging keeps `tag:edge:8443`, now only the tailnet-only listener for its webhooks ingest (separate from prod's ingest on 443).
   Costs: the whole staging UI is internet-facing behind app auth alone, and `/agent/*` outside the MCP/OAuth set is 404 publicly because the
-  agent's `GET /api/tools` catalog is unauthenticated (the UI's server reads it over the tailnet). `general` is 3000 requests/min per IP.
+  agent's `GET /api/tools` catalog is unauthenticated (the UI's server asks for it through its public name and, arriving from the
+  internet, gets that 404: see "Staging is `xstockstrat-staging.public.<domain>`" above). `general` is 3000 requests/min per IP.
 - **A firewall port from a variable needs `| string`.** `ports: "{{ staging_edge_port }}"` (a rule since removed) rendered as an int, and the
   rule-comparison `json_query` `join()` accepts only strings, so the deploy died in `do_infra` before changing anything (run 20).
   Lint and `--syntax-check` do not render it; only a deploy does.

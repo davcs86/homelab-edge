@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'portal_host={{ staging_portal_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" portal_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -210,7 +210,7 @@ expect "private dashboard, mixed-case host"   "200 commsgun-ui GET /messages?rec
   "$(req "$mixed" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "https://$mixed/messages?recipient=canary@example.test")"
 expect "other *.ts name, with a query"         "200 ingest GET /hooks?keep=visible" "$(req "$ingest_host" --interface "$tailnet_ip" "https://$ingest_host/hooks?keep=visible")"
 
-# Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
+# Staging app: under the *.public wildcard, one view for every client. Mock upstreams are shared, so only routing and limits are asserted.
 # wreq reaches the tailnet-only listener on staging_port (the staging webhooks ingest).
 wreq() { # <host> <curl args...>: any name on the staging port
   local host="$1"; shift
@@ -232,8 +232,10 @@ expect "staging MCP endpoint"                  "200 agent POST /"               
 expect "staging root-inserted metadata"        "200 ui GET /.well-known/oauth-protected-resource/agent" "$(sreq "$s/.well-known/oauth-protected-resource/agent")"
 expect "staging token endpoint"                "200 agent POST /oauth/token"      "$(sreq -X POST "$s/agent/oauth/token")"
 expect "staging UI from the tailnet"           "200 ui GET /trader"               "$(sreq --interface "$tailnet_ip" "$s/trader")"
-expect "staging tailnet agent"                 "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
-expect "staging tailnet bypasses login limit"  "200 ui POST /api/auth/login"     "$(sreq --interface "$tailnet_ip" -X POST -d '{}' "$s/api/auth/login")"
+expect "staging tool catalog is private from the tailnet too" "404"               "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface "$tailnet_ip" -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
+expect "staging login limit applies to tailnet clients" "200 200 200 200 200 429" "$codes"
 codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface 127.0.0.4 -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
 expect "staging login rate limit (5/min) 429"  "200 200 200 200 200 429"          "$codes"
@@ -241,21 +243,13 @@ codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" --interface 127.0.0.7 -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
 expect "prod login limit trips for a fresh client" "200 200 200 200 200 429" "$codes"
 expect "staging login limit is independent of prod" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.7 -X POST -d '{}' "$s/api/auth/login")"
-# The staging app's second name, under the *.public wildcard: same routes, its own rate-limit counters.
-pu="https://$portal_host"
-preq() { req "$portal_host" "$@"; } # <curl args...>
-expect "portal public UI"                      "200 ui GET /trader"               "$(preq "$pu/trader")"
-expect "portal tool catalog is private"        "404"                              "$(preq "$pu/agent/api/tools")"
-expect "portal MCP endpoint"                   "200 agent POST /"                 "$(preq -X POST "$pu/agent")"
-expect "portal UI health probe path"           "200 ui GET /trader/api/health"    "$(preq "$pu/trader/api/health")"
-expect "portal tailnet agent"                  "200 agent GET /api/tools"         "$(preq --interface "$tailnet_ip" "$pu/agent/api/tools")"
-expect "staging VM reaches the portal"         "200 ui GET /trader"               "$(preq --interface "$staging_vm_ip" "$pu/trader")"
-codes=""
-for _ in 1 2 3 4 5 6; do codes+="$(preq --interface 127.0.0.8 -X POST -d '{}' "$pu/api/auth/login" | cut -c1-3) "; done
-expect "portal login rate limit (5/min) 429"   "200 200 200 200 200 429"          "$codes"
-expect "old staging name's limit is independent of the portal" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.8 -X POST -d '{}' "$s/api/auth/login")"
-expect "unknown public-zone host is 404"       "404"                              "$(req "nope.${portal_host#*.}" "https://nope.${portal_host#*.}/")"
-expect "unknown public-zone host is 404 from the tailnet" "404"                   "$(req "nope.${portal_host#*.}" --interface "$tailnet_ip" "https://nope.${portal_host#*.}/")"
+expect "unknown public-zone host is 404"       "404"                              "$(req "nope.${staging_host#*.}" "https://nope.${staging_host#*.}/")"
+expect "unknown public-zone host is 404 from the tailnet" "404"                   "$(req "nope.${staging_host#*.}" --interface "$tailnet_ip" "https://nope.${staging_host#*.}/")"
+# The app's former name only redirects, path and query kept; it reaches no upstream.
+redir() { curl -sk --noproxy "*" --max-time 5 --resolve "$legacy_host:443:127.0.0.1" -o /dev/null -w '%{http_code} %{redirect_url}' "$@" || true; }
+expect "old staging name redirects"            "308 https://$staging_host/trader?x=1" "$(redir "https://$legacy_host/trader?x=1")"
+expect "old staging name redirects POST /agent" "308 https://$staging_host/agent"  "$(redir -X POST "https://$legacy_host/agent")"
+expect "old staging name redirects tailnet clients" "308 https://$staging_host/"   "$(redir --interface "$tailnet_ip" "https://$legacy_host/")"
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
 expect "tailnet listener 404s other names"      "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
 expect "tailnet listener does not serve status"   "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
@@ -281,7 +275,7 @@ expect "tailnet reaches agent tools"           "200 agent GET /api/tools"       
 expect "tailnet bypasses login rate limit"     "200 ui POST /api/auth/login"      "$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login")"
 
 # Isolation: tailnet grants are per port, so the staging VM may reach 443; Caddy keeps its address off every site but its own.
-expect "staging VM reaches its own site"       "200 ui GET /trader"               "$(sreq --interface "$staging_vm_ip" "$s/trader")"
+expect "staging VM denied on its own app over the tailnet" "000"                  "$(sreq --interface "$staging_vm_ip" "$s/trader")"
 expect "staging VM denied on prod's site"      "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/trader")"
 expect "staging VM denied on prod's agent"     "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/agent/api/tools")"
 expect "staging VM denied on webhooks MCP"     "000"                              "$(req "$wmcp_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w/mcp")"
