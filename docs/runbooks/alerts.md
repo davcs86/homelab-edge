@@ -5,7 +5,7 @@ Two independent paths. Set up both: the second one rides on the edge it is watch
 | Path | Fires on | Reaches you via | Survives the edge being down |
 |---|---|---|---|
 | healthchecks.io | edge stops pinging for > grace: host down, or any compose service not running / unhealthy | email | yes |
-| ntfy | Gatus probes (headscale, public routes, `xstockstrat-ui`/`-agent`, `xstockstrat-staging-ui`/`-agent`, `webhooks-mcp-portal-requires-auth`, `webhooks-ingest-private`, the legacy `webhooks-ingest`/`-staging`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui-private`, Proxmox), silent heartbeats (Proxmox, DB host, nightly backup, pgBackRest backup), any failed edge unit | ntfy app on the phone | no (served by the edge, tailnet-only) |
+| ntfy | Gatus probes (headscale, public routes, the direct machine probes in group `machines`: `xstockstrat-ui-vm`/`-agent-vm`, `xstockstrat-staging-ui-vm`/`-agent-vm`, `proxmox-host`, `webhooks-mcp-portal-requires-auth`, `webhooks-ingest-private`, `commsgun-api-private`, `commsgun-backlog`, `commsgun-ui-private`), silent heartbeats (Proxmox, DB host, nightly backup, pgBackRest backup), any failed edge unit | ntfy app on the phone | no (served by the edge, tailnet-only) |
 
 ## healthchecks.io (edge dead-man)
 

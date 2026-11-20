@@ -212,8 +212,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 - **A failed play loses the handlers it had queued.** Ansible skips them, and the re-run finds the files already correct so it never
   queues them again; a policy file written by the failed run is then never loaded. After a failed deploy, a successful re-run must be
   followed by the reloads in `docs/runbooks/recovery.md` (headscale policy HUP, and Gatus if its files changed).
-- **Gatus endpoints are named after the workload tag, staging included.** `xstockstrat-ui`, `xstockstrat-staging-agent`, … in group
-  `home`, matching the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
+- **Gatus probes aimed straight at a machine are named after the workload tag plus `-vm`, staging included.** `xstockstrat-ui-vm`,
+  `xstockstrat-staging-agent-vm`, … and `proxmox-host`, in group `machines`: they are the only probes whose URL shows a `*.ts` name, and
+  the group and suffix say so on the status page and in alerts (owner, 2026-11-20). The pushed heartbeats stay in `home` (EDGE-10). The tag part matches the hostname rule below; the earlier `app-ui`/`app-agent` outlived the move from `tag:app`. Staging probes are always on and
   alert like prod, so the staging VM must be registered before the deploy that adds them.
 - **Linux nodes ignore extra records outside a DNS route.** systemd-resolved only sends routed zones to the tailnet resolver.
   Measured 2026-11-18 on the staging VM: `xstockstrat.<domain>` returned the reserved

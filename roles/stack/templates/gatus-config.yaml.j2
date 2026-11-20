@@ -164,8 +164,8 @@ endpoints:
       - "[STATUS] == 401"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-ui
-    group: home
+  - name: xstockstrat-ui-vm
+    group: machines
     url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
@@ -174,8 +174,8 @@ endpoints:
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-agent
-    group: home
+  - name: xstockstrat-agent-vm
+    group: machines
     url: http://{{ app_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
     interval: 1m
     <<: *tailnet
@@ -184,8 +184,8 @@ endpoints:
       - "[BODY].resource == https://{{ public_app_hostname }}/agent"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-staging-ui
-    group: home
+  - name: xstockstrat-staging-ui-vm
+    group: machines
     url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
@@ -194,8 +194,8 @@ endpoints:
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-staging-agent
-    group: home
+  - name: xstockstrat-staging-agent-vm
+    group: machines
     url: http://{{ staging_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
     interval: 1m
     <<: *tailnet
@@ -204,8 +204,8 @@ endpoints:
       - "[BODY].resource == https://{{ staging_public_hostname }}/agent"
     alerts: [{type: ntfy}]
 
-  - name: proxmox
-    group: home
+  - name: proxmox-host
+    group: machines
     url: tcp://{{ pve_tailnet_host }}:8006
     interval: 1m
     <<: *tailnet
