@@ -376,6 +376,19 @@
 		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
 	}
 
+	@status host {{ status_private_hostname }}
+	handle @status {
+		reverse_proxy 127.0.0.1:{{ gatus_port }}
+	}
+
+	@commsgun_enqueue host {{ commsgun_enqueue_private_hostname }}
+	handle @commsgun_enqueue {
+		request_body {
+			max_size {{ body_limits.commsgun_enqueue }}
+		}
+		reverse_proxy 127.0.0.1:{{ commsgun_enqueue_port }}
+	}
+
 	handle {
 		respond "Not Found" 404
 	}

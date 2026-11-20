@@ -538,7 +538,7 @@ def node_registered_as(host: str) -> bool:
 
 JOIN_CHECKLIST = """Next, from an admin device:
   - node-admin -> list-devices: the node is online, tagged tag:pve, no key expiry
-  - https://status.ts.<domain>: the proxmox probe turns green within a few minutes
+  - https://status.private.<domain>: the proxmox probe turns green within a few minutes
   - ssh root@<tailscale ip> works (after SSH hardening)"""
 
 
@@ -662,7 +662,7 @@ WantedBy=timers.target
 
 def heartbeat() -> None:
     """Install the guide's Proxmox heartbeat: health checks pushed to Gatus every minute."""
-    host = typer.prompt("Gatus host, e.g. status.ts.<domain>")
+    host = typer.prompt("Gatus host, e.g. status.private.<domain>")
     endpoint = typer.prompt("Gatus external endpoint key (<group>_<name>)", default="home_proxmox-heartbeat")
     seconds = ask_int("Push every N seconds", 10, 3600, 60)
     pool = ask_name("ZFS pool to watch", root_pool() or "rpool")
@@ -768,7 +768,7 @@ def db_heartbeat() -> None:
     """Install the DB host heartbeat into an LXC: pg_isready on PostgreSQL and PgBouncer, pgBackRest port, data disk; pushed to Gatus."""
     ct = choose_lxc("Container that runs PostgreSQL")
     vmid = ct["vmid"]
-    host = typer.prompt("Gatus host, e.g. status.ts.<domain>")
+    host = typer.prompt("Gatus host, e.g. status.private.<domain>")
     endpoint = typer.prompt("Gatus external endpoint key (<group>_<name>)", default="home_db-heartbeat")
     seconds = ask_int("Push every N seconds", 10, 3600, 300)
     check_host = typer.prompt("Address the local checks connect to (where PostgreSQL, PgBouncer and pgBackRest listen)", default="127.0.0.1").strip()

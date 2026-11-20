@@ -9,7 +9,8 @@ acme_zone: "acme.{{ domain }}"          # delegated to deSEC; holds only ACME TX
 public_zone: "public.{{ domain }}"
 private_zone: "private.{{ domain }}"
 acme_email: davcs86@gmail.com
-status_hostname: "status.{{ magicdns_base_domain }}"
+status_hostname: "status.{{ magicdns_base_domain }}"   # legacy name; the heartbeat pushers on the home hosts still use it
+status_private_hostname: "status.{{ private_zone }}"
 ntfy_hostname: "ntfy.{{ magicdns_base_domain }}"
 
 # ---------- DigitalOcean ----------
@@ -84,7 +85,8 @@ webhooks_mcp_port: 9100
 webhooks_ingest_port: 9101
 
 # ---------- commsgun (email/SMS delivery hub) ----------
-commsgun_enqueue_hostname: "comms.{{ magicdns_base_domain }}"
+commsgun_enqueue_hostname: "comms.{{ magicdns_base_domain }}"          # legacy name; callers move to the *.private one
+commsgun_enqueue_private_hostname: "comms.{{ private_zone }}"
 commsgun_ui_hostname: "commsgun.{{ magicdns_base_domain }}"            # former dashboard name; answers only /healthz (not the ORIGIN)
 commsgun_ui_private_hostname: "commsgun.{{ private_zone }}"   # the dashboard's ORIGIN
 commsgun_enqueue_port: 9200

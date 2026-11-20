@@ -29,4 +29,4 @@ The phone must be on the tailnet (`ntfy.ts.natanddavehouse.com` is tailnet-only)
 4. Test from an admin device:
    `curl -u david -H "Title: test" -d "hello" https://ntfy.ts.natanddavehouse.com/homelab-alerts`
 
-Current probe states: `https://status.ts.natanddavehouse.com` (Gatus).
+Current probe states: `https://status.private.natanddavehouse.com` (Gatus).

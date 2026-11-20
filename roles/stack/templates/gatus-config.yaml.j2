@@ -14,7 +14,7 @@ alerting:
     topic: {{ ntfy_alert_topic }}
     token: ${NTFY_TOKEN}
     priority: 4
-    click: https://{{ status_hostname }}
+    click: https://{{ status_private_hostname }}
     default-alert:
       failure-threshold: 3
       success-threshold: 2
@@ -116,6 +116,15 @@ endpoints:
   - name: commsgun-ui
     group: edge
     url: https://{{ commsgun_ui_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-api-private
+    group: edge
+    url: https://{{ commsgun_enqueue_private_hostname }}/healthz
     interval: 1m
     <<: *tailnet
     conditions:
