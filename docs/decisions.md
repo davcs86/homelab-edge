@@ -75,7 +75,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
 ## Known traps
 
 - **webhooks-mcp is the first custom-code service on the edge; its ingest side is unauthenticated by design.** Ingestion (container port 9101, host
-  `webhooks_ingest_hostname`, `webhooks.ts.<domain>`) has no auth and must stay tailnet-only. The `*.ts:8443` site (the staging environment's
+  `webhooks_ingest_private_hostname`, `webhooks.private.<domain>`, and the legacy `webhooks.ts.<domain>`) has no auth and must stay
+  tailnet-only. Newly minted URLs carry the `.private` name (`INGEST_BASE_URLS`); the service never reads the Host header, so URLs
+  minted earlier keep working on the legacy name until they expire. Each `:8443` site (the staging environment's
   ingest) is tailnet-only too and not in the firewall, but its ingest handle still sits behind `import tailnet_only`, and
   `scripts/caddy-routing-test.sh` pins that on 443 and 8443; a new route in that site must not copy the handle without it.
   - Only `/mcp` of the public host (`webhooks_mcp_hostname`) is proxied, to 9100, and it is protected by a static bearer key

@@ -105,8 +105,8 @@
     mode: "0600"
   vars:
     _ingest_base_urls:
-      default: "https://{{ webhooks_ingest_hostname }}"
-      staging: "https://{{ webhooks_ingest_hostname }}:{{ staging_edge_port }}"
+      default: "https://{{ webhooks_ingest_private_hostname }}"
+      staging: "https://{{ webhooks_ingest_private_hostname }}:{{ staging_edge_port }}"
   no_log: true
 
 # ---------- commsgun ----------

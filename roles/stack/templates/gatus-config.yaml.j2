@@ -95,6 +95,24 @@ endpoints:
       - "[STATUS] == 200"
     alerts: [{type: ntfy}]
 
+  - name: webhooks-ingest-private
+    group: edge
+    url: https://{{ webhooks_ingest_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: webhooks-ingest-staging-private
+    group: edge
+    url: https://{{ webhooks_ingest_private_hostname }}:{{ staging_edge_port }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
   - name: commsgun-api
     group: edge
     url: https://{{ commsgun_enqueue_hostname }}/healthz

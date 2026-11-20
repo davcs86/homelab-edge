@@ -81,7 +81,8 @@ body_limits:
 ntfy_alert_topic: homelab-alerts
 gatus_port: 8081
 webhooks_mcp_hostname: "webhooks-mcp.{{ domain }}"
-webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"
+webhooks_ingest_hostname: "webhooks.{{ magicdns_base_domain }}"   # legacy name; served until URLs minted under it have expired
+webhooks_ingest_private_hostname: "webhooks.{{ private_zone }}"   # the name in newly minted webhook URLs
 webhooks_mcp_port: 9100
 webhooks_ingest_port: 9101
 
