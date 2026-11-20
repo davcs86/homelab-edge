@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' 'comms_host={{ commsgun_enqueue_hostname }}' 'cgui_host={{ commsgun_ui_hostname }}' 'legacy_host={{ staging_legacy_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntfy_host={{ ntfy_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'wmpub_host={{ webhooks_mcp_public_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host=""
+app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host="" comms_host="" cgui_host="" legacy_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntfy_host="" ntpriv_host="" whpriv_host="" wmpub_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -148,6 +148,14 @@ expect "webhooks ingest aborts publicly"       "000"                            
 expect "webhooks ingest from the tailnet"      "200 ingest POST /hooks"           "$(req "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
 expect "webhooks ingest body over 256 KiB"     "413"                              "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host/hooks")"
 expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
+# The MCP's name under *.public: the same single path, its own rate-limit counters.
+w3="https://$wmpub_host"
+expect "public-zone webhooks MCP endpoint"     "200 wmcp POST /mcp"               "$(req "$wmpub_host" -X POST -d '{}' "$w3/mcp")"
+expect "public-zone webhooks MCP root is 404"  "404"                              "$(req "$wmpub_host" "$w3/")"
+expect "public-zone webhooks MCP /hooks is 404" "404"                             "$(req "$wmpub_host" -X POST -d '{}' "$w3/hooks")"
+expect "public-zone webhooks MCP sub-path /mcp/x" "404"                           "$(req "$wmpub_host" -X POST -d '{}' "$w3/mcp/x")"
+expect "public-zone webhooks MCP from the tailnet" "200 wmcp POST /mcp"           "$(req "$wmpub_host" --interface "$tailnet_ip" -X POST -d '{}' "$w3/mcp")"
+expect "staging VM denied on the public-zone webhooks MCP" "000"                  "$(req "$wmpub_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w3/mcp")"
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 

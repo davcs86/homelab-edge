@@ -46,6 +46,7 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["status_private_hostname"], f"status.private.{d}")
         self.assertEqual(V["ntfy_private_hostname"], f"ntfy.private.{d}")
         self.assertEqual(V["webhooks_ingest_private_hostname"], f"webhooks.private.{d}")
+        self.assertEqual(V["webhooks_mcp_public_hostname"], f"webhooks-mcp.public.{d}")
         self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.public.{d}")
         self.assertEqual(V["staging_legacy_hostname"], f"xstockstrat-staging.{d}")
 
@@ -56,7 +57,15 @@ class PortalZones(unittest.TestCase):
         self.assertIs(app["ui_public"], True)
         # No exemption for the staging VM and no tailnet bypass: the template drops the bypass for every zone entry.
         self.assertNotIn("isolate_staging_vm", app)
-        self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone")], ["xstockstrat-staging-portal"])
+        self.assertEqual([s["name"] for s in V["edge_sites"] if s.get("zone")], ["xstockstrat-staging-portal", "webhooks-mcp-portal"])
+
+    def test_the_webhooks_mcp_is_served_under_the_public_zone_beside_its_old_name(self):
+        sites = {s["name"]: s for s in resolved_sites()}
+        old, new = sites["webhooks-mcp"], sites["webhooks-mcp-portal"]
+        self.assertEqual((new["zone"], new["hostname"]), ("public", V["webhooks_mcp_public_hostname"]))
+        self.assertNotIn("zone", old)
+        for k in ("kind", "path", "port", "limits"):
+            self.assertEqual(new[k], old[k], k)
 
     def test_the_old_staging_name_only_redirects(self):
         old = {s["name"]: s for s in resolved_sites()}["xstockstrat-staging"]
