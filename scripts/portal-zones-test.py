@@ -50,7 +50,6 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["staging_public_hostname"], f"xstockstrat-staging.public.{d}")
         self.assertEqual(V["staging_legacy_hostname"], f"xstockstrat-staging.{d}")
         self.assertEqual(V["public_app_hostname"], f"xstockstrat.public.{d}")
-        self.assertEqual(V["app_legacy_hostname"], f"xstockstrat.{d}")
 
     def test_staging_lives_under_the_public_zone_with_one_view_for_everyone(self):
         sites = {s["name"]: s for s in resolved_sites()}
@@ -67,8 +66,10 @@ class PortalZones(unittest.TestCase):
         self.assertEqual((prod["hostname"], prod["upstream"]), (V["public_app_hostname"], V["app_tailnet_host"]))
         self.assertEqual({k: prod[k] for k in prod if k not in ("name", "hostname", "upstream")},
                          {k: staging[k] for k in staging if k not in ("name", "hostname", "upstream")})
-        self.assertEqual(sites["xstockstrat"], {"name": "xstockstrat", "kind": "redirect", "hostname": V["app_legacy_hostname"],
-                                                "to": V["public_app_hostname"]})
+        # Production's former name was never used, so nothing is served for it: no redirect, no certificate.
+        self.assertNotIn("xstockstrat", sites)
+        self.assertNotIn("app_legacy_hostname", V)
+        self.assertNotIn(f"xstockstrat.{V['domain']}", [s["hostname"] for s in sites.values()])
 
     def test_no_app_site_has_a_tailnet_bypass(self):
         template = (ROOT / "roles/stack/templates/Caddyfile.j2").read_text()

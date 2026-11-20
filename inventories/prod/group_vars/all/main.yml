@@ -8,7 +8,6 @@ acme_zone: "acme.{{ domain }}"          # delegated to deSEC; holds only ACME TX
 public_zone: "public.{{ domain }}"
 private_zone: "private.{{ domain }}"
 public_app_hostname: "xstockstrat.{{ public_zone }}"   # production's APP_URL
-app_legacy_hostname: "xstockstrat.{{ domain }}"        # only redirects to the name above
 acme_email: davcs86@gmail.com
 status_hostname: "status.{{ magicdns_base_domain }}"   # legacy name; the heartbeat pushers on the home hosts still use it
 status_private_hostname: "status.{{ private_zone }}"
@@ -121,7 +120,6 @@ commsgun_apps:
 # `zone: public`: served under the *.public wildcard, one view for every client. kind app: OAuth routes (+ the whole UI with `ui_public`);
 # bearer_mcp: one path behind a static key; redirect: 308 to `to`.
 edge_sites:
-  - {name: xstockstrat, kind: redirect, hostname: "{{ app_legacy_hostname }}", to: "{{ public_app_hostname }}"}
   - {name: xstockstrat-portal, kind: app, hostname: "{{ public_app_hostname }}", upstream: "{{ app_tailnet_host }}",
      ui_public: true, zone: public}
   - {name: xstockstrat-staging, kind: redirect, hostname: "{{ staging_legacy_hostname }}", to: "{{ staging_public_hostname }}"}
