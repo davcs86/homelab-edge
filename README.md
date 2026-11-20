@@ -6,43 +6,68 @@ public entry point into a homelab behind CGNAT. Everything is Ansible, run from 
 ```mermaid
 flowchart LR
   subgraph internet["internet"]
-    claude["Claude.ai"]
-    devices["devices"]
+    joining["devices joining<br/>the tailnet"]
+    clients["browsers, Claude.ai,<br/>MCP clients"]
   end
 
-  subgraph edge["edge-sfo3-01 (tag:edge)"]
-    caddy["Caddy<br/>only reverse proxy, DNS-01 certs"]
-    headscale["headscale :8080<br/>+ STUN 3478/udp"]
+  subgraph callers["tailnet sources"]
+    members["member devices<br/>laptop, phone"]
+    pushers["home machines<br/>db, pve: heartbeats<br/>staging: webhooks only"]
+  end
+
+  subgraph edge["edge-sfo3-01 (tag:edge) — public: 80, 443, 3478/udp"]
+    subgraph caddy["Caddy: the only reverse proxy, DNS-01 certificates"]
+      hs["hs.‹domain›"]
+      pub["*.public.‹domain›<br/>internet services"]
+      priv["*.private.‹domain›<br/>tailnet-only services"]
+    end
+    headscale["headscale<br/>+ DERP / STUN"]
+    wmcp["webhooks-mcp<br/>MCP :9100, ingest :9101"]
     gatus["Gatus"]
     ntfy["ntfy"]
+    commsgun["commsgun<br/>API :9200, dashboard :9202"]
+    repo["pgBackRest repo :8432"]
     backupjob["nightly age backup"]
   end
 
-  subgraph tailnet["tailnet (WireGuard, default-deny grants)"]
-    app["xstockstrat.ts… :3000 / :9000<br/>tag:xstockstrat"]
-    db["db.ts… :5432 / :6432 PgBouncer<br/>tag:db"]
+  subgraph home["home machines: *.ts.‹domain› (WireGuard, default-deny grants)"]
+    app["xstockstrat :3000 / :9000<br/>tag:xstockstrat"]
+    staging["xstockstrat-staging :3000 / :9000<br/>tag:xstockstrat-staging"]
+    db["db :5432 / :6432 PgBouncer<br/>tag:db"]
+    backuphost["backup<br/>tag:backup"]
     pve["pve<br/>tag:pve"]
-    backuphost["backup.ts…<br/>tag:backup"]
   end
 
-  claude -- "https xstockstrat.public.natanddavehouse.com" --> caddy
-  devices -- "https hs.natanddavehouse.com" --> caddy
-  devices -. "STUN 3478/udp" .-> headscale
-  caddy --> headscale
-  caddy --> app
-  caddy --- gatus
-  caddy --- ntfy
+  joining -- "https" --> hs
+  joining -. "STUN 3478/udp" .-> headscale
+  hs --> headscale
+
+  clients -- "xstockstrat.public<br/>xstockstrat-staging.public<br/>webhooks-mcp.public" --> pub
+  pub -- "/mcp, bearer key" --> wmcp
+  pub --> app
+  pub --> staging
+
+  members -- "status, ntfy, commsgun,<br/>comms, webhooks" --> priv
+  pushers -- "status.private<br/>webhooks.private" --> priv
+  priv -- "ingest" --> wmcp
+  priv --> gatus
+  priv --> ntfy
+  priv --> commsgun
+  gatus -- "alerts" --> ntfy
+
   app --> db
-  db <-- "pgBackRest TLS :8432" --> edge
-  pve -- "heartbeat" --> gatus
+  staging --> db
+  repo <-- "pgBackRest TLS" --> db
   backupjob -- "rsync / rrsync" --> backuphost
+  gatus -. "probe :8006" .-> pve
 ```
 
 Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
 (`tag:deploy` runners and admin devices). The apps are `xstockstrat.public.<domain>` and `xstockstrat-staging.public.<domain>` on 443: the whole UI plus the MCP and OAuth routes,
 behind per-IP rate limits, one view for every client (no tailnet bypass); other `/agent` paths, the unauthenticated tool catalog among
 them, are 404. Their former names `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served. Every 443 hostname is an entry in `edge_sites`.
-Two wildcard zones take new portals without any DNS or token registration: `<service>.public.<domain>` (internet) and `<service>.private.<domain>` (tailnet-only); see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
+Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by headscale; Caddy serves nothing there), `<service>.private.<domain>` is a tailnet-only service
+(status, ntfy, commsgun, the webhooks ingest) and `<service>.public.<domain>` an internet service, both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map
 
