@@ -97,6 +97,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   home-to-home call by service name travels through the edge. The machine zone keeps the name `ts` (renaming it would change every node's name at once: pgBackRest certificates,
   `known_hosts`, the apps' deploy and database addresses). The `*.ts` services still served are a fixed list in
   `scripts/portal-zones-test.py` that only shrinks. Sequence: `docs/superpowers/specs/2026-11-19-zone-split-design.md`.
+- **ntfy is `ntfy.private.<domain>`, and that is its `base-url`.** Publishing, polling and auth answer identically under any
+  hostname (checked against v2.28.0), so `ntfy.ts.<domain>` stays served for subscribers not yet moved. The name matters for iOS
+  only: the ntfy.sh wake-up carries a hash of `base-url` + topic, so an iOS subscription must be made under the `base-url` name.
+  ntfy accepts credentials in `?auth=`; the `*.private` site's logger drops queries, the `*.ts` one does not.
 - **The status page is `status.private.<domain>`; `status.ts.<domain>` stays for the heartbeat pushers.** Gatus answers its page,
   API and `external` pushes identically under any hostname (checked against v5.37.0), so both names are served. The pushers on
   Proxmox and the DB host were installed by hand with the old name and pin the edge's address; they move when re-installed.

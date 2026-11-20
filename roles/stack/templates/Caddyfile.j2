@@ -381,6 +381,13 @@
 		reverse_proxy 127.0.0.1:{{ gatus_port }}
 	}
 
+	@ntfy host {{ ntfy_private_hostname }}
+	handle @ntfy {
+		reverse_proxy 127.0.0.1:2586 {
+			flush_interval -1
+		}
+	}
+
 	@commsgun_enqueue host {{ commsgun_enqueue_private_hostname }}
 	handle @commsgun_enqueue {
 		request_body {
