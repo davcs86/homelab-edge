@@ -66,9 +66,27 @@ To correct when PR 6 touches the app sites: `docs/decisions.md` says "the UI's s
 | 5 | `webhooks` | own short design first: `INGEST_BASE_URLS`, already-minted URLs, the `:8443` staging listener | webhooks-mcp contracts | to be defined in that design |
 | 6 | Staging cutover | `staging_public_hostname` becomes the `.public` name, served without the tailnet bypass or a split-horizon record; the old name redirects; Gatus `resource` assertions follow | `APP_URL` in the xstockstrat repo; re-point the Claude.ai staging connector | connector completes OAuth and lists tools on the new name |
 | 7 | Production | `xstockstrat.public` with `ui_public: true`, same form as staging; the old name redirects | `APP_URL`; re-point the production connector; production node online | as PR 6, on production |
-| 8 | Retire `*.ts` services | remove the legacy routes, the `*.ts` Caddy sites and wildcard certificate, the `ts` ACME label | delete `_acme-challenge.ts` in Cloudflare and the `ts` deSEC policy | CI guard's legacy list is empty; nothing under `*.ts` is served by Caddy |
+| 8 | Move probes and pushers | `commsgun-backlog` moves to `comms.private`; the old-name duplicates `commsgun-api` and `commsgun-ui` are removed (their `-private` twins stay); a CI check that no Gatus probe targets a `*.ts` service name | owner re-installs the DB host's heartbeat pusher with `status.private` (`tools/pve-setup.py`); the Proxmox pusher, never installed, is installed with `status.private` from the start | `commsgun-backlog` green on the new name; `db-heartbeat` green after the re-install; no probe URL under `*.ts` except machines |
+| 9 | Retire `*.ts` services | remove the legacy routes, the `*.ts` Caddy sites and wildcard certificate, the `ts` ACME label | delete `_acme-challenge.ts` in Cloudflare and the `ts` deSEC policy | CI guard's legacy list is empty; nothing under `*.ts` is served by Caddy |
 
-Before PR 3 and PR 4: check that Gatus and ntfy answer correctly under a second hostname (unverified today).
+Before PR 3 and PR 4: check that Gatus and ntfy answer correctly under a second hostname (Gatus: checked 2026-11-20 against
+v5.37.0 — page, API and `external` pushes answer identically under either name; ntfy: unverified).
+
+## Probes and pushers on the old names
+
+Each migration adds a probe on the new name and keeps the old one, because the old route is still served. Before a
+`*.ts` service route is removed (PR 9), nothing may still depend on it:
+
+- **Gatus probes in this repo.** `commsgun-backlog` exists only on `comms.ts` and must move, or backlog alerting is lost.
+  `commsgun-api` and `commsgun-ui` are duplicates of their `-private` twins once the old routes go. `webhooks-ingest` and
+  `webhooks-ingest-staging` move with the webhooks step (PR 5).
+- **Heartbeat pushers on the home hosts** (`tools/pve-setup.py`, installed by hand): the DB host's pushes to `status.ts`
+  and must be re-installed with `status.private`; the Proxmox one was never installed (2026-11-20) and starts on the new
+  name. Endpoint names and groups do not change (EDGE-10) — only the hostname the pusher calls.
+- **Not affected:** the `nightly-backup` and `pgbackrest-backup` heartbeats run on the edge and push to Gatus locally.
+
+Precondition for PR 9: no Gatus probe and no pusher references a `*.ts` service name; the CI check from PR 8 enforces the
+probe half.
 
 ## PR 1 — zone rules (design)
 
