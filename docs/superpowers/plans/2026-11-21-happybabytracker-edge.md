@@ -18,9 +18,9 @@
 - Owner decisions for this plan (2026-11-21): who may reach the app is accepted as for the commsgun dashboard (every identity holding `tag:edge:443`; no policy or Caddy change; record it in `docs/decisions.md`); the SQLite snapshot runs as uid 10001 with the host's `sqlite3` via `setpriv`; the secret declarations land in the same PR and `fill_missing` is run on the PR branch; the VAPID key is generated and stored in SOPS only, not rendered (plan 6 adds the env line and its assert).
 - Invite and reset tokens travel in the URL path (`/invite/*`, `/reset/*`). Caddy's own private access log may keep them (owner-accepted). Tokens must never reach OTEL: no log shipper exists in this repo today (grep of `roles/`, `inventories/`, `playbooks/` on 2026-11-21 found none); any future one must scrub those paths. State this in the runbook and `decisions.md`.
 - `ansible`, `ansible-lint`, `yamllint` and `sops` may be absent in the authoring container (`pip install -r requirements.txt` gives the first three); `bcrypt` is needed by `scripts/init-secrets-test.py`. `scripts/caddy-routing-test.sh` and the real `init-secrets` run only in CI. Push and read the CI jobs for what cannot run locally. Docker may be present for `docker compose config`.
-- Commits end with the session's attribution trailers. One PR for this plan; the plan document itself merges first as a docs-only PR.
+- Commits end with the session's attribution trailers. One PR for this plan: the plan document travels in it (the PR opened for the plan carries the plan and its implementation).
 
-## Open values (proposals — the owner confirms at plan review; none is final until confirmed)
+## Open values (confirmed by the owner on 2026-11-21: every row as proposed, except row 7, which is deferred)
 
 | # | Value | Proposal | Used in |
 |---|---|---|---|
@@ -30,11 +30,11 @@
 | 4 | Backup times and jitter | `OnCalendar=*-*-* 00,12:00:00 UTC` (design: owner), keep `RandomizedDelaySec=10m` | Task 5 |
 | 5 | Heartbeat interval for `edge_nightly-backup` | `14h` (12 h cycle + 2 h slack), name unchanged | Task 5 |
 | 6 | Archive retention | local `backup_local_retention_days: 7` unchanged (14 archives); remote retention on the backup host is the owner's policy and is not set by this repo | Task 5 |
-| 7 | `backup_host_known_hosts` (`TODO(provide)`) | the rsync now carries health data: provide the `ssh-keyscan` output, or explicitly defer in the PR | Task 5 |
+| 7 | `backup_host_known_hosts` (`TODO(provide)`) | **deferred**: no value was provided, so the `TODO(provide)` marker stays and the rsync keeps `StrictHostKeyChecking=accept-new`; the PR and the runbook say so. The rsync now carries health data: the owner supplies the `ssh-keyscan` output later | Task 5 |
 | 8 | Data volume ownership | rely on the image (`COPY --chown=10001:10001` + `VOLUME /data`), as commsgun does; no pre-chown task | Task 4 |
 | 9 | Compose limits | API `96m`, UI `192m`, API `stop_grace_period: 30s`, no `request_body` cap on the Caddy handle | Task 3, 4 |
 | 10 | Gatus probes | `happybabytracker-ui-private` (`/healthz`) and `happybabytracker-api-private` (`/healthz/api`), group `edge`, `1m`, ntfy alerts, `[CERTIFICATE_EXPIRATION] > 336h` on the UI probe only | Task 3 |
-| 11 | Memory headroom | declared limits grow 736m → 1024m on a 2 GB droplet; measure `free -m` and `docker stats --no-stream` on the droplet first and proceed if at least 400 MiB is available after adding | Task 0 |
+| 11 | Memory headroom | declared limits grow 736m → 1024m on a 2 GB droplet; measure `free -m` and `docker stats --no-stream` on the droplet first and proceed if at least 400 MiB is available after adding. **Measured 2026-11-21** (DigitalOcean monitoring, last 7 days, ~25-minute samples): 1962 MiB total, 1237 MiB available at the worst sample, so about 949 MiB would remain with both new limits fully used; threshold met | Task 0 |
 | 12 | Bump cron | `"59 15 * * *"` (after webhooks-mcp 15:23 and commsgun 15:41) | Task 2 |
 | 13 | Names | `happybabytracker_ui_private_hostname`, `happybabytracker_ui_port: 9212`, `happybabytracker_api_image`, `happybabytracker_ui_image`; services `happybabytracker-api` / `-ui`; network `happybabytracker`; volume `happybabytracker-data`; env dir `{{ edge_root }}/happybabytracker/` | all |
 | 14 | Timer re-arm | an explicit `systemctl restart edge-backup.timer` when the unit changes (not determined whether `daemon_reload` alone re-arms a running timer) | Task 5 |
@@ -70,10 +70,10 @@
 
 The owner does these; the implementer asks for the output and pastes it in the PR description.
 
-- [ ] **Step 1: Confirm every row of Open values** (change any that are wrong before Task 1 starts).
-- [ ] **Step 2: Measure memory on the droplet** (row 11): `free -m` and `docker stats --no-stream`; report available MiB. Stop and ask if under 400 MiB.
-- [ ] **Step 3: `backup_host_known_hosts`** (row 7): provide the value, or write "deferred" in the PR.
-- [ ] **Step 4: Confirm the packages stay public** — verified on 2026-11-21 (anonymous token, HTTP 200 on both manifests); nothing to do unless that changes.
+- [x] **Step 1: Confirm every row of Open values** — done by the owner on 2026-11-21 (row 7 deferred).
+- [x] **Step 2: Measure memory on the droplet** (row 11) — done via the DigitalOcean monitoring API (see row 11); a `free -m` during a backup run is optional.
+- [x] **Step 3: `backup_host_known_hosts`** (row 7) — deferred; say "deferred" in the PR description.
+- [x] **Step 4: Confirm the packages stay public** — verified on 2026-11-21 (anonymous token, HTTP 200 on both manifests); nothing to do unless that changes.
 
 ---
 
