@@ -15,7 +15,7 @@
     state: directory
     mode: "0700"
 
-# Exists only so the nightly drill can decrypt without the offline key; it protects data that already
+# Exists only so the restore drill can decrypt without the offline key; it protects data that already
 # lives in plaintext on this host, so it adds no exposure.
 - name: Restore-test identity
   ansible.builtin.command: age-keygen -o /etc/edge-backup/restore-test.agekey
@@ -69,7 +69,7 @@
 
 - name: Say why the backup host has no local name yet
   ansible.builtin.debug:
-    msg: "{{ backup_tailnet_hostname }} is not a tailnet node yet; nightly backups fail until it joins and deploy runs again"
+    msg: "{{ backup_tailnet_hostname }} is not a tailnet node yet; backups fail until it joins and deploy runs again"
   when: _backup_ipv4 | length == 0
 
 - name: Scripts

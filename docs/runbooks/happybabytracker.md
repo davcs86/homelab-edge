@@ -40,7 +40,10 @@ Before the deploy, in this repository:
    parent is refused, and an API that finds one at start refuses to start. Commit and get it merged to `main`
    before step 3; the deploy does not see a value that is only in your working copy or on an unmerged branch.
 3. **Deploy.** Run **Actions → deploy** (`tailnet`). Merging the PR that brought the code deployed nothing. The stack role
-   starts the containers under `--wait`, so a bad secret or a username that collides with a parent fails there. If the deploy
+   starts the containers under `--wait`, but the API has no healthcheck and runs `restart: unless-stopped`, so a bad secret or a
+   username that collides with a parent makes the API refuse to start and crash-loop while the deploy may still pass. After the
+   deploy, check `curl http://127.0.0.1:9212/healthz/api` from the edge, the Gatus probe `happybabytracker-api-private`, and
+   `sudo docker compose -f /opt/edge/compose.yml logs happybabytracker-api`. If the deploy
    fails anywhere in the stack role, follow `docs/runbooks/recovery.md` § "After a deploy that failed part-way" before
    re-running. On the first deploy Gatus may alert once for the two happybabytracker probes and then resolve: they start before
    the deploy writes the split-horizon record for the name.
@@ -80,7 +83,7 @@ printing them (this prints each key's length and whether it holds a forbidden ch
 ```sh
 for k in happybabytracker_admin_username happybabytracker_admin_password happybabytracker_internal_api_token; do
   printf '%s: ' "$k"
-  sops decrypt --extract "[\"$k\"]" secrets/edge.sops.yaml | python3 -c 'import sys; v = sys.stdin.read().removesuffix("\n"); print(len(v), "characters;", "BAD (quote, backslash or line break)" if any(c in v for c in "\x27\\\r\n") else "no forbidden character")'
+  sops decrypt --extract "[\"$k\"]" secrets/edge.sops.yaml | python3 -c 'import sys; v = sys.stdin.read(); print(len(v), "characters;", "BAD (quote, backslash or line break)" if any(c in v for c in "\x27\\\r\n") else "no forbidden character")'
 done
 ```
 
@@ -173,6 +176,7 @@ ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs --since 
 Invite and reset tokens travel in the URL path (`/invite/<token>`, `/reset/<token>`). The `*.private` site's Caddy access log,
 `/var/log/caddy/private.access.log`, drops query strings, `Referer` and redirect `Location` but keeps the path, so it holds
 those tokens until the active file reaches 50 MiB and its rolled copy ages out (`roll_keep_for` 720 hours; at most 5 rolled copies). The owner accepted that: a token works once and expires in 72 hours
-(invite) or 1 hour (reset). Nothing is shipped from the edge to OTEL: no log shipper exists in `roles/`, `inventories/` or
+(invite) or 1 hour (reset). Caddy's `redacted_requests` logger also keeps the path for `http.handlers.reverse_proxy` and `http.log.error.private_zone` entries
+and writes it to stderr, so the tokens are in the Docker `local` log (10 MiB, 3 files) of the `caddy` container as well. Nothing is shipped from the edge to OTEL: no log shipper exists in `roles/`, `inventories/` or
 `playbooks/`. Whoever adds one must scrub `/invite/*` and `/reset/*` before anything is exported, because the app's own rule
 is that those tokens never reach OTEL.

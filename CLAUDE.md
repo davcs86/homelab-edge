@@ -29,7 +29,7 @@ No exceptions for small or obvious tasks — honoring the letter while dodging t
 # homelab edge — CLAUDE.md
 
 Ansible (run from GitHub Actions) for one DigitalOcean droplet: headscale + embedded DERP/STUN, Caddy as the only
-public entry point, Gatus, ntfy, nightly age backups, a pgBackRest repo. Human overview: `README.md`.
+public entry point, Gatus, ntfy, twice-daily age backups, a pgBackRest repo. Human overview: `README.md`.
 
 ## Rules
 
@@ -66,7 +66,7 @@ Read only the row that matches the task.
 | Backup host, Proxmox heartbeat, app VM | `docs/runbooks/home-side.md` |
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | `docs/runbooks/db-host.md`, `playbooks/db.yml` |
 | Add a workload (tag, grants, shared Postgres, staging route) | `docs/runbooks/onboard-service.md` |
-| Bumping or adding a pin, including the bot-opened webhooks-mcp and commsgun digest bumps | `docs/versions.md` |
+| Bumping or adding a pin, including the bot-opened webhooks-mcp, commsgun and happybabytracker digest bumps | `docs/versions.md` |
 | Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C9) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | Deploy, configure or operate happybabytracker (family tracker): admin and parents, secret rotation, restore | `docs/runbooks/happybabytracker.md` |

@@ -27,8 +27,9 @@ sudo docker compose -f /opt/edge/compose.yml start happybabytracker-api happybab
 curl -fsS http://127.0.0.1:9212/healthz/api
 ```
 
-The three old files are moved aside together, not deleted, so the restore can be undone: the `-wal` and `-shm` belong to the
-database being replaced and, renamed to `*.pre-restore`, the API no longer sees them beside the restored file. Once the
+The three old files are moved aside together, not deleted: the `-wal` and `-shm` belong to the database being replaced and,
+renamed to `*.pre-restore`, the API no longer sees them beside the restored file. To undo the restore, stop both containers,
+`mv` the three `*.pre-restore` files back over their names, and start them again. Once the
 health check passes and you can sign in, remove them (only then; they are the only copy of anything
 written since the archive):
 
@@ -36,9 +37,19 @@ written since the archive):
 sudo sh -c 'rm -f "${1:?}"/*.pre-restore' sh "$V"
 ```
 
+Run that cleanup before restoring a second time: otherwise the `mv` overwrites the earlier `*.pre-restore` files, which are the
+only copy of anything written since the archive.
+
 The `chown` is needed because the API runs as uid 10001 and cannot open a file that belongs to root. The `curl` prints the
 API's health through the UI's host port (retry after a few seconds if the API is still starting). The restored copy is as old
 as the archive: parents created and passwords changed since then are lost.
+
+Last, remove the decrypted database (it is health data) from the edge, where you ran the commands above in `david_admin`'s
+home, and from your workstation (delete what `tar -x` extracted there, `happybabytracker/` included):
+
+```sh
+rm -f ./happybabytracker.db
+```
 
 ## Stack missing after a reboot
 
@@ -46,7 +57,7 @@ as the archive: parents created and passwords changed since then are lost.
 container's state/exit code/restart count, the Docker journal of the last three boots, OOM kills, unattended-upgrades
 and dead-man history, and headscale's start/error lines. If the runner cannot join the tailnet, use break glass below.
 
-Security updates that need a reboot apply at 04:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
+Security updates that need a reboot apply at 03:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
 only when `/var/run/reboot-required` exists.
 
 ## After a deploy that failed part-way

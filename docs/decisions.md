@@ -151,6 +151,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - The database is in the archive, unlike commsgun's queue (which is transient by decision): it holds the family's records. The timer runs at
     00:00 and 12:00 UTC; the Gatus heartbeat keeps its name `nightly-backup` (EDGE-10: pushers call that URL) with a 14 h interval. `edge-backup` fails the whole
     run, headscale included, when `happybabytracker.db` is missing from the volume; the app creates it at its first start.
+    The owner moved the reboot window from 04:00 to 03:00 America/Los_Angeles, because 04:00 is 12:00 UTC in winter and met the second backup.
   - **The snapshot runs as the app's uid 10001, through a private bind mount.** The API opens its database as 10001 with `cap_drop: ALL`; a
     root-run `sqlite3 .backup` would leave a root-owned `-wal` or `-shm` in the app's data directory and could stop the API opening the database.
     Docker's data root is `0710 root:root` and `volumes/<name>` is `0701` by default (this repo changes neither), so no uid, gid and group list can
@@ -165,7 +166,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - `happybabytracker_vapid_private_key` is generated and kept in SOPS but not rendered into `api.env`: the pinned app does not read it yet. The app's
     reminder and Web Push release adds the env line and its assert. A changed key invalidates every push subscription, so `fill_missing` never replaces it.
   - Invite and reset tokens travel in the URL path, so `private.access.log` (path kept, query dropped) holds them until the active file reaches 50 MiB and its rolled copy ages out (720 h, at most 5 rolled copies); the owner accepted that,
-    as each works once and expires in 72 h or 1 h. No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
+    as each works once and expires in 72 h or 1 h. Caddy's `redacted_requests` logger keeps the path too and writes to stderr, so the tokens also sit in the `caddy` container's Docker `local` log (10 MiB, 3 files). No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
     rule is that those tokens never reach OTEL.
   - The two image pins move together: `bump-happybabytracker` proposes a pair only when both images carry the same revision label.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the

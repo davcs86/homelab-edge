@@ -345,7 +345,7 @@ class Compose(unittest.TestCase):
         self.assertFalse([p for p in published if "9201" in str(p)])
 
     def test_own_network_shared_with_nobody_else(self):
-        self.assertIn("commsgun", COMPOSE["networks"])
+        self.assertEqual(COMPOSE["networks"]["commsgun"], {})
         for name, svc in self.S.items():
             if name.startswith("commsgun-"):
                 self.assertEqual(svc["networks"], ["commsgun"], name)
