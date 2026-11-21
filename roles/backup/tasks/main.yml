@@ -88,7 +88,7 @@
     - name: edge-backup.service
       content: |
         [Unit]
-        Description=Encrypted headscale backup to the home backup host, then restore drill
+        Description=Encrypted headscale and happybabytracker backup to the home backup host, then restore drill
         Wants=network-online.target
         After=network-online.target docker.service tailscaled.service
         OnFailure=edge-notify@%n.service
@@ -106,7 +106,7 @@
     - name: edge-backup.timer
       content: |
         [Unit]
-        Description=Nightly headscale backup
+        Description=Headscale and happybabytracker backup
 
         [Timer]
         OnCalendar={{ backup_schedule }}
@@ -117,6 +117,7 @@
         WantedBy=timers.target
   loop_control:
     label: "{{ item.name }}"
+  register: _backup_units
 
 - name: Enable backup timer
   ansible.builtin.systemd_service:
@@ -124,6 +125,13 @@
     enabled: true
     state: started
     daemon_reload: true
+
+- name: Restart the backup timer when its unit changed
+  ansible.builtin.systemd_service:
+    name: edge-backup.timer
+    state: restarted
+    daemon_reload: true
+  when: _backup_units.results | selectattr('item.name', 'equalto', 'edge-backup.timer') | map(attribute='changed') | first
 
 - name: Public key to authorise on the backup host (forced to rrsync)
   ansible.builtin.debug:

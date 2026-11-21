@@ -123,12 +123,12 @@ edge_sites:
      limits: webhooks_mcp, zone: public}
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
-heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
+heartbeat_backup_interval: 14h      # twice-daily backup + drill pushes on success
 heartbeat_pgbackrest_interval: 26h  # the edge pushes after each daily full/differential
 heartbeat_db_interval: 11m          # DB host pushes every 5 min
 
 # ---------- Backups ----------
-backup_schedule: "*-*-* 03:17:00 UTC"
+backup_schedule: "*-*-* 00,12:00:00 UTC"
 reboot_schedule: "*-*-* 04:00:00 America/Los_Angeles"   # only when /var/run/reboot-required exists
 backup_local_retention_days: 7
 backup_remote_user: edge-backup                         # account on the backup host, forced to rrsync
