@@ -6,8 +6,28 @@ Archives (`edge-<UTC>.tar.age`) are on the backup host and in `/var/backups/edge
 **offline** backup key: `age -d -i backup edge-….tar.age | tar -x` → `headscale/{db.sqlite,noise_private.key,derp_server_private.key,…}`.
 On the edge: `docker compose -f /opt/edge/compose.yml stop headscale`, copy `db.sqlite` and both keys into
 `/var/lib/docker/volumes/edge_headscale-data/_data/`, start headscale. The noise key is what lets existing clients
-reconnect without re-registering. The nightly job already restores every archive into a network-less scratch
-headscale and compares nodes and noise key with production; a failure alerts via ntfy.
+reconnect without re-registering. Each backup run (twice a day) already restores its archive into a network-less scratch
+headscale and compares nodes and noise key with production, and checks the archived happybabytracker database with
+`PRAGMA integrity_check`; a failure alerts via ntfy.
+
+## Restore happybabytracker
+
+Decrypt the same archive with the **offline** key (`age -d -i backup edge-….tar.age | tar -x`): the database is
+`happybabytracker/happybabytracker.db`. Copy it to `david_admin`'s home on the edge, then run there:
+
+```sh
+sudo docker compose -f /opt/edge/compose.yml stop happybabytracker-ui happybabytracker-api
+V=/var/lib/docker/volumes/edge_happybabytracker-data/_data
+sudo rm -f "$V"/happybabytracker.db "$V"/happybabytracker.db-wal "$V"/happybabytracker.db-shm
+sudo cp ./happybabytracker.db "$V"/
+sudo chown 10001:10001 "$V"/happybabytracker.db
+sudo docker compose -f /opt/edge/compose.yml start happybabytracker-api happybabytracker-ui
+curl -fsS http://127.0.0.1:9212/healthz/api
+```
+
+The old `-wal` and `-shm` belong to the database being replaced, so they must go. The API runs as uid 10001, so the file
+must belong to 10001 or it cannot open it. The last command prints the API's health through the UI's host port (retry after a few seconds if the API is still starting). The restored
+copy is as old as the archive: parents created and passwords changed since then are lost.
 
 ## Stack missing after a reboot
 
