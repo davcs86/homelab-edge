@@ -132,6 +132,21 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
         self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
 
+    def test_the_happybabytracker_name_is_probed_over_the_tailnet(self):
+        host = V["happybabytracker_ui_private_hostname"]
+        for name, path, conditions in (("happybabytracker-ui-private", "/healthz", ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"]),
+                                       ("happybabytracker-api-private", "/healthz/api", ["[STATUS] == 200"])):
+            e = ENDPOINTS[name]
+            self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{host}{path}", "1m"), name)
+            self.assertEqual(e["conditions"], conditions, name)
+            self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53", name)
+            self.assertEqual(e["alerts"], [{"type": "ntfy"}], name)
+        self.assertNotIn("happybabytracker_api_port", V)
+
+    def test_no_probe_targets_healthz_reminders(self):
+        # /healthz/reminders does not exist until the reminder worker ships.
+        self.assertEqual([n for n, e in ENDPOINTS.items() if "/healthz/reminders" in e["url"]], [])
+
     def test_alerts_link_to_the_status_page_under_the_private_zone(self):
         self.assertEqual(CONFIG["alerting"]["ntfy"]["click"], f"https://{V['status_private_hostname']}")
 

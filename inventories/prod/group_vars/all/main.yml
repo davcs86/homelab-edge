@@ -108,6 +108,10 @@ commsgun_apps:
       email: {per_minute: 2, per_day: 5}
       sms: {per_minute: 5, per_day: 50}
 
+# ---------- happybabytracker (tailnet-only family tracker; the API is never published) ----------
+happybabytracker_ui_private_hostname: "happybaby.{{ private_zone }}"   # the UI's ORIGIN
+happybabytracker_ui_port: 9212
+
 # Public hostnames on 443, all under the *.public wildcard certificate, one view for every client. `name`: rate-limit zone prefix.
 # kind app: MCP and OAuth routes (+ the whole UI with `ui_public`); bearer_mcp: one path behind a static key.
 edge_sites:
@@ -119,13 +123,13 @@ edge_sites:
      limits: webhooks_mcp, zone: public}
 # Gatus raises an alert when a pusher is silent for longer than its interval.
 heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
-heartbeat_backup_interval: 26h      # nightly backup + drill pushes on success
+heartbeat_backup_interval: 14h      # twice-daily backup + drill pushes on success
 heartbeat_pgbackrest_interval: 26h  # the edge pushes after each daily full/differential
 heartbeat_db_interval: 11m          # DB host pushes every 5 min
 
 # ---------- Backups ----------
-backup_schedule: "*-*-* 03:17:00 UTC"
-reboot_schedule: "*-*-* 04:00:00 America/Los_Angeles"   # only when /var/run/reboot-required exists
+backup_schedule: "*-*-* 00,12:00:00 UTC"
+reboot_schedule: "*-*-* 02:00:00 America/Los_Angeles"   # only when /var/run/reboot-required exists
 backup_local_retention_days: 7
 backup_remote_user: edge-backup                         # account on the backup host, forced to rrsync
 backup_remote_path: headscale                           # relative to that account's rrsync root
