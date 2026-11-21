@@ -164,7 +164,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     comment above the commsgun block claiming `fail_msg` is printed does not hold there). The runbook's first-deploy section says how to find the key.
   - `happybabytracker_vapid_private_key` is generated and kept in SOPS but not rendered into `api.env`: the pinned app does not read it yet. The app's
     reminder and Web Push release adds the env line and its assert. A changed key invalidates every push subscription, so `fill_missing` never replaces it.
-  - Invite and reset tokens travel in the URL path, so `private.access.log` (path kept, query dropped) holds them for up to 720 h; the owner accepted that,
+  - Invite and reset tokens travel in the URL path, so `private.access.log` (path kept, query dropped) holds them until the active file reaches 50 MiB and its rolled copy ages out (720 h, at most 5 rolled copies); the owner accepted that,
     as each works once and expires in 72 h or 1 h. No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
     rule is that those tokens never reach OTEL.
   - The two image pins move together: `bump-happybabytracker` proposes a pair only when both images carry the same revision label.

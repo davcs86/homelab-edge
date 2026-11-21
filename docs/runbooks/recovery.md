@@ -18,16 +18,27 @@ Decrypt the same archive with the **offline** key (`age -d -i backup edge-….ta
 ```sh
 sudo docker compose -f /opt/edge/compose.yml stop happybabytracker-ui happybabytracker-api
 V=/var/lib/docker/volumes/edge_happybabytracker-data/_data
-sudo rm -f "$V"/happybabytracker.db "$V"/happybabytracker.db-wal "$V"/happybabytracker.db-shm
+for f in happybabytracker.db happybabytracker.db-wal happybabytracker.db-shm; do
+  if sudo test -e "$V/$f"; then sudo mv "$V/$f" "$V/$f.pre-restore"; fi
+done
 sudo cp ./happybabytracker.db "$V"/
 sudo chown 10001:10001 "$V"/happybabytracker.db
 sudo docker compose -f /opt/edge/compose.yml start happybabytracker-api happybabytracker-ui
 curl -fsS http://127.0.0.1:9212/healthz/api
 ```
 
-The old `-wal` and `-shm` belong to the database being replaced, so they must go. The API runs as uid 10001, so the file
-must belong to 10001 or it cannot open it. The last command prints the API's health through the UI's host port (retry after a few seconds if the API is still starting). The restored
-copy is as old as the archive: parents created and passwords changed since then are lost.
+The three old files are moved aside together, not deleted, so the restore can be undone: the `-wal` and `-shm` belong to the
+database being replaced and, renamed to `*.pre-restore`, the API no longer sees them beside the restored file. Once the
+health check passes and you can sign in, remove them (only then; they are the only copy of anything
+written since the archive):
+
+```sh
+sudo sh -c 'rm -f "${1:?}"/*.pre-restore' sh "$V"
+```
+
+The `chown` is needed because the API runs as uid 10001 and cannot open a file that belongs to root. The `curl` prints the
+API's health through the UI's host port (retry after a few seconds if the API is still starting). The restored copy is as old
+as the archive: parents created and passwords changed since then are lost.
 
 ## Stack missing after a reboot
 

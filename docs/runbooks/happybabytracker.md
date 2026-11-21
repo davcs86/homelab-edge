@@ -172,7 +172,7 @@ ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs --since 
 
 Invite and reset tokens travel in the URL path (`/invite/<token>`, `/reset/<token>`). The `*.private` site's Caddy access log,
 `/var/log/caddy/private.access.log`, drops query strings, `Referer` and redirect `Location` but keeps the path, so it holds
-those tokens for up to 720 hours (5 files of 50 MiB). The owner accepted that: a token works once and expires in 72 hours
+those tokens until the active file reaches 50 MiB and its rolled copy ages out (`roll_keep_for` 720 hours; at most 5 rolled copies). The owner accepted that: a token works once and expires in 72 hours
 (invite) or 1 hour (reset). Nothing is shipped from the edge to OTEL: no log shipper exists in `roles/`, `inventories/` or
 `playbooks/`. Whoever adds one must scrub `/invite/*` and `/reset/*` before anything is exported, because the app's own rule
 is that those tokens never reach OTEL.
