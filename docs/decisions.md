@@ -151,7 +151,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - The database is in the archive, unlike commsgun's queue (which is transient by decision): it holds the family's records. The timer runs at
     00:00 and 12:00 UTC; the Gatus heartbeat keeps its name `nightly-backup` (EDGE-10: pushers call that URL) with a 14 h interval. `edge-backup` fails the whole
     run, headscale included, when `happybabytracker.db` is missing from the volume; the app creates it at its first start.
-    The owner moved the reboot window from 04:00 to 03:00 America/Los_Angeles, because 04:00 is 12:00 UTC in winter and met the second backup.
+    Timers in UTC (PST/PDT): the headscale and happybabytracker backup runs at 00:00 and 12:00 (plus 0 to 10 min of jitter), pgBackRest full and differential at 03:00 Los Angeles (11:00/10:00), and the reboot window at 02:00 Los Angeles (10:00/09:00). The old 04:00 Los Angeles reboot was 12:00 UTC in winter and met the second backup, and 03:00 would have met pgBackRest, so the owner chose 02:00.
   - **The snapshot runs as the app's uid 10001, through a private bind mount.** The API opens its database as 10001 with `cap_drop: ALL`; a
     root-run `sqlite3 .backup` would leave a root-owned `-wal` or `-shm` in the app's data directory and could stop the API opening the database.
     Docker's data root is `0710 root:root` and `volumes/<name>` is `0701` by default (this repo changes neither), so no uid, gid and group list can

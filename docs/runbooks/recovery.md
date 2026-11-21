@@ -29,8 +29,19 @@ curl -fsS http://127.0.0.1:9212/healthz/api
 
 The three old files are moved aside together, not deleted: the `-wal` and `-shm` belong to the database being replaced and,
 renamed to `*.pre-restore`, the API no longer sees them beside the restored file. To undo the restore, stop both containers,
-`mv` the three `*.pre-restore` files back over their names, and start them again. Once the
-health check passes and you can sign in, remove them (only then; they are the only copy of anything
+`mv` any of the three `*.pre-restore` files that exist (the `-wal` and `-shm` copies often do not) back over their names, and
+start them again:
+
+```sh
+sudo docker compose -f /opt/edge/compose.yml stop happybabytracker-ui happybabytracker-api
+sudo rm -f "$V"/happybabytracker.db-wal "$V"/happybabytracker.db-shm
+for f in happybabytracker.db happybabytracker.db-wal happybabytracker.db-shm; do
+  if sudo test -e "$V/$f.pre-restore"; then sudo mv "$V/$f.pre-restore" "$V/$f"; fi
+done
+sudo docker compose -f /opt/edge/compose.yml start happybabytracker-api happybabytracker-ui
+```
+
+Once the health check passes and you can sign in, remove them (only then; they are the only copy of anything
 written since the archive):
 
 ```sh
@@ -57,7 +68,7 @@ rm -f ./happybabytracker.db
 container's state/exit code/restart count, the Docker journal of the last three boots, OOM kills, unattended-upgrades
 and dead-man history, and headscale's start/error lines. If the runner cannot join the tailnet, use break glass below.
 
-Security updates that need a reboot apply at 03:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
+Security updates that need a reboot apply at 02:00 America/Los_Angeles (`edge-reboot.timer`, `reboot_schedule`),
 only when `/var/run/reboot-required` exists.
 
 ## After a deploy that failed part-way
