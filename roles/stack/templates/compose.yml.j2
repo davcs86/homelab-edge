@@ -126,8 +126,36 @@ services:
       timeout: 5s
       retries: 3
 
+  # Never publish 9210: only the UI, on this network, may reach the API.
+  happybabytracker-api:
+    <<: *hardening
+    image: {{ happybabytracker_api_image }}
+    read_only: true
+    env_file: [./happybabytracker/api.env]
+    volumes:
+      - happybabytracker-data:/data
+    networks: [happybabytracker]
+    mem_limit: 96m
+    stop_grace_period: 30s
+
+  happybabytracker-ui:
+    <<: *hardening
+    image: {{ happybabytracker_ui_image }}
+    read_only: true
+    ports: ["127.0.0.1:{{ happybabytracker_ui_port }}:9212"]
+    env_file: [./happybabytracker/ui.env]
+    networks: [happybabytracker]
+    depends_on: [happybabytracker-api]
+    mem_limit: 192m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9212/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   commsgun: {}
+  happybabytracker: {}
 
 volumes:
   headscale-data:
@@ -138,3 +166,4 @@ volumes:
   ntfy-data:
   webhooks-data:
   commsgun-data:
+  happybabytracker-data:

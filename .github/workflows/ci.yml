@@ -48,6 +48,10 @@ jobs:
         env:
           COMMSGUN_TEST_REQUIRE_DOCKER: "1"
         run: python3 scripts/commsgun-config-test.py
+      - name: Happybabytracker env files (read back by docker compose), assertions and compose services
+        env:
+          HAPPYBABYTRACKER_TEST_REQUIRE_DOCKER: "1"
+        run: python3 scripts/happybabytracker-config-test.py
       - name: No plaintext secrets in secrets/
         run: |
           for f in secrets/*.sops.yaml; do
