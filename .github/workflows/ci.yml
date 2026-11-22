@@ -114,6 +114,7 @@ jobs:
             --build-arg CADDY_BUILDER_IMAGE="$(grep '^caddy_builder_image:' $v | cut -d'"' -f2)" \
             --build-arg CADDY_RUNTIME_IMAGE="$(grep '^caddy_runtime_image:' $v | cut -d'"' -f2)" \
             --build-arg CADDY_VERSION="$(grep '^caddy_version:' $v | cut -d'"' -f2)" \
+            --build-arg CADDY_GO_TOOLCHAIN="$(grep '^caddy_go_toolchain:' $v | awk '{print $2}')" \
             --build-arg CADDY_DNS_DESEC_VERSION="$(grep '^caddy_dns_desec_version:' $v | awk '{print $2}')" \
             --build-arg CADDY_RATELIMIT_COMMIT="$(grep '^caddy_ratelimit_commit:' $v | awk '{print $2}')" \
             -t edge-caddy:ci roles/stack/files/caddy

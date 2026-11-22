@@ -39,6 +39,7 @@ services:
         CADDY_BUILDER_IMAGE: {{ caddy_builder_image }}
         CADDY_RUNTIME_IMAGE: {{ caddy_runtime_image }}
         CADDY_VERSION: "{{ caddy_version }}"
+        CADDY_GO_TOOLCHAIN: {{ caddy_go_toolchain }}
         CADDY_DNS_DESEC_VERSION: {{ caddy_dns_desec_version }}
         CADDY_RATELIMIT_COMMIT: {{ caddy_ratelimit_commit }}
     # Host networking: real client IPs for rate limits and tailnet matching, and a route to 100.64.0.0/10.

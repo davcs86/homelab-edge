@@ -394,3 +394,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   filled, and every deploy failed with the misleading `install: cannot change permissions of '/opt/<app>/releases/<rel>'`. After a healthy
   `up`, `prune_images` removes digest-pinned local images of repositories that a kept release names, unless the newest `image_keep` (2)
   releases, `current` or the previous release name that digest; a rollback reaches only those, older releases re-pull from GHCR. An empty keep set removes nothing; in-use images survive because `docker image rm` refuses them.
+- **The Caddy builder image's Go does not follow Caddy's patch releases.** `caddy:<ver>-builder` bundles whatever Go its tag was cut with
+  (1.26.5 even in 2.11.9), and `xcaddy` compiles that Go's stdlib into the binary, so bumping `caddy_builder_image` alone left six HIGH
+  stdlib findings in the shipped Caddy. The build now sets `GOTOOLCHAIN` to `caddy_go_toolchain`; Go downloads and checksum-verifies that
+  toolchain at build time, so the build needs the Go module proxy. The `edge-caddy` tag is `caddy_version-<ratelimit commit>`, so a change to
+  `caddy_go_toolchain` alone does not change the tag: bump `caddy_version` or build with `--no-cache` for the new toolchain to take effect.
+- **ntfy upgrades are one-way without a manual step.** v2.31.1 moved the message database schema from 16 to 17 and v2.32.0 records the
+  oldest schema each version still reads; going back to an older ntfy needs `UPDATE schema_version SET version = <n>` first (the v2.31.1
+  release notes give the statement). Daily usage counters also restart at the v2.38.0 upgrade, which only matters with visitor limits.
