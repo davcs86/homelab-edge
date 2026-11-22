@@ -21,9 +21,9 @@ _None open._
 
 - `roles/stack/templates/Caddyfile.j2#log default` excludes logger `http.log.error.private_zone`, tied by name to the
   `*.private` site's `log private_zone`. Should a rename be guarded beyond the canary in `caddy-routing-test.sh`? Status: **open**.
-- Open markers: `TODO(provide)` ×1 (`inventories/prod/group_vars/all/main.yml#backup_host_known_hosts`; empty = trust
-  on first use) and `TODO(verify)` ×2 (Anthropic egress allowlist: `roles/stack/templates/Caddyfile.j2`,
-  `docs/decisions.md`). Status: **open** (owner-only, per `CLAUDE.md`).
+- Open markers: `TODO(verify)` ×2 (Anthropic egress allowlist: `roles/stack/templates/Caddyfile.j2`,
+  `docs/decisions.md`). Status: **open** (owner-only, per `CLAUDE.md`). The `TODO(provide)` on
+  `inventories/prod/group_vars/all/main.yml#backup_host_known_hosts` is resolved: the backup VM's host key is pinned.
 - verify now requires `GET /trader/api/health` = 200, so the daily run also fails while the prod app is offline (run 46
   saw 502), whereas `POST /agent` tolerates 502. Is "app down fails verify" intended, or should this path accept "not
   404" like `/agent`? Status: **open** (owner).

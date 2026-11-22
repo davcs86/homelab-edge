@@ -347,6 +347,13 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.
   The backup role does the same for `backup`: the nightly `rsync` over ssh died with "Could not resolve hostname backup.ts…" (verify run 39),
   and it fails the same way while `backup` is not a registered tailnet node (the deploy then says so).
+- **The backup host is a Proxmox VM on a quota-bound stopgap dataset, and it prunes itself.** No SATA disk was free (only an M.2 slot and
+  OCuLink), so the archive disk is a 16G vdisk on `rpool/data/backup-stopgap` (quota 20G; a 20G image inside a 20G quota would fail when full).
+  That shares the Proxmox pool's failure domain; it still leaves the droplet (7 days in `/var/backups/edge`) as the independent copy, and `qm disk move`
+  onto a dedicated disk changes nothing else. The edge's key is forced to `rrsync -wo`, so it cannot delete: retention lives on the VM
+  (`edge-backup-prune`, 14 days) with a floor of the newest 7 archives, because an age-only rule would empty the directory after 14 days
+  of silence from the edge. The host key is pinned (`StrictHostKeyChecking=yes`), so a rebuilt VM needs its new key in `backup_host_known_hosts`. The
+  pgBackRest repository is not copied to this host; it lives only on the edge.
 - **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
