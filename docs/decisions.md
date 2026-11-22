@@ -382,6 +382,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   (`edge-backup-prune`, 14 days) with a floor of the newest 14 archives (7 days at two backups a day), because an age-only rule would empty the directory after 14 days
   of silence from the edge. The host key is pinned (`StrictHostKeyChecking=yes`), so a rebuilt VM needs its new key in `backup_host_known_hosts`. The
   pgBackRest repository is not copied to this host; it lives only on the edge.
+- **`pve-setup.py vm-create` cannot make a disk smaller than its template.** The Disk size prompt runs `qm resize`, which only grows; the
+  template `tpl-debian13` is 32G, so answering 8G failed after the clone, the config and the tags had already succeeded. Keep the clone
+  and skip the resize (the plan's offered undo destroys a good VM), or answer at least the template's size (the default is 40G).
 - **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
