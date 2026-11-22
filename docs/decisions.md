@@ -379,7 +379,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   OCuLink), so the archive disk is a 16G vdisk on `rpool/data/backup-stopgap` (quota 20G; a 20G image inside a 20G quota would fail when full).
   That shares the Proxmox pool's failure domain; it still leaves the droplet (7 days in `/var/backups/edge`) as the independent copy, and `qm disk move`
   onto a dedicated disk changes nothing else. The edge's key is forced to `rrsync -wo`, so it cannot delete: retention lives on the VM
-  (`edge-backup-prune`, 14 days) with a floor of the newest 7 archives, because an age-only rule would empty the directory after 14 days
+  (`edge-backup-prune`, 14 days) with a floor of the newest 14 archives (7 days at two backups a day), because an age-only rule would empty the directory after 14 days
   of silence from the edge. The host key is pinned (`StrictHostKeyChecking=yes`), so a rebuilt VM needs its new key in `backup_host_known_hosts`. The
   pgBackRest repository is not copied to this host; it lives only on the edge.
 - **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
