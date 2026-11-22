@@ -136,7 +136,8 @@ backup_remote_path: headscale                           # relative to that accou
 # Public recipients; the offline key decrypts, the on-host key exists only for restore verification.
 backup_age_recipients:
   - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGeuIlI039KbXrVS1w7FJHHbig7uL8/vqK97pYuFZy8y backup@homelab"   # offline key; private half never on any host
-backup_host_known_hosts: ""                             # TODO(provide): `ssh-keyscan backup.<tailnet>` output; empty = trust on first use
+# Pinned (StrictHostKeyChecking=yes): a rebuilt backup VM has a new host key, so replace this line or nightly backups fail.
+backup_host_known_hosts: "backup.ts.natanddavehouse.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN21srcsY4UllBLYaaR+VvAyqHJ4xH+yhzmRMZx8bhwa"
 
 # ---------- pgBackRest offsite repo ----------
 pgbackrest_tls_port: 8432

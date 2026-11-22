@@ -172,10 +172,8 @@ class Structure(unittest.TestCase):
         self.assertEqual(V["heartbeat_backup_interval"], "14h")
         self.assertTrue(13 <= hours(ext[0]["heartbeat"]["interval"]) <= 24, ext[0]["heartbeat"])
 
-    def test_known_hosts_is_left_as_deferred(self):
-        main = (VARS_DIR / "main.yml").read_text()
-        self.assertIn('backup_host_known_hosts: ""                             # TODO(provide): `ssh-keyscan backup.<tailnet>` '
-                      "output; empty = trust on first use", main)
+    def test_known_hosts_is_pinned(self):
+        self.assertRegex(V["backup_host_known_hosts"], r"^backup\.ts\.\S+ ssh-ed25519 [A-Za-z0-9+/]{40,}$")
         self.assertIn("-o StrictHostKeyChecking={{ 'yes' if backup_host_known_hosts | default('') else 'accept-new' }}",
                       BACKUP_RAW)
 
