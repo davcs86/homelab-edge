@@ -1,18 +1,20 @@
 ---
 # Every pin is a release at least two weeks old on 2026-10-14 (database host pins: on 2026-10-25), except the owner's own
-# webhooks-mcp, commsgun and happybabytracker images, pinned as soon as they are published. Rationale per pin lives in docs/versions.md.
+# webhooks-mcp, commsgun and happybabytracker images, pinned as soon as they are published, and the Caddy, Gatus and ntfy pins
+# raised on 2026-11-22 for known CVEs. Rationale per pin lives in docs/versions.md.
 ubuntu_image: ubuntu-26-04-x64
 
 headscale_image: "ghcr.io/juanfont/headscale:v0.29.4@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"
 
-caddy_version: "2.11.6"
-caddy_builder_image: "caddy:2.11.6-builder@sha256:f5b1a66449d305280e559dba0ab9f7ce9a2a14c527c79d7c6fb48abc8f895818"
-caddy_runtime_image: "caddy:2.11.6@sha256:3422ce6de165df66534f9b9ba50efaf457114ec961763cc52f5dbdaac2972d73"
+caddy_version: "2.11.9"
+caddy_builder_image: "caddy:2.11.9-builder@sha256:f9beaa5ddbe7df6f26ebbcf9cbf44e05a1917b9bba464f0c3229038d7e2e6e13"
+caddy_runtime_image: "caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b"
+caddy_go_toolchain: go1.26.11
 caddy_dns_desec_version: v1.1.0
 caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
-gatus_image: "twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e"
-ntfy_image: "binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da"
+gatus_image: "twinproduction/gatus:v5.38.0@sha256:085ed63da963728965d00a3c78aa6167e3bf135218485b893201758e079e8415"
+ntfy_image: "binwiederhier/ntfy:v2.38.1@sha256:038da2be5e668fee6d36a62884eea48975e1b71c29a56964e5298c1b9165a573"
 webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:58d34aa13e7d214cd9c5cda6c8906268570c455675b5add87c5e280a97e2bc53"
 commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:7d37b996e8f41595e94dc5634258f86bdec4c41878c23a9f8d406d3b2026f2a6"
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:34b15d1e259f3890ad283c230d3b2c79f68263800e768bc53059db299f84ed2c"
