@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Runs scripts/init_secrets.py --fill-missing against a throwaway SOPS file (real sops, throwaway ssh-ed25519 key)."""
+import base64
+import contextlib
+import io
 import os
 import re
 import shutil
@@ -8,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -31,6 +35,9 @@ OLD = {**OLD, "db_role_admin_password": "adm-OLD", "db_role_superadmin_password"
 COMMSGUN_GENERATED = ["commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
                       "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops"]
 OWNER_KEYS = ["resend_api_key", "commsgun_senders"]
+HBT_GENERATED = ["happybabytracker_admin_password", "happybabytracker_internal_api_token", "happybabytracker_vapid_private_key"]
+HBT_OWNER_KEYS = ["happybabytracker_admin_username"]
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 SENDERS = {"xstockstrat": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"},
            "ops": {"senders": ["Ops <ops@example.com>"], "default_sender": "Ops <ops@example.com>"}}
 
@@ -69,24 +76,27 @@ class FillMissing(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: v for k, v in got.items() if k in OLD}, OLD)
-        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key", *COMMSGUN_GENERATED})
+        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key", *COMMSGUN_GENERATED, *HBT_GENERATED})
         self.assertRegex(got["gatus_heartbeat_db_token"], r"^[A-Za-z0-9_-]{43}$")
         self.assertRegex(got["webhooks_mcp_auth_key"], r"^[A-Za-z0-9_-]{48}$")
         for k in COMMSGUN_GENERATED:
             self.assertRegex(got[k], r"^[A-Za-z0-9_-]{48}$", k)
         self.assertEqual(len({got[k] for k in COMMSGUN_GENERATED}), len(COMMSGUN_GENERATED))
-        self.assertTrue(set(OWNER_KEYS).isdisjoint(got))
+        for k in ("happybabytracker_admin_password", "happybabytracker_internal_api_token"):
+            self.assertRegex(got[k], r"^[A-Za-z0-9_-]{48}$", k)
+        self.assertRegex(got["happybabytracker_vapid_private_key"], r"^[A-Za-z0-9_-]{43}$")
+        self.assertTrue(set(OWNER_KEYS + HBT_OWNER_KEYS).isdisjoint(got))
         self.assertIn("added gatus_heartbeat_db_token", r.stdout)
 
     def test_a_file_that_already_holds_the_owner_keys_keeps_them_including_the_nested_map(self):
-        owner = {"resend_api_key": "re_OLD", "commsgun_senders": SENDERS}
+        owner = {"resend_api_key": "re_OLD", "commsgun_senders": SENDERS, "happybabytracker_admin_username": "owner-OLD"}
         self.write({**OLD, **owner})
         r = self.fill()
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: got[k] for k in owner}, owner)
         self.assertEqual({k: got[k] for k in OLD}, OLD)
-        self.assertIn(f"added {', '.join(['gatus_heartbeat_db_token', 'webhooks_mcp_auth_key', *COMMSGUN_GENERATED])}", r.stdout)
+        self.assertIn(f"added {', '.join(['gatus_heartbeat_db_token', 'webhooks_mcp_auth_key', *COMMSGUN_GENERATED, *HBT_GENERATED])}", r.stdout)
         before = (self.tmp / self.file).read_bytes()
         self.assertEqual(self.fill().stdout.strip(), "nothing to add")
         self.assertEqual((self.tmp / self.file).read_bytes(), before)
@@ -146,7 +156,7 @@ class FillMissing(unittest.TestCase):
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
                          {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password", "webhooks_mcp_auth_key",
-                          *COMMSGUN_GENERATED, *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
+                          *COMMSGUN_GENERATED, *HBT_GENERATED, *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")
         # the database TLS CA is its own: it signs the server cert and is not the pgBackRest CA
@@ -209,6 +219,49 @@ class Registry(unittest.TestCase):
             self.assertNotIn(k, init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS)
             self.assertIn(k, init_secrets.HAND_KEYS)
         self.assertEqual(set(COMMSGUN_GENERATED) - set(init_secrets.GENERATED), set())
+
+    def test_happybabytracker_owner_key_is_never_generated_or_required_by_fill_missing_but_is_known(self):
+        for k in HBT_OWNER_KEYS:
+            self.assertNotIn(k, init_secrets.GENERATED)
+            self.assertNotIn(k, init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS)
+            self.assertIn(k, init_secrets.HAND_KEYS)
+        self.assertEqual(set(HBT_GENERATED) - set(init_secrets.GENERATED), set())
+
+    def test_happybabytracker_generated_keys_are_filled_when_missing_and_kept_when_present(self):
+        held = {**OLD, **{k: "fake" for k in init_secrets.GENERATED if k not in HBT_GENERATED}}
+        for present in ({}, {"happybabytracker_vapid_private_key": "vapid-OLD"}):
+            written = {}
+            with mock.patch.object(init_secrets, "run", return_value=yaml.safe_dump({**held, **present}).encode()), \
+                    mock.patch.object(init_secrets, "encrypt_to", lambda doc, out: written.update(doc)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                init_secrets.fill_missing("unused.sops.yaml")
+            self.assertEqual({k: written[k] for k in held | present.keys()}, {**held, **present})
+            self.assertEqual(set(written) - set(held) - set(present), set(HBT_GENERATED) - set(present))
+            self.assertTrue(set(HBT_OWNER_KEYS).isdisjoint(written))
+            if present:
+                self.assertEqual(written["happybabytracker_vapid_private_key"], "vapid-OLD")
+
+    def test_the_vapid_key_is_43_url_safe_characters_of_a_valid_p256_scalar(self):
+        for _ in range(50):
+            key = init_secrets.generate_vapid_private_key()
+            self.assertRegex(key, r"^[A-Za-z0-9_-]{43}$")
+            raw = base64.urlsafe_b64decode(key + "=")
+            self.assertEqual(len(raw), 32)
+            self.assertTrue(1 <= int.from_bytes(raw, "big") < P256_ORDER)
+        self.assertIs(init_secrets.GENERATED["happybabytracker_vapid_private_key"], init_secrets.generate_vapid_private_key)
+
+    def test_the_vapid_generator_rejects_zero_and_n(self):
+        valid = (P256_ORDER - 1).to_bytes(32, "big")
+        draws = [bytes(32), P256_ORDER.to_bytes(32, "big"), valid]
+        with mock.patch.object(init_secrets.secrets, "token_bytes", side_effect=draws) as draw:
+            key = init_secrets.generate_vapid_private_key()
+        self.assertEqual(draw.call_count, 3)
+        self.assertEqual(key, base64.urlsafe_b64encode(valid).rstrip(b"=").decode())
+
+    def test_no_happybabytracker_secret_contains_a_quote_backslash_or_line_break(self):
+        for k in HBT_GENERATED:
+            for _ in range(50):
+                self.assertIsNone(re.search(r"[\"'\\\r\n]", init_secrets.GENERATED[k]()), k)
 
     def test_the_full_generator_writes_every_certificate_set(self):
         src = SCRIPT.read_text()

@@ -82,7 +82,7 @@
     content: "{{ _records | sort(attribute='name') | sort(attribute='type') | to_nice_json(sort_keys=true) }}\n"
   vars:
     _names: >-
-      {{ [commsgun_ui_private_hostname, commsgun_enqueue_private_hostname,
+      {{ [commsgun_ui_private_hostname, commsgun_enqueue_private_hostname, happybabytracker_ui_private_hostname,
           status_private_hostname, ntfy_private_hostname, webhooks_ingest_private_hostname] }}
     _records: >-
       {{ _names | map('community.general.dict_kv', 'name') | map('combine', {'type': 'A', 'value': edge_tailnet_ipv4}) | list

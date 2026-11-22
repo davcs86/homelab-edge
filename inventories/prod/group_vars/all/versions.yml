@@ -1,6 +1,6 @@
 ---
 # Every pin is a release at least two weeks old on 2026-10-14 (database host pins: on 2026-10-25), except the owner's own
-# webhooks-mcp and commsgun images, pinned as soon as they are published. Rationale per pin lives in docs/versions.md.
+# webhooks-mcp, commsgun and happybabytracker images, pinned as soon as they are published. Rationale per pin lives in docs/versions.md.
 ubuntu_image: ubuntu-26-04-x64
 
 headscale_image: "ghcr.io/juanfont/headscale:v0.29.4@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"
@@ -13,9 +13,11 @@ caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 
 gatus_image: "twinproduction/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e"
 ntfy_image: "binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da"
-webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:58d34aa13e7d214cd9c5cda6c8906268570c455675b5add87c5e280a97e2bc53"
+webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:449c955b496d4ccd70c64365fae30cd1be3f4167f388057435f5a0260beaeb72"
 commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:7d37b996e8f41595e94dc5634258f86bdec4c41878c23a9f8d406d3b2026f2a6"
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:34b15d1e259f3890ad283c230d3b2c79f68263800e768bc53059db299f84ed2c"
+happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:be93ee9d1447994601d1dfb32d9da2b196b17b5a735caac515886556aef73040"
+happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:4fa06e06d8c950128e51c4f63a1ab5931c171ce1c8eeec9f05d227ca8b24dc74"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
 db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 

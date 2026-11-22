@@ -13,6 +13,7 @@
     - {path: "{{ edge_root }}/gatus", mode: "0750"}
     - {path: "{{ edge_root }}/webhooks-mcp", mode: "0750"}
     - {path: "{{ edge_root }}/commsgun", mode: "0750"}
+    - {path: "{{ edge_root }}/happybabytracker", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
@@ -203,6 +204,65 @@
           ADMIN_API_TOKEN='{{ edge_secrets.commsgun_admin_api_token }}'
           API_BASE_URL='http://commsgun-api:9201'
           ORIGIN='https://{{ commsgun_ui_private_hostname }}'
+        mode: "0600"
+
+# ---------- happybabytracker ----------
+# fail_msg may name a key, never a value.
+- name: Happybabytracker secrets and configuration
+  no_log: true
+  block:
+    - name: Happybabytracker secrets are present and fit a single-quoted env line
+      ansible.builtin.assert:
+        that:
+          - edge_secrets[item.key] is defined
+          - edge_secrets[item.key] is string
+          - edge_secrets[item.key] | length > 0
+          - "\"'\" not in edge_secrets[item.key]"
+          - "'\\\\' not in edge_secrets[item.key]"
+          - "'\\r' not in edge_secrets[item.key]"
+          - "'\\n' not in edge_secrets[item.key]"
+        fail_msg: "secrets/edge.sops.yaml: {{ item.key }} is missing, empty, or holds a quote, backslash or line break"
+        quiet: true
+      loop:
+        - {key: happybabytracker_admin_username}
+        - {key: happybabytracker_admin_password}
+        - {key: happybabytracker_internal_api_token}
+
+    # The app's own start-up refusals (api/internal/constants: MinAdminPasswordLen, MinSecretLen, UsernamePattern).
+    - name: Happybabytracker secrets are as long as the app requires
+      ansible.builtin.assert:
+        that: edge_secrets[item.key] | length >= item.min
+        fail_msg: "secrets/edge.sops.yaml: {{ item.key }} is shorter than happybabytracker accepts (32 characters; 16 for the password)"
+        quiet: true
+      loop:
+        - {key: happybabytracker_admin_password, min: 16}
+        - {key: happybabytracker_internal_api_token, min: 32}
+
+    - name: Happybabytracker admin username has the shape the app accepts
+      ansible.builtin.assert:
+        that: edge_secrets[item.key] is match('^[a-z0-9._-]{3,32}$')
+        fail_msg: "secrets/edge.sops.yaml: {{ item.key }} must be 3-32 characters of a-z, 0-9, '.', '_' or '-'"
+        quiet: true
+      loop:
+        - {key: happybabytracker_admin_username}
+
+    - name: Happybabytracker API environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/happybabytracker/api.env"
+        content: |
+          ADMIN_USERNAME='{{ edge_secrets.happybabytracker_admin_username }}'
+          ADMIN_PASSWORD='{{ edge_secrets.happybabytracker_admin_password }}'
+          INTERNAL_API_TOKEN='{{ edge_secrets.happybabytracker_internal_api_token }}'
+          PUBLIC_ORIGIN='https://{{ happybabytracker_ui_private_hostname }}'
+        mode: "0600"
+
+    - name: Happybabytracker UI environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/happybabytracker/ui.env"
+        content: |
+          INTERNAL_API_TOKEN='{{ edge_secrets.happybabytracker_internal_api_token }}'
+          API_BASE_URL='http://happybabytracker-api:9210'
+          ORIGIN='https://{{ happybabytracker_ui_private_hostname }}'
         mode: "0600"
 
 - name: Compose file
