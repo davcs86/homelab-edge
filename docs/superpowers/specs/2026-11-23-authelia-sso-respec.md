@@ -9,7 +9,7 @@ settled parts; what is still open is § 7.
 
 | Q | Ruling |
 |---|---|
-| Q1 commsgun dashboard | **Public, behind `forward_auth`** (reverses commit `20b52fc`'s private name) |
+| Q1 commsgun dashboard | **Public** (reverses commit `20b52fc`'s private name); mechanism per Q16: an OIDC client, not `forward_auth` |
 | Q2 happybabytracker | **Joins SSO** |
 | Q3 webhooks-mcp | **Switches to Authelia** (the static bearer key goes) |
 | Q4 MCP clients | **Both Claude.ai and Claude Code** clients, per environment |
@@ -23,6 +23,10 @@ settled parts; what is still open is § 7.
 | Q13 happybabytracker admin | **Same as Q12**: local env admin kept as fallback, not mapped, switchable off by configuration |
 | Q14 home WAN IP | **Not static** → no IP exemption; path-scoped zones instead (§ 4) |
 | Q15 app-repo amendments | Owner runs them in a new session with every repo; this one hands off (artifact + § 9) |
+| Q10 happybabytracker exposure | **Public**: `happybaby.public.<domain>` |
+| Q11′ notifier | **Confirmed**: SMTP submission listener inside commsgun-api (§ 5a A); file notifier until it ships |
+| Q16 commsgun mechanism | **(c)**: commsgun becomes an OIDC client; the password fallback sits on the same login page. **No `forward_auth` anywhere** |
+| Q9 people | Four people, § 3.4 |
 
 ## 2. What still holds, and what changed
 
@@ -40,7 +44,7 @@ deny` + `two_factor` everywhere; headscale, SSH, the tailnet and break-glass nev
 | D5 | "DigitalOcean or homelab" switch | DO stays legacy | xstockstrat FR-14 (`product-spec.md:159-201`): empty issuers = legacy | Nothing to do on DO; its Claude.ai connectors keep the legacy OAuth server |
 | D6 | Memory | Declared limits 1024m on a 2 GB droplet; 1237 MiB worst-case available measured *before* happybabytracker (+288m) | `compose.yml.j2`; plan `2026-11-21-happybabytracker-edge.md` row 11 | Re-measure before P1 (P1.0) |
 | D7 | SQLite in the backup | The uid-10001 private-bind-mount snapshot shape exists | `edge-backup.sh.j2:27-33` | Reuse it for `authelia-data` |
-| D8 | Strip the session cookie from other upstreams | xstockstrat 345 requires the cookie domain to **cover each `APP_URL` host** (its logout `rd=${APP_URL}/auth/login` must be a safe redirect) | xstockstrat `345-authelia-sso/design.md:373-375` | Cookie domain is **`public.<domain>`**: `authelia_session` reaches every `*.public` upstream, so Caddy strips it (`header_up Cookie` regex) for xstockstrat, staging and webhooks-mcp; commsgun keeps it only through `forward_auth`. Routing test pins it |
+| D8 | Strip the session cookie from other upstreams | xstockstrat 345 requires the cookie domain to **cover each `APP_URL` host** (its logout `rd=${APP_URL}/auth/login` must be a safe redirect) | xstockstrat `345-authelia-sso/design.md:373-375` | Cookie domain is **`public.<domain>`**: `authelia_session` reaches every `*.public` upstream, so Caddy strips it (`header_up Cookie` regex) before every app upstream (xstockstrat, staging, webhooks-mcp, commsgun, happybabytracker; no app needs it, none use `forward_auth`). Routing test pins it |
 | D9 | Access log drops OAuth query values | `Location` is only dropped in the `*.private` logger | `Caddyfile.j2` `(access_log)`, `log private_zone` | Authorize/consent redirects carry `?code=` in `Location`: drop it on the auth host |
 | D10 | xstockstrat side ready | Feature 345 is **`implementation-ready`, 0 of 52 steps executed**, no branch; its config migration number `053` is stale (next free is `056`) | xstockstrat `345-authelia-sso/status.md`, `implementation-spec.md` header, `docs/roadmap/features/merge-order.md:274` | P2/P3 are gated on 345 shipping; edge P1 can run before it |
 | D11 | — | 345 needs the **app VM's single source IP exempt from any Authelia rate-limit zone**, and a cutover pre-check that the VM reaches the issuer for discovery, token and JWKS | xstockstrat `debate.md` D-74 | Drives § 4 |
@@ -80,7 +84,7 @@ MCP clients public PKCE, audience `${APP_URL}/agent`, `requested_audience_mode: 
 | `xstockstrat[-staging]-mcp-claude-code[-ro]` | public PKCE | same | as above | loopback (S9) |
 | `webhooks-mcp-claude`, `webhooks-mcp-claude-code` | public PKCE | `webhooks-mcp` | `webhooks-mcp` (custom) | Claude.ai / loopback |
 | `happybabytracker` | confidential | `happybabytracker` | `openid profile email groups` | `${ORIGIN}/auth/callback` (app-defined) |
-| commsgun dashboard | no client: `forward_auth` rule on its host | `commsgun` | — | — |
+| `commsgun` | confidential | `commsgun` | `openid profile email groups` | `${ORIGIN}/auth/callback` (app-defined) |
 
 ### 3.3 Per app
 
@@ -91,15 +95,28 @@ MCP clients public PKCE, audience `${APP_URL}/agent`, `requested_audience_mode: 
   resource_server_url, required_scopes)`; the PRM route `/.well-known/oauth-protected-resource/mcp`; amend C1/C4. Edge: the
   `bearer_mcp` macro also proxies the PRM path (or a new `oauth_mcp` kind); the Gatus probe still expects 401; JWKS is
   fetched server-side (§ 4, S11). Single-owner service: the `webhooks-mcp` group is the authorization.
-- **commsgun (Q1 = public):** new `commsgun_ui_public_hostname` under `*.public` with `forward_auth 127.0.0.1:{{ authelia_port
-  }} { uri /api/authz/forward-auth; copy_headers Remote-User Remote-Groups Remote-Email Remote-Name }`. Caddy deletes
-  client-sent `Remote-*` first. Port 9202 stays loopback. EDGE-07 four-place wiring is undone for the private name, EDGE-11
-  `ORIGIN` follows the public name, EDGE-02 holds (no XFF trust), and the zone's query/Referer redaction moves with it.
-  commsgun side: trust `Remote-User` on the public origin only; keep the `ADMIN_PASSWORD` login as the switchable fallback
-  (§ 5b, reach per Q16); an SMTP door for Authelia's notifier (§ 5a); amend its anti-goal.
-- **happybabytracker (Q2):** OIDC client recommended over `forward_auth`: its spec's seam is exactly
-  `identities(provider='authelia', subject=<sub>)`, and OIDC needs no trusted-header boundary. App side: an OIDC login route,
-  link-or-provision by `sub`; the env-only admin stays a local login behind a switch (§ 5b). Exposure: Q10.
+- **commsgun (Q1 public, Q16 OIDC):** `commsgun_ui_public_hostname` under `*.public`; Caddy proxies it like any app (no
+  `forward_auth`, no `Remote-*`). Port 9202 stays loopback. EDGE-07 four-place wiring is undone for the private name, EDGE-11
+  `ORIGIN` follows the public name, EDGE-02 holds (no XFF trust), and the query/Referer/`Location` redaction moves with it
+  (its queries carry recipient addresses). Caddy login rate-limit zones on its login paths, since the fallback form is now on
+  the internet. commsgun side: an OIDC confidential client (`openid-client`, as xstockstrat uses), access by the `commsgun`
+  group claim, the `ADMIN_PASSWORD` login kept as the switchable fallback (§ 5b), the SMTP door (§ 5a), the anti-goal amended.
+- **happybabytracker (Q2, Q10 public):** `happybabytracker_ui_public_hostname: "happybaby.{{ public_zone }}"`; EDGE-07 undone for
+  the private name; `ORIGIN` and `PUBLIC_ORIGIN` follow (EDGE-11); Caddy login zones as for commsgun. App side: an OIDC login
+  route, link-or-provision into `identities(provider='authelia', subject=<sub>)` (its designed seam); the env-only admin stays
+  a local login behind a switch (§ 5b). How a first SSO login finds an existing local parent is the app's design (Q19).
+
+### 3.4 People (Q9)
+
+| Username | Groups | Opens |
+|---|---|---|
+| `david` | `xstockstrat`, `xstockstrat-staging`, `happybabytracker` | xstockstrat prod and staging, happybabytracker |
+| `david_claude` | `webhooks-mcp`, `xstockstrat-mcp`, `xstockstrat-staging-mcp` | the three MCP servers only (Q17) |
+| `david_admin` | every group | everything |
+| `natalia` | `happybabytracker` | happybabytracker |
+
+All four usernames fit `^[a-z0-9._-]{3,32}$`, so they also work as happybabytracker usernames. Each needs its own email
+(emails are unique), kept out of the repo: they go into SOPS through the template. The open points are Q17–Q19.
 
 ## 4. Q6 — `auth.private.<domain>` for the VMs
 
@@ -138,8 +155,8 @@ Authelia's own regulation (per-username lockout) is unaffected by the shared IP.
 Authelia reads one YAML configuration plus, for the file backend, `users_database.yml`. Scalars and secrets can also come
 from `AUTHELIA_*` env vars; lists (clients, access rules, cookies) cannot. With `X_AUTHELIA_CONFIG_FILTERS=template` the
 YAML may read env vars (`{{ env "X" }}`), so secrets can stay in an `env_file` even with a file config. Sessions are
-**in memory** (no Redis on the edge), so **every restart signs everyone out of the portal** and every `forward_auth`
-session (commsgun). OIDC refresh tokens and consents live in SQLite and survive.
+**in memory** (no Redis on the edge), so **every restart signs everyone out of the portal** (apps keep their own sessions;
+the next SSO login asks for credentials again). OIDC refresh tokens and consents live in SQLite and survive.
 
 | | **A. Directory bind mount + hash-compare restart** | **B. Everything in `env_file`** | **C. Compose `configs:` with inline `content`** |
 |---|---|---|---|
@@ -179,28 +196,21 @@ Both apps keep their own login as a break-glass path, **not mapped to any Authel
 turns it off (default on until each cutover proves SSO; the edge sets it from inventory, e.g. `commsgun_password_login_enabled`,
 `happybabytracker_admin_login_enabled`).
 
-- **happybabytracker:** easy. OIDC is app-level, so the login page offers "Sign in with SSO" plus, when the flag is on, the
-  env admin's local form on the same host. Reachable while Authelia is down.
-- **commsgun: the fallback is unreachable as specified.** On the public name, Caddy's `forward_auth` runs before the app, so
-  with Authelia down the password form is never served. And the dashboard enforces a **single** `ORIGIN`, so it cannot also be
-  served on `commsgun.private.<domain>`. Options (Q16):
-  - **(a)** commsgun accepts a list of origins; the public name runs `forward_auth` + `Remote-User`; the private name
-    (tailnet-only, no `forward_auth`, `Remote-*` deleted) serves the password login when the flag is on. EDGE-07 four-place
-    wiring stays for the private name. *(recommended)*
-  - **(b)** one origin; break-glass = flip an edge variable that drops `forward_auth` and puts the name back under
-    `*.private`, then deploy. Simpler code, but the fallback costs a deploy and the tailnet path.
-  - **(c)** commsgun becomes an OIDC client like happybabytracker instead of `forward_auth` (reverses the Q1 mechanism).
+Both apps are OIDC clients (Q16 = c), so the fallback is the same shape in each: the login page offers "Sign in with SSO"
+plus, when the flag is on, the local form, on the one public `ORIGIN`. It stays reachable while Authelia is down. Because
+the form is now internet-facing, Caddy rate-limits its POST path (zones `<site>_login`, `<site>_login_hourly`, as for
+xstockstrat) on top of the app's own 5/min limiter. With the flag off the form is not rendered and its POST is refused.
 
 ## 6. Phases and pass conditions (Rule 6: shown, not claimed)
 
 | Phase | Work | Pass condition |
 |---|---|---|
 | P0 spike | Scratch v4.39.28, off the droplet | Each S-item (§ 6.1) recorded here with its observed output |
-| P1 edge infra | § 3.1, one test person, no app wired | P1.0 droplet `free -m` + `docker stats --no-stream` ≥ 400 MiB left with the new limit; `ci` green incl. new routing cases (auth host → Authelia only, no XFF trust, `Location`/`code` absent from logs, unique zones, `authelia_session` stripped before xstockstrat/webhooks upstreams); **deploy**; **verify**; Gatus `authelia-public` green; one `edge-backup.service` run `backup ok` + drill with the Authelia DB; test person logs in with password + passkey/TOTP |
+| P1 edge infra | § 3.1, one test person, no app wired | P1.0 droplet `free -m` + `docker stats --no-stream` ≥ 400 MiB left with the new limit; `ci` green incl. new routing cases (auth host → Authelia only, no XFF trust, `Location`/`code` absent from logs, unique zones, `authelia_session` stripped before every app upstream); **deploy**; **verify**; Gatus `authelia-public` green; one `edge-backup.service` run `backup ok` + drill with the Authelia DB; test person logs in with password + passkey/TOTP |
 | P2 xstockstrat-staging | 345 shipped; staging config rows set; `sso.md` § 6 cutover | Claude.ai **and** Claude Code complete OAuth against Authelia and list tools; web login links the seeded row by email (ledger audit event seen); rollback (clear issuers, flag true) rehearsed |
 | P3 xstockstrat prod | Same | Same checks on prod |
 | P4 webhooks-mcp | § 3.3; C1/C4 amended | Unauthenticated `POST /mcp` 401 with `resource_metadata`; Claude.ai + Claude Code connect; a token for another audience gets 401 |
-| P5 commsgun | § 3.3 | Dashboard via the public name redirects to Authelia; a forged `Remote-User` from the client is ignored (routing test); group-less person gets 403; the fallback password login works on its Q16 path with Authelia stopped, and is refused with the flag off; an enrolment code sent through commsgun arrives (if § 5a A) |
+| P5 commsgun | § 3.3 | "Sign in with SSO" on the public name completes against Authelia; a person outside `commsgun` is refused; the fallback password login works with Authelia stopped, and is refused with the flag off; the old private name answers 404; an enrolment code sent through commsgun's SMTP door arrives |
 | P6 happybabytracker | § 3.3 | A parent logs in via Authelia and lands on their kids; an `identities` row with `provider='authelia'` exists; group-less person refused; the env admin logs in locally with Authelia stopped, and cannot with the flag off |
 
 ### 6.1 Spike items
@@ -218,12 +228,21 @@ S1–S5 as in `decisions.md:51-53` (345's 2026-11-16 local spike already passed 
 
 ## 7. Still open
 
-- **Q10** happybabytracker exposure (blocks P6): public under `*.public` *(recommended: parents off the tailnet can reach it;
-  its spec § 15 leaves the path to this work)*, or private with a second cookie domain `private.<domain>` and a browser
-  portal `auth.private.<domain>` (a second login per person).
-- **Q11′** confirm option A of § 5a (blocks commsgun-as-notifier; P1 starts on the file notifier).
-- **Q16** commsgun fallback reach, § 5b (a)/(b)/(c) (blocks P5).
-- **Q9** fill `docs/runbooks/sso-people.template.yaml` (blocks P2; P1 needs one test person).
+- **Q17 `david_claude` in xstockstrat** (blocks P2). Each Authelia user is its own xstockstrat user: 345 links one `sub` to
+  one row, refuses a row already linked, and emails are unique. So `david_claude` would get a **separate** xstockstrat account,
+  with its own accounts, strategies and positions (`trader` by default), not `david`'s. Options:
+  - (a) `david_claude` is its own xstockstrat user with only what you grant it *(clean, but it does not see `david`'s data)*;
+  - (b) MCP connectors sign in as `david` himself, and `david_claude` keeps only webhooks-mcp;
+  - (c) amend 345 so one xstockstrat user may link several Authelia identities, an admin-only `link-sso` command
+    *(lets Claude act on `david`'s data under its own login, at the cost of a 345 design change)*.
+- **Q18 MCP-only enforcement.** One group per app opens both its web client and its MCP clients. Holding `david_claude` to
+  MCP only needs separate groups, `xstockstrat-mcp` and `xstockstrat-staging-mcp`, checked by the MCP clients' policies, while
+  the web client accepts only `xstockstrat[-staging]`. Accept the extra groups (as § 3.4 assumes), or let `david_claude` open
+  the web apps too? Does `david` need the MCP clients himself? (`xstockstrat` would then cover both.)
+- **Q19 Existing accounts.** Which existing xstockstrat rows (prod and staging; e.g. the seeded `admin@localhost`) should
+  `david` and `david_admin` link to, and with which roles? Do `david` and `natalia` already exist as happybabytracker parents,
+  to be linked rather than created? Should `david_admin` become a parent too (it holds `happybabytracker`)?
+- **Emails** for the four people, filled in the template outside the repo (blocks P2).
 
 ## 9. Handoff: work per repo
 
@@ -234,12 +253,12 @@ The next session has every repo. Order follows § 6. Each item cites what it mus
 | homelab-edge | P0 spike (S1–S16); P1 § 3.1 (C-or-A config, path-scoped zones, file notifier, backup, Gatus, routing tests); later the per-app edge wiring | Rules 1–8, EDGE-01…14; the spec's pass conditions |
 | xstockstrat | Amend 345 before `/sdd-execute`: issuer value `https://auth.public.<domain>`; Claude Code clients `…-mcp-claude-code[-ro]` (D12, S9); D-74 rewritten to path-scoped zones (§ 4); config migration renumbered to the next free number (056 at `6ce536f`); then execute | 345 `design.md`, `debate.md` D-74/D-96/D-97, `merge-order.md:274` |
 | webhooks-mcp | Spec § 6 amendment for C1/C4; JWKS `TokenVerifier`, `AuthSettings(issuer_url, resource_server_url, required_scopes)`, PRM route; drop `MCP_AUTH_KEY` | `docs/contracts.md` (C1, C4, C8), rule WM-08 revisited |
-| commsgun | Amend the "dashboard reachable from the internet" anti-goal; `Remote-User` trust on the public origin; switchable password fallback; reach per Q16; SMTP submission door for Authelia (§ 5a) | K1–K6, U1–U4, CG-01…09 (CG-03 XFF, CG-08 three-place env) |
-| happybabytracker | Amend non-goal (line 54) and anti-goal (line 69); OIDC login → `identities(provider='authelia', subject=<sub>)`; switchable env-admin fallback; exposure per Q10 | spec § 5.4, § 13, § 15; `CLAUDE.md` Rule 1 contracts |
+| commsgun | Amend the "dashboard reachable from the internet" anti-goal and the single-admin non-goal; OIDC client with `commsgun` group check; switchable password fallback on the same page; public `ORIGIN`; SMTP submission door for Authelia (§ 5a) | K1–K6, U1–U4 (U4 cookie), CG-01…09 (CG-03 XFF, CG-04 adapter pin, CG-08 three-place env) |
+| happybabytracker | Amend non-goal (line 54) and anti-goal (line 69); OIDC login → `identities(provider='authelia', subject=<sub>)`; switchable env-admin fallback; public `ORIGIN`/`PUBLIC_ORIGIN`; existing-parent linking (Q19) | spec § 5.4, § 13, § 15; `CLAUDE.md` Rule 1 contracts |
 
 ## 8. Docs to change when implemented
 
 `docs/runbooks/sso.md` (status, hostname, scope, groups, SOPS keys, hash command, notifier), `docs/decisions.md` (SSO entry
 rewritten from § 1/§ 4/§ 5 outcomes), `README.md`, `docs/versions.md`, `docs/runbooks/recovery.md`, `docs/runbooks/alerts.md`,
 `docs/runbooks/commsgun.md` and `happybabytracker.md`, `secrets/README.md`, `docs/context-constitution.md` (new seams: auth
-host XFF, session-cookie stripping, `Remote-*` deletion, EDGE-07 for commsgun).
+host XFF, session-cookie stripping, EDGE-07 undone for commsgun and happybabytracker, EDGE-11 origins).

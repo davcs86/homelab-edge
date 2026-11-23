@@ -25,7 +25,7 @@ Groups (each app's client or route denies everyone outside its group, and every 
 |---|---|---|
 | `xstockstrat` | xstockstrat (prod) web + MCP | OIDC clients with `authorization_policy: xstockstrat` |
 | `xstockstrat-staging` | xstockstrat-staging web + MCP | OIDC clients with `authorization_policy: xstockstrat-staging` |
-| `commsgun` | commsgun dashboard | Caddy `forward_auth`; commsgun trusts `Remote-User` |
+| `commsgun` | commsgun dashboard | OIDC client; commsgun checks the group claim |
 | `webhooks-mcp` | webhooks-mcp `/mcp` (Claude.ai and Claude Code clients) | OIDC clients; webhooks-mcp validates Authelia JWTs |
 | `happybabytracker` | happybabytracker | OIDC client; a login links the parent by `sub` (`identities`, provider `authelia`) |
 
@@ -108,8 +108,8 @@ applied migrations are never edited, and only migrations not yet applied pick up
 
 | Situation | Effect | Action |
 |---|---|---|
-| Authelia down | no new SSO logins anywhere; the commsgun dashboard is unreachable through its public name; MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. Fallbacks: xstockstrat's password login (the rollback flag), happybabytracker's env admin, commsgun's password login (where it is reachable is still open). |
-| Authelia restarted | every portal and `forward_auth` session is signed out (sessions are in memory); OIDC refresh tokens survive | none; people log in again |
+| Authelia down | no new SSO logins anywhere; app sessions already open keep working; MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. Fallbacks, each on its app's own login page while its flag is on: xstockstrat's password login (the rollback flag), commsgun's password login, happybabytracker's env admin. |
+| Authelia restarted | every portal session is signed out (sessions are in memory); app sessions and OIDC refresh tokens survive | none; the next SSO login asks for credentials again |
 | Authelia SQLite lost | every `sub` and second factor gone | **Restore it from the edge backup** (the same `edge-<UTC>.tar.age` archives as headscale, `docs/runbooks/recovery.md`; the role PR adds the Authelia step). Without a backup, every person re-enrols, and each xstockstrat environment needs every row unlinked (§ 7 step 2) before rule 5.2 can relink them. |
 | `users_database.yml` lost | nobody can log in | redeploy from SOPS |
 

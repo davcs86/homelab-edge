@@ -41,7 +41,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     Zitadel: each needs 0.5–1.5 GB or its own Postgres on a 2 GB droplet. Pocket ID has no `forward_auth`. Authelia is one Go
     binary with OIDC, `forward_auth`, WebAuthn/TOTP and brute-force regulation, storing its state in SQLite (a handful of users).
   - Scope, homelab only (DigitalOcean deployments stay legacy): xstockstrat and xstockstrat-staging (web + MCP), webhooks-mcp
-    `/mcp` (its static bearer key is removed), the commsgun dashboard (made public) and happybabytracker. Gatus and Proxmox are a
+    `/mcp` (its static bearer key is removed), the commsgun dashboard and happybabytracker (both made public). Gatus and Proxmox are a
     later phase. headscale device login never uses SSO, so Authelia can be down or lost without touching the tailnet or break-glass.
   - `auth.public.<domain>` (Rule 8), under the existing `*.public` wildcard: no new deSEC policy or ACME label. Gatus probe from 1.1.1.1.
     There is no `auth.private` name: v4.39 derives the issuer and discovery URLs from the request's host, and xstockstrat checks the
@@ -69,20 +69,20 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     limits stay until the flag is removed (fail closed when its key is missing). Each xstockstrat deployment switches mode by
     its own config: legacy (today's login and OAuth server) until its cutover, then Authelia only; clearing the issuer keys rolls
     it back. DigitalOcean never cuts over. The xstockstrat side is feature 345 (`authelia-sso`).
-  - commsgun and happybabytracker keep their own login (commsgun's password, happybabytracker's env admin) as a fallback that is
-    not mapped to any Authelia group and that a config flag switches off. Where commsgun's fallback is reachable is still open
-    (behind `forward_auth` it is not, and the dashboard allows one `ORIGIN`).
-  - Authelia notifies by SMTP or file only. It starts on the file notifier; commsgun as the mail path needs an SMTP door into
-    commsgun (proposed, not decided).
-  - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`. This only holds if Caddy
-    deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
-    and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four. The move also
-    crosses three constitution seams: no `trusted_proxies` on the new public site (EDGE-02); the four-place wiring is
-    undone for `commsgun_ui_private_hostname` (EDGE-07); and the dashboard's `ORIGIN` follows the new hostname (EDGE-11, a commsgun-side
-    change).
+  - Every app is an OIDC client of Authelia; nothing uses `forward_auth` (owner, 2026-11-23). With `forward_auth`, commsgun's
+    fallback login would be unreachable while Authelia is down, and its dashboard allows one `ORIGIN`. commsgun and
+    happybabytracker keep their own login (commsgun's password, happybabytracker's env admin) on the same login page as a
+    fallback that is not mapped to any Authelia group and that a config flag switches off; Caddy rate-limits those forms.
+  - commsgun's dashboard and happybabytracker move to `*.public`. This crosses three constitution seams: no `trusted_proxies` on
+    the public site (EDGE-02); the four-place wiring is undone for both private names (EDGE-07); and each app's `ORIGIN` follows
+    its new hostname (EDGE-11, an app-side change). The query-stripping log filter must cover commsgun's public name, and
+    Authelia's session cookie (scoped to `public.<domain>`) is stripped before every app upstream; `scripts/caddy-routing-test.sh`
+    pins both.
+  - Authelia notifies by SMTP or file only. It starts on the file notifier, then sends through an SMTP submission listener
+    inside commsgun-api, on the compose network only, as commsgun app `authelia`.
   - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
     edge backup (twice a day): losing it loses every `sub` and second factor.
-  - Sessions are in memory (no Redis), so an Authelia restart signs everyone out of the portal and `forward_auth` apps; OIDC
+  - Sessions are in memory (no Redis), so an Authelia restart signs everyone out of the portal (apps keep their own); OIDC
     refresh tokens survive in SQLite. Config reaches it through compose `configs:` content if that recreates the container on
     change (spike), else a mounted directory with a hash-compare restart task (the Caddy precedent), never a handler.
 
