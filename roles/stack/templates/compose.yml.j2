@@ -39,6 +39,7 @@ services:
         CADDY_BUILDER_IMAGE: {{ caddy_builder_image }}
         CADDY_RUNTIME_IMAGE: {{ caddy_runtime_image }}
         CADDY_VERSION: "{{ caddy_version }}"
+        CADDY_GO_TOOLCHAIN: {{ caddy_go_toolchain }}
         CADDY_DNS_DESEC_VERSION: {{ caddy_dns_desec_version }}
         CADDY_RATELIMIT_COMMIT: {{ caddy_ratelimit_commit }}
     # Host networking: real client IPs for rate limits and tailnet matching, and a route to 100.64.0.0/10.
@@ -126,8 +127,36 @@ services:
       timeout: 5s
       retries: 3
 
+  # Never publish 9210: only the UI, on this network, may reach the API.
+  happybabytracker-api:
+    <<: *hardening
+    image: {{ happybabytracker_api_image }}
+    read_only: true
+    env_file: [./happybabytracker/api.env]
+    volumes:
+      - happybabytracker-data:/data
+    networks: [happybabytracker]
+    mem_limit: 96m
+    stop_grace_period: 30s
+
+  happybabytracker-ui:
+    <<: *hardening
+    image: {{ happybabytracker_ui_image }}
+    read_only: true
+    ports: ["127.0.0.1:{{ happybabytracker_ui_port }}:9212"]
+    env_file: [./happybabytracker/ui.env]
+    networks: [happybabytracker]
+    depends_on: [happybabytracker-api]
+    mem_limit: 192m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9212/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   commsgun: {}
+  happybabytracker: {}
 
 volumes:
   headscale-data:
@@ -138,3 +167,4 @@ volumes:
   ntfy-data:
   webhooks-data:
   commsgun-data:
+  happybabytracker-data:

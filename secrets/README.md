@@ -4,7 +4,7 @@ Only SOPS-encrypted files live here (`*.sops.yaml`); recipients are listed in `.
 
 | File | Written by | Contents |
 |---|---|---|
-| `edge.sops.yaml` | `init-secrets` workflow (`scripts/init_secrets.py`); `fill_missing` adds a generated credential that a newer release needs without touching the existing ones | deSEC token, healthchecks.io ping URL, admin console password hash, ntfy credentials, pgBackRest mTLS PKI, commsgun credentials (generated admin password, session secret, admin API token and per-app keys; owner-added Resend key and sender map) |
+| `edge.sops.yaml` | `init-secrets` workflow (`scripts/init_secrets.py`); `fill_missing` adds a generated credential that a newer release needs without touching the existing ones | deSEC token, healthchecks.io ping URL, admin console password hash, ntfy credentials, pgBackRest mTLS PKI, commsgun credentials (generated admin password, session secret, admin API token and per-app keys; owner-added Resend key and sender map), happybabytracker credentials (generated `happybabytracker_admin_password`, `happybabytracker_internal_api_token` and `happybabytracker_vapid_private_key`; owner-added `happybabytracker_admin_username`) |
 | `ci-authkey.sops.yaml` | `node-admin` workflow (`mint-ci-key`) | reusable, ephemeral `tag:ci` pre-auth key (24 h default) and its expiry |
 | `deploy-authkey.sops.yaml` | `deploy` workflow (`roles/deploy_key`) | reusable, ephemeral `tag:deploy` pre-auth key (90 days) |
 
@@ -16,6 +16,8 @@ printed. Operator values (deSEC token, ping URL, passwords) and the pgBackRest P
 ```sh
 sops set secrets/edge.sops.yaml '["commsgun_senders"]' '{"xstockstrat": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"}, "xstockstrat-staging": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"}, "ops": {"senders": ["Ops <ops@example.com>"], "default_sender": "Ops <ops@example.com>"}}'
 ```
+
+The happybabytracker app's keys: three are generated, and `fill_missing` creates them once and never replaces a present one: `happybabytracker_admin_password` and `happybabytracker_internal_api_token` (48 URL-safe characters each) and `happybabytracker_vapid_private_key` (the raw P-256 scalar as 43 base64url characters, for Web Push). One is the owner's, added with `sops set` after `fill_missing`, which neither requires nor creates it and keeps it (it is a `HAND_KEYS` entry): `happybabytracker_admin_username`. `overwrite` deletes the username (add it again) and replaces the generated three, so avoid it once the app is live. **A changed VAPID key invalidates every push subscription**: each browser must subscribe again, so never rotate it casually.
 
 CI (`scripts/secrets-keys-test.py`) fails when a role reads a key this file lacks, so the gap shows up on the pull request, not mid-deploy. Committing the result to `main` needs the push token (`docs/runbooks/github-push-token.md`).
 
