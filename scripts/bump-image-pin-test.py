@@ -627,55 +627,76 @@ class OpenPrStep(unittest.TestCase):
         self.assertNotIn(SECRET, r.stdout + r.stderr)
 
 
-CWF = ROOT / ".github/workflows/bump-commsgun.yml"
-API_VAR, UI_VAR = "commsgun_api_image", "commsgun_ui_image"
-API_IMG, UI_IMG = "ghcr.io/davcs86/commsgun-api", "ghcr.io/davcs86/commsgun-ui"
 API_OLD, UI_OLD = "sha256:" + "a1" * 32, "sha256:" + "b2" * 32
 API_NEW, UI_NEW = "sha256:" + "c3" * 32, "sha256:" + "d4" * 32
-CREV = "145add0" + "0" * 33
 
 
-def csteps():
-    return yaml.safe_load(CWF.read_text())["jobs"]["bump"]["steps"]
+class App:
+    def __init__(self, name, cron, short, date):
+        self.name, self.cron, self.short, self.date = name, cron, short, date
+        self.wf = ROOT / f".github/workflows/bump-{name}.yml"
+        self.api_var, self.ui_var = f"{name}_api_image", f"{name}_ui_image"
+        self.api_img, self.ui_img = f"ghcr.io/davcs86/{name}-api", f"ghcr.io/davcs86/{name}-ui"
+        self.rev = short + "0" * 33
+        self.title = f"Bump {name} to api sha256:{API_NEW[7:19]}… / ui sha256:{UI_NEW[7:19]}…"
 
 
-def cstep(sid=None, needle=None):
-    return next(s for s in csteps() if (sid and s.get("id") == sid) or (needle and needle in s.get("run", "")))
+COMMSGUN = App("commsgun", "41 15 * * *", "145add0", "2026-11-13")
+HAPPYBABYTRACKER = App("happybabytracker", "59 15 * * *", "f66ecae", "2026-11-21")
+APPS = (COMMSGUN, HAPPYBABYTRACKER)
 
 
-class CommsgunWorkflow(unittest.TestCase):
+def csteps(app):
+    return yaml.safe_load(app.wf.read_text())["jobs"]["bump"]["steps"]
+
+
+def cstep(app, sid=None, needle=None):
+    return next(s for s in csteps(app) if (sid and s.get("id") == sid) or (needle and needle in s.get("run", "")))
+
+
+class PairWorkflow:
     def test_triggers_permissions_and_concurrency(self):
-        wf = yaml.safe_load(CWF.read_text())
+        a = self.APP
+        wf = yaml.safe_load(a.wf.read_text())
         self.assertEqual(sorted(wf[True]), ["schedule", "workflow_dispatch"])
-        self.assertEqual(wf[True]["schedule"], [{"cron": "41 15 * * *"}])
+        self.assertEqual(wf[True]["schedule"], [{"cron": a.cron}])
         self.assertEqual(list(wf[True]["workflow_dispatch"]["inputs"]), ["api_digest", "ui_digest"])
         for i in wf[True]["workflow_dispatch"]["inputs"].values():
             self.assertIs(i.get("required", False), False)
         self.assertEqual(wf["permissions"], {"contents": "read"})
         self.assertEqual(wf["jobs"]["bump"]["permissions"], {"contents": "write", "pull-requests": "write", "actions": "write"})
-        self.assertEqual(wf["concurrency"], {"group": "bump-commsgun", "cancel-in-progress": True})
+        self.assertEqual(wf["concurrency"], {"group": f"bump-{a.name}", "cancel-in-progress": True})
         self.assertEqual(wf["jobs"]["bump"]["if"], "github.ref == 'refs/heads/main'")
-        self.assertEqual(set(re.findall(r"secrets\.(\w+)", CWF.read_text())), {"GITHUB_TOKEN"})
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", a.wf.read_text())), {"GITHUB_TOKEN"})
+
+    def test_the_workflow_names_no_other_app(self):
+        text = self.APP.wf.read_text().lower()
+        for other in APPS:
+            if other is not self.APP:
+                self.assertNotIn(other.name, text)
 
     def test_script_runs_once_per_image_in_order(self):
-        api, ui = cstep("api"), cstep("ui")
-        self.assertIn(f"bump_image_pin.py --var {API_VAR} --image {API_IMG}", api["run"])
-        self.assertIn(f"bump_image_pin.py --var {UI_VAR} --image {UI_IMG}", ui["run"])
+        a = self.APP
+        api, ui = cstep(a, "api"), cstep(a, "ui")
+        self.assertIn(f"bump_image_pin.py --var {a.api_var} --image {a.api_img}", api["run"])
+        self.assertIn(f"bump_image_pin.py --var {a.ui_var} --image {a.ui_img}", ui["run"])
         self.assertEqual(api["env"], {"DIGEST": "${{ inputs.api_digest }}"})
         self.assertEqual(ui["env"], {"DIGEST": "${{ inputs.ui_digest }}"})
-        ids = [s.get("id") for s in csteps()]
+        ids = [s.get("id") for s in csteps(a)]
         self.assertLess(ids.index("api"), ids.index("ui"))
         self.assertLess(ids.index("ui"), ids.index("guard"))
-        for run in (s["run"] for s in csteps() if "run" in s):
+        for run in (s["run"] for s in csteps(a) if "run" in s):
             self.assertNotIn("${{", run)
 
     def test_actions_pinned_and_checkout_keeps_no_credentials(self):
-        self.assertEqual([u for u in re.findall(r"uses:\s*(\S+)", CWF.read_text()) if not re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", u)], [])
-        co = next(s for s in csteps() if str(s.get("uses", "")).startswith("actions/checkout@"))
+        a = self.APP
+        self.assertEqual([u for u in re.findall(r"uses:\s*(\S+)", a.wf.read_text()) if not re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", u)], [])
+        co = next(s for s in csteps(a) if str(s.get("uses", "")).startswith("actions/checkout@"))
         self.assertIs(co["with"]["persist-credentials"], False)
 
     def test_pr_step_needs_the_guard_and_gets_its_data_through_env(self):
-        pr = cstep(needle="gh pr create")
+        a = self.APP
+        pr = cstep(a, needle="gh pr create")
         self.assertEqual(pr["if"], "steps.guard.outputs.proceed == 'true'")
         self.assertEqual(pr["env"]["GH_TOKEN"], "${{ secrets.GITHUB_TOKEN }}")
         want = {"API_PREV": "steps.api.outputs.previous", "UI_PREV": "steps.ui.outputs.previous",
@@ -683,33 +704,34 @@ class CommsgunWorkflow(unittest.TestCase):
                 "REVISION": "steps.guard.outputs.revision"}
         for k, v in want.items():
             self.assertEqual(pr["env"][k], "${{ %s }}" % v)
-        guard = cstep("guard")
+        guard = cstep(a, "guard")
         self.assertEqual(guard["if"], "steps.api.outputs.changed == 'true' || steps.ui.outputs.changed == 'true'")
         self.assertEqual(guard["env"]["API_REV"], "${{ steps.api.outputs.revision }}")
         self.assertEqual(guard["env"]["UI_REV"], "${{ steps.ui.outputs.revision }}")
-        done = next(s for s in csteps() if s.get("name") == "Already pinned")
+        done = next(s for s in csteps(a) if s.get("name") == "Already pinned")
         self.assertEqual(done["if"], "steps.api.outputs.changed == 'false' && steps.ui.outputs.changed == 'false'")
 
 
-def run_guard(api_rev, ui_rev, docs_commits=("145add0", "145add0"), extra_docs=""):
+def run_guard(app, api_rev, ui_rev, docs_commits=None, extra_docs=""):
+    docs_commits = docs_commits or (app.short, app.short)
     with tempfile.TemporaryDirectory() as d:
         Path(d, "inventories/prod/group_vars/all").mkdir(parents=True)
         Path(d, "docs").mkdir()
         Path(d, "inventories/prod/group_vars/all/versions.yml").write_text(
-            f'{API_VAR}: "{API_IMG}@{API_NEW}"\n{UI_VAR}: "{UI_IMG}@{UI_NEW}"\n')
+            f'{app.api_var}: "{app.api_img}@{API_NEW}"\n{app.ui_var}: "{app.ui_img}@{UI_NEW}"\n')
         Path(d, "docs/versions.md").write_text(
-            f"| a (`{API_VAR}`) | `{API_IMG}@sha256:c3c3c3c3…`, digest only (commit `{docs_commits[0]}`, 2026-11-13) | x |\n"
-            f"| u (`{UI_VAR}`) | `{UI_IMG}@sha256:d4d4d4d4…`, digest only (commit `{docs_commits[1]}`, 2026-11-13) | x |\n" + extra_docs)
+            f"| a (`{app.api_var}`) | `{app.api_img}@sha256:c3c3c3c3…`, digest only (commit `{docs_commits[0]}`, {app.date}) | x |\n"
+            f"| u (`{app.ui_var}`) | `{app.ui_img}@sha256:d4d4d4d4…`, digest only (commit `{docs_commits[1]}`, {app.date}) | x |\n" + extra_docs)
         out, summary = Path(d, "out"), Path(d, "summary")
         env = {"PATH": os.environ["PATH"], "API_REV": api_rev, "UI_REV": ui_rev, "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
-        r = subprocess.run(["bash", "-e", "-c", cstep("guard")["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
+        r = subprocess.run(["bash", "-e", "-c", cstep(app, "guard")["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
         outputs = dict(l.split("=", 1) for l in out.read_text().splitlines()) if out.exists() else {}
         return r, outputs, summary.read_text() if summary.exists() else ""
 
 
-class CommsgunGuard(unittest.TestCase):
+class PairGuard:
     def test_different_revisions_refuse_the_pair_and_name_both(self):
-        r, out, summary = run_guard("a" * 40, "b" * 40)
+        r, out, summary = run_guard(self.APP, "a" * 40, "b" * 40)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(out, {"proceed": "false"})
         self.assertIn("::warning::", r.stdout)
@@ -717,61 +739,68 @@ class CommsgunGuard(unittest.TestCase):
             self.assertIn(rev, summary)
 
     def test_an_unlabelled_image_refuses_the_pair(self):
-        for a, u in (("unknown", "unknown"), (CREV, "unknown"), ("unknown", CREV)):
-            r, out, _ = run_guard(a, u)
+        rev = self.APP.rev
+        for a, u in (("unknown", "unknown"), (rev, "unknown"), ("unknown", rev)):
+            r, out, _ = run_guard(self.APP, a, u)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(out, {"proceed": "false"}, (a, u))
 
     def test_same_revision_proceeds_and_reports_pins_and_revision(self):
-        r, out, _ = run_guard(CREV, CREV)
+        r, out, _ = run_guard(self.APP, self.APP.rev, self.APP.rev)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": CREV})
+        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": self.APP.rev})
 
     def test_an_unchanged_image_is_checked_against_the_commit_in_the_docs_row(self):
-        r, out, _ = run_guard("", CREV)
+        a = self.APP
+        r, out, _ = run_guard(a, "", a.rev)
         self.assertEqual(out.get("proceed"), "true", r.stdout + r.stderr)
-        self.assertEqual(out["revision"], CREV)
-        r, out, _ = run_guard(CREV, "", docs_commits=("145add0", "145add0"))
+        self.assertEqual(out["revision"], a.rev)
+        r, out, _ = run_guard(a, a.rev, "", docs_commits=(a.short, a.short))
         self.assertEqual(out.get("proceed"), "true")
-        r, out, _ = run_guard("", "e" * 40)
+        r, out, _ = run_guard(a, "", "e" * 40)
         self.assertEqual(out, {"proceed": "false"})
-        r, out, _ = run_guard("", CREV, docs_commits=("145add0", "unknown"))
-        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": CREV})
-        r, out, _ = run_guard("", CREV, docs_commits=("unknown", "145add0"))
+        r, out, _ = run_guard(a, "", a.rev, docs_commits=(a.short, "unknown"))
+        self.assertEqual(out, {"proceed": "true", "api_digest": API_NEW, "ui_digest": UI_NEW, "revision": a.rev})
+        r, out, _ = run_guard(a, "", a.rev, docs_commits=("unknown", a.short))
         self.assertEqual(out, {"proceed": "false"})
 
 
-class CommsgunGuardExact(unittest.TestCase):
+class PairGuardExact:
     def test_two_full_revisions_sharing_a_short_prefix_are_refused(self):
-        r, out, summary = run_guard("145add0" + "1" * 33, "145add0" + "2" * 33)
+        s = self.APP.short
+        r, out, summary = run_guard(self.APP, s + "1" * 33, s + "2" * 33)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(out, {"proceed": "false"})
         self.assertIn("::warning::", r.stdout)
 
     def test_a_short_value_is_compared_by_prefix_only_against_the_docs_row(self):
-        r, out, _ = run_guard("", "145add0" + "9" * 33)
+        s = self.APP.short
+        r, out, _ = run_guard(self.APP, "", s + "9" * 33)
         self.assertEqual(out.get("proceed"), "true", r.stdout + r.stderr)
-        r, out, _ = run_guard("145add", "145add0" + "9" * 33)
+        r, out, _ = run_guard(self.APP, s[:6], s + "9" * 33)
         self.assertEqual(out, {"proceed": "false"})
 
     def test_more_than_one_docs_row_for_an_image_is_refused(self):
-        for second in ("145add0", "deadbee"):
-            dup = f"| a again (`{API_VAR}`) | `{API_IMG}@sha256:c3c3c3c3…`, digest only (commit `{second}`, 2026-11-13) | x |\n"
-            r, out, _ = run_guard("", CREV, extra_docs=dup)
+        a = self.APP
+        for second in (a.short, "deadbee"):
+            dup = f"| a again (`{a.api_var}`) | `{a.api_img}@sha256:c3c3c3c3…`, digest only (commit `{second}`, {a.date}) | x |\n"
+            r, out, _ = run_guard(a, "", a.rev, extra_docs=dup)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(out, {"proceed": "false"}, second)
 
 
-class CommsgunPrStep(unittest.TestCase):
-    BRANCH = "bump/commsgun"
-    TITLE = f"Bump commsgun to api sha256:{API_NEW[7:19]}… / ui sha256:{UI_NEW[7:19]}…"
-    OTHER = "Bump commsgun to api sha256:000000000000… / ui sha256:111111111111…"
+class PairPrStep:
+    def setUp(self):
+        self.BRANCH = f"bump/{self.APP.name}"
+        self.TITLE = self.APP.title
+        self.OTHER = f"Bump {self.APP.name} to api sha256:000000000000… / ui sha256:111111111111…"
+
     pr = staticmethod(OpenPrStep.pr)
     sub = staticmethod(OpenPrStep.sub)
     dispatches = staticmethod(OpenPrStep.dispatches)
 
-    def run_step(self, prs=None, api_prev=API_OLD, ui_prev=UI_OLD, revision=CREV, behind="0"):
-        step = cstep(needle="gh pr create")
+    def run_step(self, prs=None, api_prev=API_OLD, ui_prev=UI_OLD, revision=None, behind="0"):
+        step = cstep(self.APP, needle="gh pr create")
         with tempfile.TemporaryDirectory() as d:
             for n in ("git", "gh"):
                 Path(d, n).write_text(FAKE)
@@ -779,8 +808,8 @@ class CommsgunPrStep(unittest.TestCase):
             log, summary = Path(d, "log"), Path(d, "summary")
             env = {"PATH": f"{d}:{os.environ['PATH']}", "FAKE_LOG": str(log), "GH_TOKEN": SECRET, "FAKE_PR_LIST": json.dumps(prs or []),
                    "FAKE_RUN_LIST": "[]", "GITHUB_REPOSITORY": "owner/repo", "API_PREV": api_prev, "UI_PREV": ui_prev,
-                   "API_DIGEST": API_NEW, "UI_DIGEST": UI_NEW, "REVISION": revision, "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": d,
-                   "GITHUB_SHA": MAIN_SHA, "FAKE_BEHIND_BY": behind}
+                   "API_DIGEST": API_NEW, "UI_DIGEST": UI_NEW, "REVISION": revision or self.APP.rev, "GITHUB_STEP_SUMMARY": str(summary),
+                   "RUNNER_TEMP": d, "GITHUB_SHA": MAIN_SHA, "FAKE_BEHIND_BY": behind}
             r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=d, env=env, capture_output=True, text=True, check=False)
             calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
             return r, calls, summary.read_text() if summary.exists() else ""
@@ -800,8 +829,11 @@ class CommsgunPrStep(unittest.TestCase):
         self.assertEqual(len(pr), 1)
         self.assertEqual(pr[0]["argv"][pr[0]["argv"].index("--title") + 1], self.TITLE)
         body = pr[0]["body"]
-        for needle in (API_NEW, UI_NEW, UI_OLD, f"https://github.com/davcs86/commsgun/commit/{CREV}", "not verified", "deploy", "by hand are lost"):
+        for needle in (API_NEW, UI_NEW, UI_OLD, f"https://github.com/davcs86/{self.APP.name}/commit/{self.APP.rev}", "not verified", "deploy", "by hand are lost"):
             self.assertIn(needle, body)
+        for other in APPS:
+            if other is not self.APP:
+                self.assertNotIn(other.name, body)
         self.assertNotIn(API_OLD, body)
         self.assertIn(f"API new: `{API_NEW}` (unchanged)", body)
         self.assertNotIn(f"UI new: `{UI_NEW}` (unchanged)", body)
@@ -858,6 +890,52 @@ class CommsgunPrStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.sub(calls, "gh", "create"), [])
         self.assertEqual(self.sub(calls, "gh", "api")[0]["argv"][:4], ["api", "-X", "PATCH", "repos/owner/repo/pulls/3"])
+
+
+class PairPins(unittest.TestCase):
+    def test_each_pin_line_and_docs_row_has_the_shape_the_bump_script_edits(self):
+        versions = (ROOT / "inventories/prod/group_vars/all/versions.yml").read_text()
+        docs = (ROOT / "docs/versions.md").read_text()
+        for a in APPS:
+            for var, img in ((a.api_var, a.api_img), (a.ui_var, a.ui_img)):
+                self.assertEqual(len(re.findall(rf'^{var}: ".*@(sha256:[0-9a-f]{{64}})"$', versions, re.M)), 1, var)
+                digest = bump.current_pin(versions, var, img)
+                rows = [l for l in docs.splitlines() if f"`{var}`" in l]
+                self.assertEqual(len(rows), 1, var)
+                self.assertIn(f"`{img}@{digest[:15]}…`, digest only (commit `", rows[0])
+                self.assertNotEqual(bump.replace_docs_row(docs, var, img, API_NEW, a.rev, "2026-12-01"), docs)
+
+
+class CommsgunWorkflow(PairWorkflow, unittest.TestCase):
+    APP = COMMSGUN
+
+
+class HappybabytrackerWorkflow(PairWorkflow, unittest.TestCase):
+    APP = HAPPYBABYTRACKER
+
+
+class CommsgunGuard(PairGuard, unittest.TestCase):
+    APP = COMMSGUN
+
+
+class HappybabytrackerGuard(PairGuard, unittest.TestCase):
+    APP = HAPPYBABYTRACKER
+
+
+class CommsgunGuardExact(PairGuardExact, unittest.TestCase):
+    APP = COMMSGUN
+
+
+class HappybabytrackerGuardExact(PairGuardExact, unittest.TestCase):
+    APP = HAPPYBABYTRACKER
+
+
+class CommsgunPrStep(PairPrStep, unittest.TestCase):
+    APP = COMMSGUN
+
+
+class HappybabytrackerPrStep(PairPrStep, unittest.TestCase):
+    APP = HAPPYBABYTRACKER
 
 
 class CiWorkflow(unittest.TestCase):

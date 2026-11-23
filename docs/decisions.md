@@ -15,16 +15,16 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IP on `POST /api/auth/login`) are the only brute-force control until the app adds them.
 - **Access logs** drop OAuth `code`, `state`, `txn` and `agent_cb` query values; Caddy redacts credential headers.
 - **Monitoring is Gatus**: public probes resolve through 1.1.1.1 (what the internet sees), home probes through
-  MagicDNS; four dead-man heartbeats (Proxmox every 60 s, DB host every 5 min, nightly backup + drill, pgBackRest backup) alert when silent.
+  MagicDNS; four dead-man heartbeats (Proxmox every 60 s, DB host every 5 min, the twice-daily edge backup + drill, pgBackRest backup) alert when silent.
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
 - **Daily verify runs unattended.** Its external job has no `production` gate; its only secret is the
   `firewall:read` repo secret `DIGITALOCEAN_READ_TOKEN`. The tailnet job stays gated and manual-only.
-- **The webhooks-mcp and commsgun bump PRs are opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
+- **The webhooks-mcp, commsgun and happybabytracker bump PRs are opened with the workflow token, not `PUSH_TOKEN`.** `PUSH_TOKEN` stays production-gated and
   Contents-only, so the daily schedule could not run unattended with it. PRs opened by `GITHUB_TOKEN` do not start `pull_request`
-  workflows, so `bump-webhooks-mcp` (and `bump-commsgun`, which does the same for its two images) dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
+  workflows, so `bump-webhooks-mcp` (and `bump-commsgun` and `bump-happybabytracker`, which do the same for their two images) dispatches `ci` on the branch instead. Merging still deploys nothing. The repo setting that allows this also lets a workflow with
   `pull-requests: write` approve PRs, and the dispatched `ci` run tests the branch head, not the merge with `main`.
-  The webhooks-mcp and commsgun pins sit on adjacent lines, so merging one bump PR leaves the other unmergeable; the next run rebuilds
-  it (mechanism: `.github/workflows/bump-webhooks-mcp.yml`).
+  The webhooks-mcp, commsgun and happybabytracker pins sit on adjacent lines, so merging one bump PR leaves the others unmergeable; the next run rebuilds
+  them (mechanism: `.github/workflows/bump-webhooks-mcp.yml`).
 - **TODO(verify): MCP source-range allowlist**, once Anthropic publishes stable connector egress ranges. Sketch for
   the `xstockstrat` site in the Caddyfile:
   ```
@@ -70,7 +70,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     undone for `commsgun_ui_private_hostname` (EDGE-07); and the dashboard's `ORIGIN` follows the new hostname (EDGE-11, a commsgun-side
     change).
   - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
-    nightly backup: losing it loses every `sub` and second factor.
+    edge backup (twice a day): losing it loses every `sub` and second factor.
 
 ## Known traps
 
@@ -87,7 +87,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     The listener answers 503 once 32 ingest requests are in flight; publishers must retry.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `webhooks-data`. A bind mount would be root-owned and the
     container would exit at start.
-  - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the nightly backup, by decision: the data is transient.
+  - The store bounds itself (1 GiB budget, 7-day TTL) and is not in the edge backup, by decision: the data is transient.
 - **Portals live under two wildcard zones, `*.public.<domain>` and `*.private.<domain>`.** One certificate per zone over the
   existing DNS-01 chain (labels `public`, `private`), so a new portal needs no Cloudflare or deSEC change.
   Rejected: per-host certificates with API-driven registration (needs a Cloudflare DNS token and a deSEC token that can manage
@@ -121,7 +121,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - Admin port 9201 is never published. The two containers sit on their own compose network (`commsgun`), so no other stack
     container can reach 9201 or send the dashboard forged `X-Forwarded-*` headers; the admin API is also guarded by `commsgun_admin_api_token`.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `commsgun-data`. A bind mount would be root-owned and
-    the container would exit at start. The store (SQLite) is not in the nightly backup, by decision: queued messages expire within 24 hours.
+    the container would exit at start. The store (SQLite) is not in the edge backup, by decision: queued messages expire within 24 hours.
   - The two image pins (`commsgun_api_image`, `commsgun_ui_image`) move together: `bump-commsgun` proposes a pair only when both
     images carry the same revision label and refuses a mismatched or unlabelled pair. Caddy's body cap (`body_limits.commsgun_enqueue`,
     262144 bytes) must equal the API's own cap.
@@ -141,6 +141,34 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     `group:members`, `tag:xstockstrat`, `tag:db`, `tag:pve`) reaches the dashboard login and the enqueue route; both are
     authenticated (dashboard password, per-app key). `tag:xstockstrat-staging` holds that grant too and is denied only once the
     staging VM is registered with headscale and a deploy has rendered its addresses into `deny_staging_vm` (empty until then).
+- **happybabytracker (family tracker) is reached as commsgun's dashboard is, and its database is in the edge archive.** The route is
+  `happybabytracker_ui_private_hostname` (`happybaby.private.<domain>`, host port 9212); the API (9210) is never published and shares a compose
+  network only with the UI. Runbook: `docs/runbooks/happybabytracker.md`.
+  - Reach: the owner accepted (2026-11-21) the commsgun dashboard's reach (the last bullet of the commsgun entry above): every tailnet
+    identity with a grant on `tag:edge:443` reaches the login page, and the login is the only control. No policy or Caddy change, since grants are per
+    port, not per name. The handle sits after `deny_staging_vm`, so the staging VM cannot reach it, and it sets no `header_up` or `trusted_proxies`
+    (EDGE-02): the UI builds its origin and login limiter key from Caddy's `X-Forwarded-*` and answers 400 unless the origin equals its `ORIGIN`.
+  - The database is in the archive, unlike commsgun's queue (which is transient by decision): it holds the family's records. The timer runs at
+    00:00 and 12:00 UTC; the Gatus heartbeat keeps its name `nightly-backup` (EDGE-10: pushers call that URL) with a 14 h interval. `edge-backup` fails the whole
+    run, headscale included, when `happybabytracker.db` is missing from the volume; the app creates it at its first start.
+    Timers in UTC (PST/PDT): the headscale and happybabytracker backup runs at 00:00 and 12:00 (plus 0 to 10 min of jitter), pgBackRest full and differential at 03:00 Los Angeles (11:00/10:00), and the reboot window at 02:00 Los Angeles (10:00/09:00). The old 04:00 Los Angeles reboot was 12:00 UTC in winter and met the second backup, and 03:00 would have met pgBackRest, so the owner chose 02:00.
+  - **The snapshot runs as the app's uid 10001, through a private bind mount.** The API opens its database as 10001 with `cap_drop: ALL`; a
+    root-run `sqlite3 .backup` would leave a root-owned `-wal` or `-shm` in the app's data directory and could stop the API opening the database.
+    Docker's data root is `0710 root:root` and `volumes/<name>` is `0701` by default (this repo changes neither), so no uid, gid and group list can
+    reach `_data`: once a process is in the directory's group the kernel applies the group bits and never consults "other" (`--clear-groups` and `--groups=0` both
+    failed in `scripts/edge-backup-test.py`, which reproduces those modes with a live writer). So root makes a private mount namespace, bind-mounts
+    `_data` at a `0755` directory under `/run`, and only then drops to 10001 with no capabilities. Rejected: `CAP_DAC_READ_SEARCH` on the
+    `sqlite3` process (it could read any host file) and a helper container (another image pin, declined by the owner). The cost: the backup
+    service needs mount rights (it is root with default capabilities and sets no `ProtectSystem` or `PrivateMounts`); a sandboxed unit would break it.
+  - The secrets block asserts what the app checks at start (password 16 characters, internal token 32, username `^[a-z0-9._-]{3,32}$`) before it writes an env
+    file. It runs under `no_log: true`, and on ansible-core 2.21.4 that censors a failing assert completely: the task name shows, the key does not (the
+    comment above the commsgun block claiming `fail_msg` is printed does not hold there). The runbook's first-deploy section says how to find the key.
+  - `happybabytracker_vapid_private_key` is generated and kept in SOPS but not rendered into `api.env`: the pinned app does not read it yet. The app's
+    reminder and Web Push release adds the env line and its assert. A changed key invalidates every push subscription, so `fill_missing` never replaces it.
+  - Invite and reset tokens travel in the URL path, so `private.access.log` (path kept, query dropped) holds them until the active file reaches 50 MiB and its rolled copy ages out (720 h, at most 5 rolled copies); the owner accepted that,
+    as each works once and expires in 72 h or 1 h. Caddy's `redacted_requests` logger keeps the path too and writes to stderr, so the tokens also sit in the `caddy` container's Docker `local` log (10 MiB, 3 files). No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
+    rule is that those tokens never reach OTEL.
+  - The two image pins move together: `bump-happybabytracker` proposes a pair only when both images carry the same revision label.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.
@@ -347,6 +375,16 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IPv4 from headscale on every deploy and writes it to the edge's `/etc/hosts`. If the address ever changes, backups fail until the next deploy.
   The backup role does the same for `backup`: the nightly `rsync` over ssh died with "Could not resolve hostname backup.ts…" (verify run 39),
   and it fails the same way while `backup` is not a registered tailnet node (the deploy then says so).
+- **The backup host is a Proxmox VM on a quota-bound stopgap dataset, and it prunes itself.** No SATA disk was free (only an M.2 slot and
+  OCuLink), so the archive disk is a 16G vdisk on `rpool/data/backup-stopgap` (quota 20G; a 20G image inside a 20G quota would fail when full).
+  That shares the Proxmox pool's failure domain; it still leaves the droplet (7 days in `/var/backups/edge`) as the independent copy, and `qm disk move`
+  onto a dedicated disk changes nothing else. The edge's key is forced to `rrsync -wo`, so it cannot delete: retention lives on the VM
+  (`edge-backup-prune`, 14 days) with a floor of the newest 14 archives (7 days at two backups a day), because an age-only rule would empty the directory after 14 days
+  of silence from the edge. The host key is pinned (`StrictHostKeyChecking=yes`), so a rebuilt VM needs its new key in `backup_host_known_hosts`. The
+  pgBackRest repository is not copied to this host; it lives only on the edge.
+- **`pve-setup.py vm-create` cannot make a disk smaller than its template.** The Disk size prompt runs `qm resize`, which only grows; the
+  template `tpl-debian13` is 32G, so answering 8G failed after the clone, the config and the tags had already succeeded. Keep the clone
+  and skip the resize (the plan's offered undo destroys a good VM), or answer at least the template's size (the default is 40G).
 - **App VMs run CPU type `host`.** `qm create` without `--cpu` gives `kvm64` ("Common KVM processor"), which has no SSE4.2,
   POPCNT or SSSE3. NumPy 2.4 needs x86-64-v2 and raises `RuntimeError: NumPy was built with baseline optimizations`, so the
   xstockstrat `indicators`, `analysis` and `ingest` containers crash-looped and the compose `--wait` rolled the release back.
@@ -356,3 +394,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   filled, and every deploy failed with the misleading `install: cannot change permissions of '/opt/<app>/releases/<rel>'`. After a healthy
   `up`, `prune_images` removes digest-pinned local images of repositories that a kept release names, unless the newest `image_keep` (2)
   releases, `current` or the previous release name that digest; a rollback reaches only those, older releases re-pull from GHCR. An empty keep set removes nothing; in-use images survive because `docker image rm` refuses them.
+- **The Caddy builder image's Go does not follow Caddy's patch releases.** `caddy:<ver>-builder` bundles whatever Go its tag was cut with
+  (1.26.5 even in 2.11.9), and `xcaddy` compiles that Go's stdlib into the binary, so bumping `caddy_builder_image` alone left six HIGH
+  stdlib findings in the shipped Caddy. The build now sets `GOTOOLCHAIN` to `caddy_go_toolchain`; Go downloads and checksum-verifies that
+  toolchain at build time, so the build needs the Go module proxy. The `edge-caddy` tag is `caddy_version-<ratelimit commit>`, so a change to
+  `caddy_go_toolchain` alone does not change the tag: bump `caddy_version` or build with `--no-cache` for the new toolchain to take effect.
+- **ntfy upgrades are one-way without a manual step.** v2.31.1 moved the message database schema from 16 to 17 and v2.32.0 records the
+  oldest schema each version still reads; going back to an older ntfy needs `UPDATE schema_version SET version = <n>` first (the v2.31.1
+  release notes give the statement). Daily usage counters also restart at the v2.38.0 upgrade, which only matters with visitor limits.

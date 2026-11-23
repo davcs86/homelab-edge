@@ -9,6 +9,7 @@ Usage: init_secrets.py <edge-tls-hostname> <output.sops.yaml>   (needs: sops, op
        init_secrets.py --fill-missing <existing.sops.yaml>      adds only the generated credentials the file lacks; the
                                                                  file is decrypted in memory and nothing existing changes
 """
+import base64
 import os
 import secrets
 import string
@@ -38,6 +39,17 @@ def bcrypt_hash(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=10)).decode()
 
 
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
+def generate_vapid_private_key() -> str:
+    """Raw P-256 scalar d, 1 <= d < n, as unpadded base64url (43 characters)."""
+    while True:
+        raw = secrets.token_bytes(32)
+        if 1 <= int.from_bytes(raw, "big") < P256_ORDER:
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
 # Plain credentials that can be added to an existing file without touching anything else.
 GENERATED = {
     "ntfy_alerts_password_bcrypt": lambda: bcrypt_hash(secrets.token_urlsafe(32)),
@@ -53,13 +65,15 @@ GENERATED = {
     "webhooks_mcp_auth_key": lambda: secrets.token_urlsafe(36),
     **{k: lambda: secrets.token_urlsafe(36) for k in (
         "commsgun_admin_password", "commsgun_session_secret", "commsgun_admin_api_token",
-        "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops")},
+        "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops",
+        "happybabytracker_admin_password", "happybabytracker_internal_api_token")},
+    "happybabytracker_vapid_private_key": generate_vapid_private_key,
 }
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
-# Values the owner adds with `sops set` (gate public keys, Resend key, sender map); neither mode writes them, fill-missing
+# Values the owner adds with `sops set` (gate public keys, Resend key, sender map, happybabytracker admin username); neither mode writes them, fill-missing
 # does not require them, and overwrite drops them (add them again).
-HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "production")] + ["resend_api_key", "commsgun_senders"]
+HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "production")] + ["resend_api_key", "commsgun_senders", "happybabytracker_admin_username"]
 # Sets that are created whole, never completed: the TLS CA of the database host, and the certs the pull direction adds.
 DB_TLS_KEYS = [f"db_tls_{n}_{k}" for n in ("ca", "server") for k in ("crt", "key")]
 PGBACKREST_DB_KEYS = ["pgbackrest_db_server_crt", "pgbackrest_db_server_key", "pgbackrest_edge_client_crt", "pgbackrest_edge_client_key"]
