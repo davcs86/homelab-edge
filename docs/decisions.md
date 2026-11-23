@@ -48,26 +48,33 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     `host-gateway` to Caddy (the edge never hairpins through its reserved IP). The issuer hostname is permanent: it is every
     identity link's issuer and the passkeys' RP ID.
   - Every app is a provider-neutral OIDC client with `AUTH_MODE` `local` (default) | `oidc` | `both` (webhooks-mcp: `static` |
-    `oauth`), so the OSS repos run without an identity provider. The homelab runs `both`; local is break-glass, and Caddy admits
-    local-login POSTs from the tailnet only. No `forward_auth` for our own apps; allowed only for third-party software without OIDC.
+    `static+oauth` | `oauth`), so the OSS repos run without an identity provider. The homelab runs `oidc`; `both` is switched on
+    only to link accounts or for break-glass. Local logins, when on, are public behind Caddy's login limits: public names have
+    no split-horizon, so a tailnet client arrives from its WAN IP and a tailnet-only rule would lock everyone out. No
+    `forward_auth` for our own apps; allowed only for third-party software without OIDC.
   - Apps own users and roles; Authelia proves identity and gates which app a person opens (one group per app, `default_policy:
     deny`, `two_factor`). Linking is explicit ("Link SSO" from a signed-in local account, or an invite redeemed by SSO), keyed on
     `(issuer, subject)`; unlinked logins and MCP tokens are refused; no email matching, no group-to-role mapping, just-in-time
     provisioning only behind a flag. xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
-  - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]` with a 5 min ban;
-    argon2 at most 32 MiB per check with a global first-factor zone, so parallel logins cannot OOM-kill Authelia.
-  - People live in lldap (a small LDAP server; LDAP on the compose network only, its admin UI tailnet-only at `lldap.private.<domain>`): SOPS says who exists and their groups and a
-    deploy step syncs them, but never holds passwords, so lldap is the passwords' only writer. That is what makes self-service
-    password reset possible; Authelia's file backend would rewrite a file rendered from SOPS. Reset and enrolment emails go
-    through an SMTP listener inside commsgun-api. `require_second_factor` makes registering another device need an existing
-    one, so only an admin recovers someone who lost every device. Each person's `sub` is pinned (UUID in SOPS, applied at
-    deploy), so a restore or rebuild never breaks links.
+  - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]`, 5 min ban.
+  - People live in lldap (rootless image; LDAP on the compose network only; admin UI tailnet-only at `lldap.private.<domain>`).
+    SOPS says who exists and their groups and a deploy step syncs them, but never holds passwords, so lldap is the passwords'
+    only writer; that is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from
+    SOPS). Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the filter
+    also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
+  - Reset links last 1 h, to absorb Resend's rate limiting. Emails go through an SMTP listener inside commsgun-api, STARTTLS
+    with an edge-local CA (Authelia does not support plaintext SMTP), on a network shared only with Authelia so neither
+    reaches the other's other ports. `require_second_factor` makes another device need an existing one; recovery after
+    losing every device is an admin-present re-enrolment.
+  - Each person's `sub` is pinned (UUID in SOPS) and applied before Authelia serves, failing the deploy on a mismatch, so a
+    restore or rebuild never breaks links; usernames are never reused.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens
-    (30 days for MCP clients, rotating) survive. Config reaches it through compose `configs:` content if that recreates the
-    container on change (spike), else a mounted directory with a hash-compare restart task, never a handler.
-  - Authelia's, lldap's and commsgun's databases are in the twice-daily edge backup; the storage encryption key is in SOPS. Release
-    v4.39.28; a backup precedes every bump because storage migrates on start.
+    (30 days for MCP clients, rotating) survive. Client-secret hashes are generated once in SOPS so the rendered config is
+    stable. Config reaches it through compose `configs:` content if that recreates the container on change (spike), else a
+    mounted directory with a hash-compare restart task, never a handler.
+  - Authelia's, lldap's and commsgun's databases are in the twice-daily edge backup; the storage encryption key is in SOPS. A
+    deploy runs the backup before an Authelia or lldap digest change, because both migrate their storage on start.
 
 ## Known traps
 
