@@ -1,116 +1,104 @@
 # SSO (Authelia): platform admin reference
 
-> **Status: design approved 2026-11-15, re-specced 2026-11-23, not deployed.** No `authelia` role, Caddy site or SOPS key
-> exists yet. The PR that adds them updates this page to match the code. Items marked `TODO(verify)` are settled by the spike
-> on the pinned release, not here. Decision record: `docs/decisions.md` § Design decisions, "SSO is Authelia"; open items:
-> `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` § 7.
+> **Status: design approved 2026-11-23, not deployed.** No `authelia` role, Caddy site or SOPS key exists yet. The PR that
+> adds them updates this page to match the code. Items marked `TODO(verify)` are settled by the spike on the pinned release,
+> not here. Decision record: `docs/decisions.md` § Design decisions, "SSO is Authelia"; full design and open items:
+> `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`.
 
 Authelia on the edge (`https://auth.public.<domain>`) is the one login (password + passkey or TOTP) and the one OAuth/OIDC
-token issuer for the homelab apps. It knows people and which apps they may open; it does not know app roles or xstockstrat
-environments. DigitalOcean xstockstrat deployments never use it.
+token issuer for the homelab apps. It proves who a person is and gates which apps they may open; each app owns its users and
+roles. DigitalOcean xstockstrat deployments never use it (`AUTH_MODE=local`).
 
 ## 1. Model
 
 | Concept | Lives in | Owner | Notes |
 |---|---|---|---|
-| Person (username, display name, email, password hash, groups) | `users_database.yml`, rendered from SOPS | platform admin | One account per person. Users cannot edit their own email. |
-| `sub` (opaque UUID) | Authelia SQLite | Authelia | Generated at a person's first login and bound to the **username**. Every app links to it. |
-| Second factor (passkey / TOTP) | Authelia SQLite | the person | Enrolled at first login. Any TOTP app (e.g. Authy) works. |
+| Person (username, display name, email, password hash, groups, pinned `sub`) | `users_database.yml` and SOPS | platform admin | One account per person. Nobody edits their own password or email. |
+| `sub` (UUID) | SOPS, applied to Authelia's SQLite at deploy | platform admin | Pinned per person, so restores and rebuilds keep every app link. |
+| Second factor (passkey / TOTP) | Authelia SQLite | the person, enrolled with an admin-relayed code | Any TOTP app (e.g. Authy) works. |
 | App access | the person's `groups` | platform admin | One group per app; a person holds any number. |
-| xstockstrat role (`admin` / `trader` / `viewer`) | `identity.users.roles`, per environment | xstockstrat admin | Never in Authelia. Managed with `SetUserRoles` / `manage-users.py update-roles`. |
+| App account, role, link to the `sub` | each app's database | each app's admin | Never in Authelia. xstockstrat roles: `manage-users.py update-roles`. |
 
-Groups (each app's client or route denies everyone outside its group, and every rule requires two factors):
+| Group | Opens |
+|---|---|
+| `xstockstrat` | xstockstrat (prod) web + MCP (Claude.ai and Claude Code) |
+| `xstockstrat-staging` | xstockstrat-staging web + MCP |
+| `webhooks-mcp` | webhooks-mcp `/mcp` (the app also checks its `sub` allowlist) |
+| `commsgun` | commsgun dashboard |
+| `happybabytracker` | happybabytracker (parent or admin, as the app's own account says) |
 
-| Group | Opens | Mechanism |
-|---|---|---|
-| `xstockstrat` | xstockstrat (prod) web + MCP | OIDC clients with `authorization_policy: xstockstrat` |
-| `xstockstrat-staging` | xstockstrat-staging web + MCP | OIDC clients with `authorization_policy: xstockstrat-staging` |
-| `commsgun` | commsgun dashboard | OIDC client; commsgun checks the group claim |
-| `webhooks-mcp` | webhooks-mcp `/mcp` (Claude.ai and Claude Code clients) | OIDC clients; webhooks-mcp validates Authelia JWTs |
-| `happybabytracker` | happybabytracker | OIDC client; a login links the parent by `sub` (`identities`, provider `authelia`) |
-
-xstockstrat also gets Claude Code clients next to the Claude.ai ones. commsgun's password login and happybabytracker's env
-admin stay as fallbacks outside every group, each switched off by its own config flag. Gatus and Proxmox stay tailnet-only
-and outside SSO (a later phase). headscale device login never uses SSO.
+Every app also keeps a local login for break-glass: Caddy admits its POST from the tailnet only. Gatus and Proxmox stay
+outside SSO (a later phase). headscale device login never uses SSO.
 
 ## 2. Hard rules
 
-1. **Never rename a username.** The `sub` is bound to it: a rename gives the person a new `sub`, every app treats them as
-   a stranger, and the old app accounts are already linked to the old `sub`, so they will not re-link by email.
-   Change the display name or email instead. If a rename is unavoidable, see § 7.
-2. **Emails are unique and correct.** xstockstrat links an existing account by email, once. A wrong email in SOPS
-   attaches a person to someone else's account and roles. Check twice before deploying a new or changed email.
-3. **Group membership is the approval.** Adding someone to `xstockstrat` lets them log in, and their first login creates
-   an account with role `trader` unless their email already matches one. Trading still needs their own broker account;
-   there are no shared accounts.
-4. **Authelia's SQLite file is backed up twice a day and must stay so.** Losing it loses every `sub` and every passkey/TOTP
-   enrolment (§ 8).
+1. **Never rename a username, and never change a pinned `sub`.** Every app link is keyed on `(issuer, sub)`. Change the
+   display name or email instead. If a rename is unavoidable, see § 7.
+2. **Never rename `auth.public.<domain>`.** It is every link's issuer and every passkey's RP ID.
+3. **Group membership opens the door; the app grants the role.** A person in a group but not linked in that app is refused
+   there until they link (§ 5).
+4. **Authelia's SQLite is backed up twice a day and must stay so.** Pinned `sub`s survive its loss; second factors do not (§ 8).
 
 ## 3. Add a person
 
-1. Decide their username (permanent, § 2.1), email and groups.
-2. Add them to `users_database.yml` in SOPS with an argon2id password hash. `TODO(verify)`: the exact SOPS key and the
-   hash command (`authelia crypto hash generate argon2` in the pinned image).
-3. Deploy.
-4. They log in at `https://auth.public.<domain>` and enrol a passkey or a TOTP app. Enrolment first sends a one-time code:
-   with the file notifier an admin reads it on the edge and passes it on. `TODO(verify)`: the file path and command.
-5. They open each app. What xstockstrat does on their first login is § 5.
+1. Decide the username (permanent, § 2.1), email and groups; generate a UUID for the `sub`.
+2. Add them to SOPS with an argon2id hash made with the pinned image's hash command and the configured parameters.
+   `TODO(verify)`: the SOPS key and the exact command.
+3. Deploy (renders the users file, applies the `sub`).
+4. They log in at `https://auth.public.<domain>` and start enrolling a passkey or TOTP app. Authelia writes a one-time code to
+   its file notifier; an admin reads it on the edge and gives it to them. `TODO(verify)`: path and command.
+5. In each app, link (§ 5).
 
-## 4. Change access, email or remove a person
+## 4. Change access, password, second factor, or remove a person
 
 | Change | Steps | Takes effect |
 |---|---|---|
-| Grant an app | add the group in SOPS, deploy | next login |
-| Revoke an app | remove the group in SOPS, deploy; for xstockstrat also `SetUserActive false` in that environment | new logins at once; existing xstockstrat MCP calls within ~60 s (role/active cache). `TODO(verify)`: whether Authelia re-checks the group on token refresh. |
-| Change email | edit it in SOPS, deploy | xstockstrat copies it to `identity.users.email` at the person's next login. If another row already holds that email, the old one is kept and the clash is logged. |
-| Remove a person | remove them from SOPS, deploy; deactivate their xstockstrat accounts | as revoke |
+| Grant an app | add the group in SOPS, deploy; the person links in that app (§ 5) | after linking |
+| Revoke an app | remove the group in SOPS, deploy; disable the user in that app; revoke their refresh tokens | new logins at once; app sessions end when disabled in the app |
+| Reset a password | new hash in SOPS, deploy | next login |
+| Lost device / reset second factor | delete the registration with the `authelia storage user` TOTP/WebAuthn commands (`TODO(verify)`), then § 3 step 4 | next login |
+| Unban after regulation | `authelia storage bans` (`TODO(verify)` subcommand) | at once; bans also expire after 5 min |
+| Change email | edit in SOPS, deploy | next login (xstockstrat copies it to linked accounts) |
+| Remove a person | remove from SOPS, deploy; disable them in every app; drop their `sub` from webhooks-mcp's allowlist | as revoke |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | next session JWT (web) or within ~60 s (MCP) |
 
-## 5. How xstockstrat matches a login to an account
+## 5. Linking app accounts
 
-Per environment (prod and staging have separate `identity.users`), in this order:
+Linking is always explicit. No app matches by email or username, and none creates accounts on first login unless its
+auto-provision flag is on (off on the homelab).
 
-1. The `sub` is already linked → that account.
-2. Exactly one **active, unlinked** row has the login's email (case-insensitive) → link it, record a ledger audit event.
-3. No row has that email → create one with roles written explicitly as `{trader}`.
-4. Anything else is refused: several matches, the only match is linked to another `sub`, the account is inactive, or
-   the token has no email. This applies to the web and to MCP; MCP tokens carry the email claim too.
+- **xstockstrat (each environment):** the person signs in with their local password, presses **Link SSO**, re-authenticates,
+  and confirms the account. A new person is first created with `manage-users.py create-user` (every xstockstrat user keeps a
+  password). An unlinked SSO login or MCP token is refused with `not linked`.
+- **commsgun / happybabytracker admin:** the admin signs in locally from the tailnet and presses **Link SSO**.
+- **happybabytracker parents:** an existing parent links like the admin; a new parent is created by the admin, whose invite
+  link can be redeemed with a password or with SSO.
+- **webhooks-mcp:** no accounts; the person's pinned `sub` goes into its allowlist.
 
-An app account whose email does not match the person's Authelia email is **not** linked automatically. Make them
-match before the person's first login (§ 6).
+## 6. xstockstrat cutover (once per environment)
 
-## 6. Linking existing xstockstrat accounts (cutover, once per environment)
+1. Before the first SSO login, the seeded admin row (`admin@localhost`, `services/xstockstrat-identity/migrations/002_seed_admin.up.sql`)
+   gets the owner's password with `manage-users.py reset-password` if it is not known.
+2. Set the confidential client secret and the issuer in that environment's config, and `auth.mode` to `both`.
+3. Sign in with the password, **Link SSO**, sign out, sign in with SSO.
+4. Connect the Claude.ai and Claude Code connectors; they sign in as the same person.
+5. Rollback at any point: `auth.mode` back to `local`.
 
-Accounts that predate SSO (for example the seeded `admin@localhost`, `services/xstockstrat-identity/migrations/002_seed_admin.up.sql`)
-are linked by giving them the person's real email **before** that person's first SSO login:
-
-1. `uv run scripts/manage-users.py list-users` against the environment; note each row's email and `user_id`.
-2. For each row that should belong to a person, set its email to the person's Authelia email. `manage-users.py` has
-   no command for this today (`reset-password`, `create-user`, `list-users`, `update-roles`, `delete-user`): an
-   `update-email` command is part of the xstockstrat SSO feature.
-3. Set roles with `update-roles` (keep at least one active `admin` per environment: `SetUserRoles` refuses to remove the last one).
-4. The person logs in; rule 5.2 links the row.
-
-`SEED_USER_ID` (the `user_id` that owns seeded and legacy rows, e.g. strategies) is unaffected: this procedure keeps
-every `user_id`. On the homelab it is already per environment (resolved from SOPS by `deploy-homelab.yml` with
-`--env`). If it must point at a different user: rows written by migrations that already ran keep the old owner,
-applied migrations are never edited, and only migrations not yet applied pick up the new value.
+`SEED_USER_ID` (the `user_id` that owns seeded and legacy rows) is unaffected: linking keeps every `user_id`.
 
 ## 7. A username must change anyway
 
-1. Create the new account (§ 3).
-2. Unlink the old `sub` from the person's accounts in every xstockstrat environment. `TODO(verify)`: the unlink tooling
-   is defined by the xstockstrat SSO feature.
-3. The person logs in with the new username; rule 5.2 links by email.
-4. Remove the old account.
+1. Create the new person (§ 3) with a new `sub`.
+2. In each app, unlink the old identity (xstockstrat: `manage-users.py unlink-sso`) and link the new one (§ 5).
+3. Remove the old person.
 
 ## 8. Outages and recovery
 
 | Situation | Effect | Action |
 |---|---|---|
-| Authelia down | no new SSO logins anywhere; app sessions already open keep working; MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. Fallbacks, each on its app's own login page while its flag is on: xstockstrat's password login (the rollback flag), commsgun's password login, happybabytracker's env admin. |
-| Authelia restarted | every portal session is signed out (sessions are in memory); app sessions and OIDC refresh tokens survive | none; the next SSO login asks for credentials again |
-| Authelia SQLite lost | every `sub` and second factor gone | **Restore it from the edge backup** (the same `edge-<UTC>.tar.age` archives as headscale, `docs/runbooks/recovery.md`; the role PR adds the Authelia step). Without a backup, every person re-enrols, and each xstockstrat environment needs every row unlinked (§ 7 step 2) before rule 5.2 can relink them. |
+| Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires | Gatus alerts via ntfy; fix and restart. Break-glass: each app's local login, from the tailnet. |
+| Authelia restarted | portal sessions end (they are in memory); app sessions and refresh tokens survive | none |
+| Authelia SQLite lost | second factors and refresh tokens gone; `sub`s re-applied at deploy | Restore from the edge backup (`docs/runbooks/recovery.md`). Without one: redeploy, everyone re-enrols a second factor; app links survive. |
 | `users_database.yml` lost | nobody can log in | redeploy from SOPS |
 
 headscale, SSH and the tailnet do not depend on Authelia; the break-glass path in `docs/runbooks/recovery.md` is unchanged.

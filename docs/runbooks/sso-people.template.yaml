@@ -2,34 +2,24 @@
 # and the result goes into SOPS (key decided by the Authelia role PR). Design: docs/superpowers/specs/2026-11-23-authelia-sso-respec.md
 #
 # Rules (docs/runbooks/sso.md § 2):
-#   - username is PERMANENT (the Authelia `sub` is bound to it). Use ^[a-z0-9._-]{3,32}$ so it also fits happybabytracker.
-#   - email is unique across people and exactly right: xstockstrat links an existing account by this email, once.
-#   - groups are the approval: a group opens one app. Leave it out and that app refuses the person.
-#   - no passwords here. Each person's argon2id hash is generated when they are added (sso.md § 3), never typed into this file.
+#   - username and sub are PERMANENT: every app links to (issuer, sub). Use ^[a-z0-9._-]{3,32}$ for the username.
+#   - email is unique across people. No app links by email; it is contact data only.
+#   - groups open apps; roles are granted inside each app, and each person links in each app (sso.md § 5).
+#   - no passwords here. Each argon2id hash is generated when the person is added (sso.md § 3), never typed into this file.
 #
 # Groups: xstockstrat | xstockstrat-staging | webhooks-mcp | commsgun | happybabytracker
-#   proposed, pending spec Q20: happybabytracker-admin (an SSO login opens happybabytracker's admin area)
-#   The four people and their groups are in the spec § 3.4; copy them here and add the emails.
+# The four people and their groups are in the spec § 7; copy them here and add the emails.
 ---
 people:
   - username: ""            # permanent, e.g. "david"
+    sub: ""                 # permanent UUID, e.g. from `uuidgen`; applied to Authelia at deploy
     display_name: ""        # free text, editable later
     email: ""               # unique; admins edit it in SOPS only
-    groups: []              # e.g. [xstockstrat, xstockstrat-staging, webhooks-mcp, commsgun, happybabytracker]
-    second_factor: passkey  # passkey | totp  (what they plan to enrol at first login; informational)
-
-    # How each app should treat this person's first SSO login. Delete an app's block if they are not in its group.
-    xstockstrat:            # homelab prod only (DigitalOcean stays legacy)
-      existing_account_email: ""   # the email on their current row (`manage-users.py list-users`); "" = create a new user
-      roles: [trader]              # admin | trader | viewer; keep at least one active admin
-    xstockstrat-staging:
-      existing_account_email: ""
-      roles: [trader]
-    happybabytracker:
-      existing_parent_username: "" # link to this parent row; "" = provision a new parent
-      kids_access: ""              # note only: which kids, guardian or caregiver (granted in the app, not by SSO)
+    groups: []              # e.g. [xstockstrat, xstockstrat-staging, happybabytracker]
+    second_factor: passkey  # passkey | totp  (what they plan to enrol; informational)
 
   # - username: ""
+  #   sub: ""
   #   display_name: ""
   #   email: ""
   #   groups: []
