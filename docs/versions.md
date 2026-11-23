@@ -29,11 +29,11 @@ All pins were at least two weeks old on 2026-10-14 (except the Caddy, Gatus and 
 | PgBouncer (DB host) | 1.26.0-4.pgdg13+1 | 1.26.1 was 11 days old; ≥ 1.21 is needed for `max_prepared_statements` |
 | pgBackRest (DB host) | 2.59.2-1.pgdg13+1 | the same upstream release as the edge's Ubuntu build; repo-host mode needs both sides equal |
 | Debian (DB host) | 13 (trixie) | what Proxmox VE 9 is built on; the pins above are the `pgdg13` and `debian13` builds |
-| ansible-core | 2.21.4 | 2.21.5 under two weeks |
+| ansible-core | 2.22.0 | released 2026-11-02, newest ≥ 2 weeks |
 | collections | general 13.4.0, docker 5.3.0, posix 2.2.2, sops 2.4.0, crypto 3.4.0 | newest ≥ 2 weeks |
 | sops | 3.13.3 | SSH-key age recipients need ≥ 3.10 |
 | age (on edge) | Ubuntu archive 1.2.1 | supports ssh-ed25519 recipients |
-| typer (`tools/pve-setup.py`) | 0.27.3 | released 2026-10-06, newest ≥ 2 weeks; transitive pins in `tools/pve-setup.requirements.txt` |
+| typer (`tools/pve-setup.py`) | 0.28.0 | released 2026-11-06, newest ≥ 2 weeks; transitive pins in `tools/pve-setup.requirements.txt` |
 | tailscale in `templates/app-deploy/deploy.yml` | 1.98.10 | same pin and checksum as the edge; update both together |
 | 1password/load-secrets-action (`templates/app-deploy`) | v5.0.1, commit `70062d7a876d3eb6334754fa26efd2fbd90c32f2` | released 2026-08-18; v5 is newer than the v4 in 1Password's docs examples. Its Workload Identity mode is public preview and needs a GitHub secret too, so service accounts are used. |
 | 1Password CLI (`templates/app-deploy`) | 2.40.0, zip sha256 `74277219e8da60958c00f9aee9d2023225e98fdda8bfd2156a5d9e85e0edaab3` | released 2026-10-02; 2.41.x under two weeks. The zip's `op.sig` verified against 1Password's code-signing key `3FEF 9748 469A DBE1 5DA7 CA80 AC2D 6274 2012 EA22` when pinned. The template installs it first, because the action otherwise downloads an unverified "latest". |
