@@ -91,3 +91,21 @@ in the rule until the next deploy.
 | `xstockstrat-staging.<domain>` | the former public name | nothing: it is no longer served. Point MCP clients and bookmarks at the name above |
 
 The Gatus endpoint named `xstockstrat-staging-ui-vm` is a probe label; it probes the node name, not the public name.
+
+## 5. SSO (only if people log in; design, not deployed)
+
+The design is `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`; § 3 there is the contract the app implements
+(`AUTH_MODE`, the `OIDC_*` names, users and roles in the app, explicit "Link SSO", a "create if empty" admin CLI).
+
+1. **App side.** It speaks plain OIDC (or, for an MCP server, validates JWTs against JWKS with an audience) and defaults to
+   `AUTH_MODE=local`, so its repo runs without Authelia; the homelab sets `oidc`. Third-party software that has no OIDC may
+   use Caddy `forward_auth` instead; our own apps never do.
+2. **Authelia.** One client entry (confidential for a web app; public PKCE for MCP clients, with both Claude.ai callback
+   hosts, `access_token_signed_response_alg`, `audience` and `requested_audience_mode: implicit`), one group with an
+   `authorization_policy`, the client secret and its hash in SOPS via `init-secrets` `fill_missing`.
+3. **Edge.** A `*.public` name, `extra_hosts: auth.public.<domain>:host-gateway` if it runs on the edge, `authelia_session`
+   stripped before it, Caddy login limits on its local-login POST (local login is off in steady state: `AUTH_MODE=oidc`),
+   query/`Referer`/token-path redaction if its URLs carry tokens, a Gatus probe, and its database in the edge backup if it
+   holds identities.
+4. **People.** Add the group name to the repo's lldap group list (the deploy creates it), add each person to it in lldap's
+   UI, and each person links in the app (`sso.md` § 5), with the app in `both` for that window.
