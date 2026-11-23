@@ -26,8 +26,9 @@ flowchart LR
     gatus["Gatus"]
     ntfy["ntfy"]
     commsgun["commsgun<br/>API :9200, dashboard :9202"]
+    happybaby["happybabytracker<br/>UI :9212, API (unpublished)"]
     repo["pgBackRest repo :8432"]
-    backupjob["nightly age backup"]
+    backupjob["twice-daily age backup"]
   end
 
   subgraph home["home machines: *.ts.‹domain› (WireGuard, default-deny grants)"]
@@ -47,12 +48,13 @@ flowchart LR
   pub --> app
   pub --> staging
 
-  members -- "status, ntfy, commsgun,<br/>comms, webhooks" --> priv
+  members -- "status, ntfy, commsgun,<br/>comms, happybaby, webhooks" --> priv
   pushers -- "status.private<br/>webhooks.private" --> priv
   priv -- "ingest" --> wmcp
   priv --> gatus
   priv --> ntfy
   priv --> commsgun
+  priv --> happybaby
   gatus -- "alerts" --> ntfy
 
   app --> db
@@ -67,7 +69,7 @@ Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SS
 behind per-IP rate limits, one view for every client (no tailnet bypass); other `/agent` paths, the unauthenticated tool catalog among
 them, are 404. Their former names `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served. Every 443 hostname is an entry in `edge_sites`.
 Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by headscale; Caddy serves nothing there), `<service>.private.<domain>` is a tailnet-only service
-(status, ntfy, commsgun, the webhooks ingest) and `<service>.public.<domain>` an internet service, both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
+(status, ntfy, commsgun, happybaby, the webhooks ingest) and `<service>.public.<domain>` an internet service, both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map
 
@@ -88,7 +90,7 @@ Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by hea
 | `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, Gatus `config.yaml`, commsgun config, `compose.yml` |
 | `inventories/prod/group_vars/all/` | `main.yml` (settings), `versions.yml` (every pin; rationale in `docs/versions.md`), `generated.yml` (reserved IP) |
 | `secrets/` | SOPS files only (`secrets/README.md`) |
-| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `app-host`, `db-host`, `bump-webhooks-mcp`, `bump-commsgun` |
+| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `app-host`, `db-host`, `bump-webhooks-mcp`, `bump-commsgun`, `bump-happybabytracker` |
 
 ## Rebuild from scratch
 
@@ -104,7 +106,7 @@ the VPS waits for approval on the `production` environment.
    **Settings → Secrets and variables → Actions → Repository secrets**: `DIGITALOCEAN_READ_TOKEN`, a second DO token
    with the single custom scope `firewall:read`. The daily **verify** schedule uses it without the `production` gate.
    **Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests"**:
-   tick it once; the daily **bump-webhooks-mcp** and **bump-commsgun** workflows open their PRs with the workflow token. Without it the PR step fails with a clear GitHub error.
+   tick it once; the daily **bump-webhooks-mcp**, **bump-commsgun** and **bump-happybabytracker** workflows open their PRs with the workflow token. Without it the PR step fails with a clear GitHub error.
 3. **Actions → deploy → `provision`**. Creates the droplet and reserved IPv4 and commits `generated.yml`.
 4. **DNS and tokens** (needs the reserved IP from `generated.yml`):
    - Cloudflare (`natanddavehouse.com`, all **DNS-only / grey cloud**):
@@ -147,6 +149,7 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Add a workload (tag, grants, shared Postgres, staging route) | [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) |
 | Deploy, configure or operate commsgun (email/SMS hub) | [`docs/runbooks/commsgun.md`](docs/runbooks/commsgun.md) |
+| Deploy, configure or operate happybabytracker (family tracker): admin, parents, rotation, restore | [`docs/runbooks/happybabytracker.md`](docs/runbooks/happybabytracker.md) |
 | SSO (Authelia) admin reference: people, groups, linking app accounts (design, not deployed) | [`docs/runbooks/sso.md`](docs/runbooks/sso.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | A workflow fails to push to `main` (GH013); the commit-back token | [`docs/runbooks/github-push-token.md`](docs/runbooks/github-push-token.md) |

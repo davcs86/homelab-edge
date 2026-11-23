@@ -112,6 +112,25 @@ endpoints:
       - "[CERTIFICATE_EXPIRATION] > 336h"
     alerts: [{type: ntfy}]
 
+  - name: happybabytracker-ui-private
+    group: edge
+    url: https://{{ happybabytracker_ui_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: happybabytracker-api-private
+    group: edge
+    url: https://{{ happybabytracker_ui_private_hostname }}/healthz/api
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
   - name: public-default-404
     group: public
     url: https://unknown.{{ public_zone }}/

@@ -15,7 +15,7 @@
     state: directory
     mode: "0700"
 
-# Exists only so the nightly drill can decrypt without the offline key; it protects data that already
+# Exists only so the restore drill can decrypt without the offline key; it protects data that already
 # lives in plaintext on this host, so it adds no exposure.
 - name: Restore-test identity
   ansible.builtin.command: age-keygen -o /etc/edge-backup/restore-test.agekey
@@ -69,7 +69,7 @@
 
 - name: Say why the backup host has no local name yet
   ansible.builtin.debug:
-    msg: "{{ backup_tailnet_hostname }} is not a tailnet node yet; nightly backups fail until it joins and deploy runs again"
+    msg: "{{ backup_tailnet_hostname }} is not a tailnet node yet; backups fail until it joins and deploy runs again"
   when: _backup_ipv4 | length == 0
 
 - name: Scripts
@@ -88,7 +88,7 @@
     - name: edge-backup.service
       content: |
         [Unit]
-        Description=Encrypted headscale backup to the home backup host, then restore drill
+        Description=Encrypted headscale and happybabytracker backup to the home backup host, then restore drill
         Wants=network-online.target
         After=network-online.target docker.service tailscaled.service
         OnFailure=edge-notify@%n.service
@@ -106,7 +106,7 @@
     - name: edge-backup.timer
       content: |
         [Unit]
-        Description=Nightly headscale backup
+        Description=Headscale and happybabytracker backup
 
         [Timer]
         OnCalendar={{ backup_schedule }}
@@ -117,6 +117,7 @@
         WantedBy=timers.target
   loop_control:
     label: "{{ item.name }}"
+  register: _backup_units
 
 - name: Enable backup timer
   ansible.builtin.systemd_service:
@@ -124,6 +125,13 @@
     enabled: true
     state: started
     daemon_reload: true
+
+- name: Restart the backup timer when its unit changed
+  ansible.builtin.systemd_service:
+    name: edge-backup.timer
+    state: restarted
+    daemon_reload: true
+  when: _backup_units.results | selectattr('item.name', 'equalto', 'edge-backup.timer') | map(attribute='changed') | first
 
 - name: Public key to authorise on the backup host (forced to rrsync)
   ansible.builtin.debug:
