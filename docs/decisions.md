@@ -63,7 +63,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     only writer; that is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from
     SOPS). Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the filter
     also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
-  - Reset links last 1 h, to absorb Resend's rate limiting. Emails go through an SMTP listener inside commsgun-api, STARTTLS
+  - Reset links last 1 h, to absorb Resend's rate limiting. Emails, from `auth@<domain>` (commsgun app `authelia`, 5 a minute and
+    30 a day), go through an SMTP listener inside commsgun-api, STARTTLS
     with an edge-local CA (Authelia does not support plaintext SMTP), on a network shared only with Authelia so neither
     reaches the other's other ports. `require_second_factor` makes another device need an existing one; recovery after
     losing every device is an admin-present re-enrolment.

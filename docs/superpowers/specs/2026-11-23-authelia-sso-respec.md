@@ -220,14 +220,15 @@ Authelia emails reset links and enrolment codes through an **SMTP submission lis
 certificate from an edge-local CA that Authelia trusts (`certificates_directory`, `tls.server_name`), on the `authelia-smtp`
 network only, authenticated as commsgun app `authelia`, `disable_startup_check: true`. Its messages expire with the reset
 link (1 h). Until P5 ships, the **file notifier** runs and an admin relays links and codes. commsgun down → no emails;
-existing logins unaffected. Proposed `authelia` limits: 5 a minute, 30 a day (§ 12). Sender address: § 12.
+existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry); `authelia` limits 5 a minute, 30 a day
+(owner, 2026-11-23).
 
 ## 10. Phases and pass conditions (Rule 6)
 
 | Phase | Gated on | Pass condition |
 |---|---|---|
-| P0 spike | § 12 location | S1–S25 each recorded here with observed output |
-| P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created from SOPS resets their password and logs in; a pinned `sub` survives a DB wipe and redeploy, and a mismatched one fails the deploy |
+| P0 spike | — | S1–S25 each recorded here with observed output, under the § 11 guardrails |
+| P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created from SOPS resets their password and logs in; a pinned `sub` survives a DB wipe and redeploy, and a mismatched one fails the deploy; S1, S5, S7, S15 and S18 recorded against the deployed portal |
 | P2 xstockstrat-staging | 345 amended + shipped; emails | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: Claude.ai and Claude Code connect, list tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
 | P3 xstockstrat prod | P2 | Same checks on prod |
 | P4 webhooks-mcp | C1/C4 amended + shipped | In `static+oauth` both kinds of client work; then `oauth`: unauthenticated `POST /mcp` → 401 with `resource_metadata`; wrong audience → 401; a `sub` outside the allowlist → 403; the automation client works headless |
@@ -250,11 +251,19 @@ existing logins unaffected. Proposed `authelia` limits: 5 a minute, 30 a day (§
 
 (S6, S11, S13 and S14 were retired with superseded designs.)
 
+**Where the spike runs (owner, 2026-11-23): the edge droplet itself.** It is production, so:
+- a separate compose project (`authelia-spike`) with its own networks and volumes, ports bound to `127.0.0.1` only, test
+  secrets only (never SOPS), and no change to Caddy, the cloud firewall, `compose.yml` or any running service: the public
+  surface stays 80/443/3478 (Rule 2);
+- `free -m` before starting (≥ 400 MiB free with the spike's limits) and `docker stats --no-stream` during it; stop at once if
+  any production container restarts or Gatus alerts;
+- items that need the real public name or Caddy (S1, S5 with Claude.ai, S7, S15, S18) move to P1 and run against the
+  deployed `auth.public`, before any app is wired;
+- `docker compose -p authelia-spike down -v` at the end, and its output recorded here.
+
 ## 12. Open
 
-- **Sender address** for Authelia's emails (a `commsgun_senders` entry), and **where the P0 spike runs**: the owner's answer
-  "DigitalOcean / Homelab edge" is being clarified.
-- **commsgun limits for app `authelia`**: proposed 5 a minute, 30 a day; owner to confirm.
+- The people's **emails**, filled in the template outside the repo (blocks P2).
 
 ## 13. Handoff: work per repo
 
