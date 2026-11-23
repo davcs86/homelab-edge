@@ -9,7 +9,7 @@ work="$(mktemp -d)"
 tailnet_ip=100.64.0.250
 staging_vm_ip=100.64.0.251
 pids=()
-# shellcheck disable=SC2317  # invoked via trap
+# shellcheck disable=SC2317,SC2329  # invoked via trap
 cleanup() {
   docker rm -f caddy-routing-test >/dev/null 2>&1 || true
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
@@ -25,31 +25,43 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'status_host={{ status_hostname }}' 'staging_host={{ staging_public_hostname }}' 'staging_port={{ staging_edge_port }}' 'wmcp_host={{ webhooks_mcp_hostname }}' 'ingest_host={{ webhooks_ingest_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'staging_host={{ staging_public_hostname }}' 'wmcp_host={{ webhooks_mcp_public_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'hbpriv_host={{ happybabytracker_ui_private_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" status_host="" staging_host="" staging_port="" wmcp_host="" ingest_host=""
+app_host="" hs_host="" staging_host="" wmcp_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntpriv_host="" whpriv_host="" hbpriv_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
-# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable.
+# Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable;
+# Test hooks: /echo-headers, /reset; commsgun-ui also sends Location.
 cat >"$work/mock.py" <<'EOF'
-import http.server, sys
+import http.server, socket, struct, sys
 name, port = sys.argv[1], int(sys.argv[2])
 class H(http.server.BaseHTTPRequestHandler):
     def _r(self):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n: self.rfile.read(n)
-            body = f"{name} {self.command} {self.path}".encode()
-            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            if self.path.startswith("/reset"):
+                self.send_response(200); self.send_header("Content-Length", "100000"); self.end_headers()
+                self.wfile.write(b"x" * 1000); self.wfile.flush()
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.connection.close(); return
+            body = f"{name} {self.command} {self.path}"
+            if self.path.startswith("/echo-headers"):
+                body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For")))
+            body = body.encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(body)))
+            if name == "commsgun-ui": self.send_header("Location", self.path)
+            self.end_headers(); self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
     do_GET = do_POST = do_DELETE = do_HEAD = _r
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 happybabytracker-ui:9212 gatus:8081 ntfy:2586; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
+  if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
 done
 
 sudo ip addr replace "$tailnet_ip/32" dev lo
@@ -80,6 +92,23 @@ req2() { # same as req, but as a different client (source 127.0.0.3) so rate-lim
 expect() { # <description> <expected-prefix> <actual>
   if [[ "$3" == "$2"* ]]; then echo "PASS  $1 -> $3"; else echo "FAIL  $1: expected '$2', got '$3'"; fail=1; fi
 }
+# Caddy writes its logs as root with a private mode, so read them through the container; an unreadable or empty log is a FAIL.
+read_log() { # <file glob in /var/log/caddy> -> $work/log; non-zero if unreadable or empty
+  if docker exec caddy-routing-test sh -c "cat /var/log/caddy/$1" >"$work/log" 2>"$work/log.err" && [[ -s "$work/log" ]]; then return 0; fi
+  echo "FAIL  cannot read Caddy log $1: $(head -c 300 "$work/log.err")"; fail=1; return 1
+}
+# Caddy writes its logs asynchronously; a timeout is not a FAIL here, the check that follows reports it.
+wait_for_line() { # <ERE> <command printing the log>...; polls for up to ~10 s
+  local want="$1"; shift
+  for _ in $(seq 1 50); do
+    "$@" >"$work/poll" 2>&1 || true
+    if grep -qE "$want" "$work/poll"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+# shellcheck disable=SC2317,SC2329  # invoked through wait_for_line
+access_logs() { docker exec caddy-routing-test sh -c 'cat /var/log/caddy/*.access.log'; }
 
 u="https://$app_host"
 expect "MCP endpoint, prefix stripped"         "200 agent POST /"                 "$(req "$app_host" -X POST "$u/agent")"
@@ -90,15 +119,16 @@ expect "token endpoint"                        "200 agent POST /oauth/token"    
 expect "authorize keeps query"                 "200 agent GET /oauth/authorize?x=1" "$(req "$app_host" "$u/agent/oauth/authorize?x=1")"
 expect "login page"                            "200 ui GET /auth/oauth-login"     "$(req "$app_host" "$u/auth/oauth-login")"
 expect "UI health probe path is public"        "200 ui GET /trader/api/health"    "$(req "$app_host" "$u/trader/api/health")"
-expect "UI health: POST is 404"                "404"                              "$(req "$app_host" -X POST "$u/trader/api/health")"
-expect "UI health: sibling API paths are 404"  "404"                              "$(req "$app_host" "$u/trader/api/other")"
+expect "UI health: POST reaches the UI"         "200 ui POST /trader/api/health"   "$(req "$app_host" -X POST "$u/trader/api/health")"
+expect "UI health: sibling API paths reach the UI" "200 ui GET /trader/api/other"   "$(req "$app_host" "$u/trader/api/other")"
 expect "static assets"                         "200 ui GET /_next/static/a.js"    "$(req "$app_host" "$u/_next/static/a.js")"
-expect "UI root is not public"                 "404"                              "$(req "$app_host" "$u/")"
-expect "arbitrary path is 404"                 "404"                              "$(req "$app_host" "$u/anything-else")"
+expect "UI root is public"                     "200 ui GET /"                     "$(req "$app_host" "$u/")"
+expect "arbitrary path reaches the UI"         "200 ui GET /anything-else"        "$(req "$app_host" "$u/anything-else")"
 expect "unauthenticated tool list is private"  "404"                              "$(req "$app_host" "$u/agent/api/tools")"
-expect "login page for UI is private"          "404"                              "$(req "$app_host" "$u/auth/login")"
-expect "GET on login API is 404"               "404"                              "$(req "$app_host" "$u/api/auth/login")"
-expect "prefix lookalike is 404"               "404"                              "$(req "$app_host" "$u/agentx")"
+expect "login page for UI is public"           "200 ui GET /auth/login"           "$(req "$app_host" "$u/auth/login")"
+expect "GET on login API reaches the UI"       "200 ui GET /api/auth/login"       "$(req "$app_host" "$u/api/auth/login")"
+expect "agent prefix lookalike reaches the UI, not the agent" "200 ui GET /agentx"    "$(req "$app_host" "$u/agentx")"
+expect "other agent paths are 404"             "404"                              "$(req "$app_host" "$u/agent/anything")"
 codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
 expect "login rate limit (5/min) triggers 429" "200 200 200 200 200 429" "$codes"
@@ -107,7 +137,6 @@ expect "login body over cap"                   "413"                            
 
 expect "headscale proxied"                     "200 headscale GET /health"        "$(req "$hs_host" "https://$hs_host/health")"
 expect "headscale API blocked publicly"        "000"                              "$(req "$hs_host" "https://$hs_host/api/v1/node")"
-expect "tailnet-only wildcard aborts publicly" "000"                              "$(req "$status_host" "https://$status_host/")"
 
 # webhooks-mcp: public /mcp only on its own name; the ingest name is tailnet-only.
 w="https://$wmcp_host"
@@ -115,22 +144,59 @@ expect "webhooks MCP endpoint"                 "200 wmcp POST /mcp"             
 expect "webhooks MCP root is 404"              "404"                              "$(req "$wmcp_host" "$w/")"
 expect "webhooks MCP /hooks is 404"            "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/hooks")"
 expect "webhooks MCP /healthz is 404"          "404"                              "$(req "$wmcp_host" "$w/healthz")"
-expect "webhooks ingest aborts publicly"       "000"                              "$(req "$ingest_host" -X POST -d '{}' "https://$ingest_host/hooks")"
-expect "webhooks ingest from the tailnet"      "200 ingest POST /hooks"           "$(req "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
-expect "webhooks ingest body over 256 KiB"     "413"                              "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host/hooks")"
-expect "webhooks ingest body at exactly 256 KiB" "200 ingest POST /hooks"        "$(req "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host/hooks")"
+expect "webhooks MCP from the tailnet"         "200 wmcp POST /mcp"               "$(req "$wmcp_host" --interface "$tailnet_ip" -X POST -d '{}' "$w/mcp")"
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 
-# Staging app: its own name on 443. Mock upstreams are shared, so only routing and limits are asserted.
-# wreq reaches the tailnet-only listener on staging_port (the staging webhooks ingest).
-wreq() { # <host> <curl args...>: any name on the staging port
-  local host="$1"; shift
-  local code
-  code="$(curl -sk --noproxy "*" --max-time 5 --resolve "$host:$staging_port:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
-  printf '%s' "$code"
-  printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
-}
+# commsgun: the dashboard and the enqueue API are tailnet-only *.private names; each reaches only its own upstream.
+v="https://$cgpriv_host"
+expect "private dashboard aborts publicly"     "000"                              "$(req "$cgpriv_host" "$v/login")"
+expect "private dashboard from the tailnet"    "200 commsgun-ui GET /login"       "$(req "$cgpriv_host" --interface "$tailnet_ip" "$v/login")"
+expect "staging VM denied on the private dashboard" "000"                         "$(req "$cgpriv_host" --interface "$staging_vm_ip" "$v/login")"
+expect "unknown private-zone host is 404 on the tailnet" "404"                    "$(req "nope.${cgpriv_host#*.}" --interface "$tailnet_ip" "https://nope.${cgpriv_host#*.}/")"
+expect "unknown private-zone host aborts publicly" "000"                          "$(req "nope.${cgpriv_host#*.}" "https://nope.${cgpriv_host#*.}/")"
+expect "private dashboard gets Caddy's X-Forwarded-*, not the client's" \
+  "200 commsgun-ui GET /echo-headers xfp=[https] xfh=[$cgpriv_host] xff=[$tailnet_ip]" \
+  "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$v/echo-headers")"
+expect "private dashboard upstream keeps the query" "200 commsgun-ui GET /messages?recipient=canary@example.test" \
+  "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$v/messages?recipient=canary@example.test")"
+# happybabytracker: a tailnet-only *.private name with one upstream (the UI; the API is never published); no body cap.
+hb="https://$hbpriv_host"
+expect "happybaby aborts publicly"             "000"                              "$(req "$hbpriv_host" "$hb/healthz")"
+expect "happybaby from the tailnet"            "200 happybabytracker-ui GET /healthz" "$(req "$hbpriv_host" --interface "$tailnet_ip" "$hb/healthz")"
+expect "happybaby API health goes through the UI" "200 happybabytracker-ui GET /healthz/api" "$(req "$hbpriv_host" --interface "$tailnet_ip" "$hb/healthz/api")"
+expect "staging VM denied on happybaby"        "000"                              "$(req "$hbpriv_host" --interface "$staging_vm_ip" "$hb/healthz")"
+expect "happybaby gets Caddy's X-Forwarded-*, not the client's" \
+  "200 happybabytracker-ui GET /echo-headers xfp=[https] xfh=[$hbpriv_host] xff=[$tailnet_ip]" \
+  "$(req "$hbpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$hb/echo-headers")"
+expect "happybaby name reaches only its UI"    "200 happybabytracker-ui POST /v1/messages" "$(req "$hbpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$hb/v1/messages")"
+# The enqueue API: its own body cap, the same isolation, its own upstream.
+e="https://$cmpriv_host"
+expect "private enqueue aborts publicly"       "000"                              "$(req "$cmpriv_host" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue from the tailnet"      "200 commsgun-api POST /v1/messages" "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue body at exactly 262144 bytes" "200 commsgun-api POST /v1/messages" "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$e/v1/messages")"
+expect "private enqueue body over 262144 bytes" "413"                             "$(req "$cmpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$e/v1/messages")"
+expect "staging VM denied on the private enqueue" "000"                           "$(req "$cmpriv_host" --interface "$staging_vm_ip" -X POST -d '{}' "$e/v1/messages")"
+expect "private enqueue name reaches only the API" "200 commsgun-api GET /login"  "$(req "$cmpriv_host" --interface "$tailnet_ip" "$e/login")"
+expect "private dashboard name reaches only the UI" "200 commsgun-ui POST /v1/messages" "$(req "$cgpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$v/v1/messages")"
+# The status page under *.private.
+t="https://$stpriv_host"
+expect "private status page aborts publicly"   "000"                              "$(req "$stpriv_host" "$t/")"
+expect "private status page from the tailnet"  "200 gatus GET /"                  "$(req "$stpriv_host" --interface "$tailnet_ip" "$t/")"
+expect "private status takes a heartbeat push" "200 gatus POST /api/v1/endpoints/home_x/external?success=true" "$(req "$stpriv_host" --interface "$tailnet_ip" -X POST "$t/api/v1/endpoints/home_x/external?success=true")"
+expect "staging VM denied on the private status page" "000"                       "$(req "$stpriv_host" --interface "$staging_vm_ip" "$t/")"
+# ntfy under *.private. ntfy accepts credentials in ?auth=, which the zone's logger must drop.
+n="https://$ntpriv_host"
+expect "private ntfy aborts publicly"          "000"                              "$(req "$ntpriv_host" "$n/v1/health")"
+expect "private ntfy from the tailnet"         "200 ntfy GET /v1/health"          "$(req "$ntpriv_host" --interface "$tailnet_ip" "$n/v1/health")"
+expect "private ntfy keeps the query upstream" "200 ntfy GET /homelab-alerts/json?poll=1&auth=canarycredential" "$(req "$ntpriv_host" --interface "$tailnet_ip" "$n/homelab-alerts/json?poll=1&auth=canarycredential")"
+expect "staging VM denied on the private ntfy" "000"                              "$(req "$ntpriv_host" --interface "$staging_vm_ip" "$n/v1/health")"
+# Caddy matches hosts case-insensitively but picks a per-host logger by exact name: the whole zone must redact.
+mixed="C${cgpriv_host#c}"
+expect "private dashboard, mixed-case host"   "200 commsgun-ui GET /messages?recipient=canary@example.test" \
+  "$(req "$mixed" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "https://$mixed/messages?recipient=canary@example.test")"
+
+# Staging app: under the *.public wildcard, one view for every client. Mock upstreams are shared, so only routing and limits are asserted.
 sreq() { req "$staging_host" "$@"; } # <curl args...>
 s="https://$staging_host"
 expect "staging public UI"                     "200 ui GET /trader"               "$(sreq "$s/trader")"
@@ -144,8 +210,10 @@ expect "staging MCP endpoint"                  "200 agent POST /"               
 expect "staging root-inserted metadata"        "200 ui GET /.well-known/oauth-protected-resource/agent" "$(sreq "$s/.well-known/oauth-protected-resource/agent")"
 expect "staging token endpoint"                "200 agent POST /oauth/token"      "$(sreq -X POST "$s/agent/oauth/token")"
 expect "staging UI from the tailnet"           "200 ui GET /trader"               "$(sreq --interface "$tailnet_ip" "$s/trader")"
-expect "staging tailnet agent"                 "200 agent GET /api/tools"         "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
-expect "staging tailnet bypasses login limit"  "200 ui POST /api/auth/login"     "$(sreq --interface "$tailnet_ip" -X POST -d '{}' "$s/api/auth/login")"
+expect "staging tool catalog is private from the tailnet too" "404"               "$(sreq --interface "$tailnet_ip" "$s/agent/api/tools")"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface "$tailnet_ip" -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
+expect "staging login limit applies to tailnet clients" "200 200 200 200 200 429" "$codes"
 codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(sreq --interface 127.0.0.4 -X POST -d '{}' "$s/api/auth/login" | cut -c1-3) "; done
 expect "staging login rate limit (5/min) 429"  "200 200 200 200 200 429"          "$codes"
@@ -153,54 +221,106 @@ codes=""
 for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" --interface 127.0.0.7 -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
 expect "prod login limit trips for a fresh client" "200 200 200 200 200 429" "$codes"
 expect "staging login limit is independent of prod" "200 ui POST /api/auth/login" "$(sreq --interface 127.0.0.7 -X POST -d '{}' "$s/api/auth/login")"
+expect "unknown public-zone host is 404"       "404"                              "$(req "nope.${staging_host#*.}" "https://nope.${staging_host#*.}/")"
+expect "unknown public-zone host is 404 from the tailnet" "404"                   "$(req "nope.${staging_host#*.}" --interface "$tailnet_ip" "https://nope.${staging_host#*.}/")"
 expect "staging login body over cap"           "413"                              "$(sreq --interface 127.0.0.5 -X POST --data-binary "@$work/big" "$s/api/auth/login")"
-expect "tailnet listener 404s other names"      "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "other.${status_host#*.}:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://other.${status_host#*.}:$staging_port/")"
-expect "tailnet listener does not serve status"   "404"                              "$(curl -sk --noproxy "*" --max-time 5 --resolve "$status_host:$staging_port:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$status_host:$staging_port/")"
-expect "staging ingest aborts publicly"        "000"                              "$(wreq "$ingest_host" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
-expect "staging ingest from the tailnet"       "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
-expect "staging ingest body over 256 KiB"      "413"                              "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "https://$ingest_host:$staging_port/hooks")"
-expect "staging ingest body at exactly 256 KiB" "200 ingest POST /hooks"          "$(wreq "$ingest_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "https://$ingest_host:$staging_port/hooks")"
-wmcp_on_staging="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$wmcp_host:$staging_port:127.0.0.1" -X POST -d '{}' "https://$wmcp_host:$staging_port/mcp" || true)"
-if [[ "$wmcp_on_staging" == *wmcp* ]]; then
-  echo "FAIL  webhooks MCP name reached its upstream on the staging port: $wmcp_on_staging"; fail=1
-else
-  echo "PASS  webhooks MCP name reaches no upstream on the staging port"
-fi
-prod_on_staging="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$app_host:$staging_port:127.0.0.1" "https://$app_host:$staging_port/trader" || true)"
-if [[ "$prod_on_staging" == *ui* || "$prod_on_staging" == *agent* ]]; then
-  echo "FAIL  prod name reached an upstream on the staging port: $prod_on_staging"; fail=1
-else
-  echo "PASS  prod name reaches no upstream on the staging port"
-fi
 
 expect "tailnet sees full UI"                  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
-expect "tailnet reaches agent tools"           "200 agent GET /api/tools"         "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"
-expect "tailnet bypasses login rate limit"     "200 ui POST /api/auth/login"      "$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login")"
+expect "prod tool catalog is private from the tailnet too" "404"                 "$(req "$app_host" --interface "$tailnet_ip" "$u/agent/api/tools")"
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(req "$app_host" --interface "$tailnet_ip" -X POST -d '{}' "$u/api/auth/login" | cut -c1-3) "; done
+expect "prod login limit applies to tailnet clients" "200 200 200 200 200 429"    "$codes"
 
 # Isolation: tailnet grants are per port, so the staging VM may reach 443; Caddy keeps its address off every site but its own.
-expect "staging VM reaches its own site"       "200 ui GET /trader"               "$(sreq --interface "$staging_vm_ip" "$s/trader")"
+expect "staging VM denied on its own app over the tailnet" "000"                  "$(sreq --interface "$staging_vm_ip" "$s/trader")"
 expect "staging VM denied on prod's site"      "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/trader")"
 expect "staging VM denied on prod's agent"     "000"                              "$(req "$app_host" --interface "$staging_vm_ip" "$u/agent/api/tools")"
 expect "staging VM denied on webhooks MCP"     "000"                              "$(req "$wmcp_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w/mcp")"
-expect "staging VM denied on the ingest (443)" "000"                              "$(req "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host/hooks")"
-expect "staging VM denied on status"           "000"                              "$(req "$status_host" --interface "$staging_vm_ip" "https://$status_host/")"
 expect "staging VM denied on headscale"        "000"                              "$(req "$hs_host" --interface "$staging_vm_ip" "https://$hs_host/health")"
-expect "staging VM reaches the ingest on 8443" "200 ingest POST /hooks"           "$(wreq "$ingest_host" --interface "$staging_vm_ip" -X POST -d '{}' "https://$ingest_host:$staging_port/hooks")"
+# The ingest: one URL on 443 for every environment. The staging VM is admitted on this name only.
+w2="https://$whpriv_host"
+expect "private ingest aborts publicly"        "000"                              "$(req "$whpriv_host" -X POST -d '{}' "$w2/hooks")"
+expect "private ingest from the tailnet"       "200 ingest POST /hooks/minted.x-1" "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$w2/hooks/minted.x-1")"
+expect "private ingest body over 256 KiB"      "413"                              "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/big_ingest" "$w2/hooks")"
+expect "private ingest body at exactly 256 KiB" "200 ingest POST /hooks"          "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST --data-binary "@$work/at_cap_ingest" "$w2/hooks")"
+expect "staging VM reaches the private ingest on 443" "200 ingest POST /hooks"    "$(req "$whpriv_host" --interface "$staging_vm_ip" -X POST -d '{}' "$w2/hooks")"
+expect "staging VM body over 256 KiB on the private ingest" "413"                 "$(req "$whpriv_host" --interface "$staging_vm_ip" -X POST --data-binary "@$work/big_ingest" "$w2/hooks")"
+expect "staging VM still denied on an unknown private name" "000"                 "$(req "nope.${whpriv_host#*.}" --interface "$staging_vm_ip" "https://nope.${whpriv_host#*.}/")"
+expect "private ingest keeps the query upstream" "200 ingest POST /hooks/n?token=canarytoken" "$(req "$whpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$w2/hooks/n?token=canarytoken")"
 expect "other tailnet nodes still reach prod"  "200 ui GET /trader"               "$(req "$app_host" --interface "$tailnet_ip" "$u/trader")"
-staging_on_8443="$(curl -sk --noproxy "*" --max-time 5 --interface "$tailnet_ip" --resolve "$staging_host:$staging_port:127.0.0.1" "https://$staging_host:$staging_port/trader" || true)"
-if [[ "$staging_on_8443" =~ ^(ui|agent|ingest|wmcp)\  ]]; then
-  echo "FAIL  the staging app name reached an upstream on the tailnet-only port: $staging_on_8443"; fail=1
-else
-  echo "PASS  the staging app name reaches no upstream on the tailnet-only port"
-fi
 
 expect "OAuth callback routed"                 "200 agent GET /oauth/callback"   "$(req "$app_host" "$u/agent/oauth/callback?code=SECRETCODE123&state=STATE456")"
-sleep 1
-if grep -qE 'SECRETCODE123|STATE456' "$work"/logs/*.access.log; then
-  echo "FAIL  access log leaks OAuth code/state"; fail=1
-else
-  echo "PASS  access log redacts OAuth code/state"
+wait_for_line "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" access_logs || true
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$app_host\",\"uri\":\"/agent/oauth/callback" "$work/log"; then
+    echo "FAIL  the OAuth callback request was not logged"; fail=1
+  elif grep -qE 'SECRETCODE123|STATE456' "$work/log"; then
+    echo "FAIL  access log leaks OAuth code/state"; fail=1
+  else
+    echo "PASS  access log redacts OAuth code/state"
+  fi
 fi
-ls "$work"/logs/*.access.log >/dev/null && echo "PASS  access logs written: $(cd "$work/logs" && ls)"
+canary_hdr='Referer: https://x/?recipient=canary@example.test'
+req "$cgpriv_host" --interface "$tailnet_ip" -H "$canary_hdr" "$v/reset?recipient=canary@example.test" >/dev/null
+kill "$cgui_pid"; wait "$cgui_pid" 2>/dev/null || true
+expect "dashboard upstream down"               "502" "$(req "$cgpriv_host" --interface "$tailnet_ip" -H "$canary_hdr" "$v/upstream-down?recipient=canary@example.test")"
+wait_for_line "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down\"" access_logs || true
+expect "dashboard upstream down, mixed-case host" "502" "$(req "$mixed" --interface "$tailnet_ip" -H "$canary_hdr" "https://$mixed/upstream-down?recipient=canary@example.test")"
+wait_for_line "\"host\":\"$mixed\",\"uri\":\"/upstream-down" access_logs || true
+wait_for_line 'http.log.error.private_zone.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
+if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
+  echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
+fi
+# The dashboard keeps recipient filters in its query; its log lines keep method, host, path and status only.
+if read_log '*.access.log'; then
+  if ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down\"" "$work/log"; then
+    echo "FAIL  the dashboard's 502 request was not logged at all"; fail=1
+  elif ! grep -q "\"host\":\"$mixed\",\"uri\":\"/messages" "$work/log" || ! grep -q "\"host\":\"$cgpriv_host\",\"uri\":\"/messages" "$work/log"; then
+    echo "FAIL  the dashboard's requests were not logged"; fail=1
+  elif grep -q canary "$work/log"; then
+    echo "FAIL  access log leaks a query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
+  else
+    echo "PASS  *.private requests logged without query, Referer or Location (incl. reset and 502)"
+  fi
+fi
+if grep -q canary "$work/caddy.stderr"; then
+  echo "FAIL  Caddy's stderr leaks a query or Referer: $(grep -o '"logger":"[^"]*"' <(grep canary "$work/caddy.stderr") | sort -u | tr '\n' ' ')"; fail=1
+else
+  echo "PASS  Caddy's stderr carries no query or Referer from *.private"
+fi
+for want in 'http.log.error.private_zone.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgpriv_host\",\"uri\":\"/reset\""; do
+  if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
+done
+# Zone names are global in caddy-ratelimit: a second site with the same `limits` must still get its own counters.
+python3 - "$repo_root/inventories/prod/group_vars/all/main.yml" >"$work/twin.json" <<'EOF'
+import json, sys, yaml
+sites = yaml.safe_load(open(sys.argv[1]))["edge_sites"]
+twin = next(s for s in sites if s["kind"] == "bearer_mcp")
+sites.append({**twin, "name": twin["name"] + "-twin", "hostname": "twin-" + twin["hostname"]})
+print(json.dumps({"edge_sites": sites}))
+EOF
+(cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template \
+  -a "src=roles/stack/templates/Caddyfile.j2 dest=$work/Caddyfile.twin" \
+  -e caddy_test_mode=true -e app_tailnet_host=127.0.0.1 -e staging_tailnet_host=127.0.0.1 -e "@$work/twin.json" >/dev/null)
+for f in Caddyfile Caddyfile.twin; do
+  zones="$(docker run --rm --network none -v "$work/$f:/etc/caddy/Caddyfile:ro" "$image" caddy adapt --config /etc/caddy/Caddyfile 2>/dev/null \
+    | python3 -c 'import json, sys
+def walk(o):
+    if isinstance(o, dict):
+        yield from o.get("rate_limits", {})
+        for v in o.values(): yield from walk(v)
+    elif isinstance(o, list):
+        for v in o: yield from walk(v)
+print(" ".join(walk(json.load(sys.stdin))))' || true)"
+  dupes="$(tr ' ' '\n' <<<"$zones" | sed '/^$/d' | sort | uniq -d | paste -sd' ' -)"
+  if [[ -z "$zones" ]]; then echo "FAIL  no rate-limit zones found in the adapted $f"; fail=1
+  elif [[ -n "$dupes" ]]; then echo "FAIL  rate-limit zones shared across sites in $f: $dupes"; fail=1
+  else echo "PASS  every rate-limit zone in $f is unique ($(wc -w <<<"$zones") zones)"; fi
+done
+if logs_written="$(docker exec caddy-routing-test sh -c 'ls /var/log/caddy/*.access.log')"; then
+  echo "PASS  access logs written: $(echo "$logs_written" | xargs -n1 basename | tr '\n' ' ')"
+else
+  echo "FAIL  no access logs written"; fail=1
+fi
 
 exit "$fail"

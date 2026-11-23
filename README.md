@@ -6,42 +6,70 @@ public entry point into a homelab behind CGNAT. Everything is Ansible, run from 
 ```mermaid
 flowchart LR
   subgraph internet["internet"]
-    claude["Claude.ai"]
-    devices["devices"]
+    joining["devices joining<br/>the tailnet"]
+    clients["browsers, Claude.ai,<br/>MCP clients"]
   end
 
-  subgraph edge["edge-sfo3-01 (tag:edge)"]
-    caddy["Caddy<br/>only reverse proxy, DNS-01 certs"]
-    headscale["headscale :8080<br/>+ STUN 3478/udp"]
+  subgraph callers["tailnet sources"]
+    members["member devices<br/>laptop, phone"]
+    pushers["home machines<br/>db, pve: heartbeats<br/>staging: webhooks only"]
+  end
+
+  subgraph edge["edge-sfo3-01 (tag:edge) — public: 80, 443, 3478/udp"]
+    subgraph caddy["Caddy: the only reverse proxy, DNS-01 certificates"]
+      hs["hs.‹domain›"]
+      pub["*.public.‹domain›<br/>internet services"]
+      priv["*.private.‹domain›<br/>tailnet-only services"]
+    end
+    headscale["headscale<br/>+ DERP / STUN"]
+    wmcp["webhooks-mcp<br/>MCP :9100, ingest :9101"]
     gatus["Gatus"]
     ntfy["ntfy"]
-    backupjob["nightly age backup"]
+    commsgun["commsgun<br/>API :9200, dashboard :9202"]
+    happybaby["happybabytracker<br/>UI :9212, API (unpublished)"]
+    repo["pgBackRest repo :8432"]
+    backupjob["twice-daily age backup"]
   end
 
-  subgraph tailnet["tailnet (WireGuard, default-deny grants)"]
-    app["xstockstrat.ts… :3000 / :9000<br/>tag:xstockstrat"]
-    db["db.ts… :5432 / :6432 PgBouncer<br/>tag:db"]
+  subgraph home["home machines: *.ts.‹domain› (WireGuard, default-deny grants)"]
+    app["xstockstrat :3000 / :9000<br/>tag:xstockstrat"]
+    staging["xstockstrat-staging :3000 / :9000<br/>tag:xstockstrat-staging"]
+    db["db :5432 / :6432 PgBouncer<br/>tag:db"]
+    backuphost["backup<br/>tag:backup"]
     pve["pve<br/>tag:pve"]
-    backuphost["backup.ts…<br/>tag:backup"]
   end
 
-  claude -- "https xstockstrat.natanddavehouse.com" --> caddy
-  devices -- "https hs.natanddavehouse.com" --> caddy
-  devices -. "STUN 3478/udp" .-> headscale
-  caddy --> headscale
-  caddy --> app
-  caddy --- gatus
-  caddy --- ntfy
+  joining -- "https" --> hs
+  joining -. "STUN 3478/udp" .-> headscale
+  hs --> headscale
+
+  clients -- "xstockstrat.public<br/>xstockstrat-staging.public<br/>webhooks-mcp.public" --> pub
+  pub -- "/mcp, bearer key" --> wmcp
+  pub --> app
+  pub --> staging
+
+  members -- "status, ntfy, commsgun,<br/>comms, happybaby, webhooks" --> priv
+  pushers -- "status.private<br/>webhooks.private" --> priv
+  priv -- "ingest" --> wmcp
+  priv --> gatus
+  priv --> ntfy
+  priv --> commsgun
+  priv --> happybaby
+  gatus -- "alerts" --> ntfy
+
   app --> db
-  db <-- "pgBackRest TLS :8432" --> edge
-  pve -- "heartbeat" --> gatus
+  staging --> db
+  repo <-- "pgBackRest TLS" --> db
   backupjob -- "rsync / rrsync" --> backuphost
+  gatus -. "probe :8006" .-> pve
 ```
 
 Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SSH is reachable only over the tailnet
-(`tag:deploy` runners and admin devices). On `xstockstrat.natanddavehouse.com` the internet gets only the MCP endpoint,
-the OAuth login routes and the read-only `GET /trader/api/health` that Gatus probes; tailnet clients get the whole app through the same name (split-horizon DNS).
-The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: the whole app to the internet behind the same per-IP rate limits as prod, and unlimited to the tailnet. Every 443 hostname is an entry in `edge_sites`.
+(`tag:deploy` runners and admin devices). The apps are `xstockstrat.public.<domain>` and `xstockstrat-staging.public.<domain>` on 443: the whole UI plus the MCP and OAuth routes,
+behind per-IP rate limits, one view for every client (no tailnet bypass); other `/agent` paths, the unauthenticated tool catalog among
+them, are 404. Their former names `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served. Every 443 hostname is an entry in `edge_sites`.
+Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by headscale; Caddy serves nothing there), `<service>.private.<domain>` is a tailnet-only service
+(status, ntfy, commsgun, happybaby, the webhooks ingest) and `<service>.public.<domain>` an internet service, both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map
 
@@ -54,12 +82,15 @@ The staging app is its own public name, `xstockstrat-staging.<domain>` on 443: t
 | `playbooks/backup-now.yml` | run backup + restore drill now |
 | `playbooks/node-admin.yml` | list / approve / tag / force-reauth / remove devices, mint CI key; writes a run summary |
 | `playbooks/diag-stun.yml` | read-only STUN evidence from both ends (run by verify) |
+| `playbooks/diag-boot.yml` | read-only boot and container diagnosis after a reboot (node-admin → `diagnose-boot`) |
+| `playbooks/db.yml` | database host: PostgreSQL + TimescaleDB, PgBouncer, pgBackRest (`docs/runbooks/db-host.md`) |
+| `playbooks/app.yml` | Compose app VMs: users, Tailscale, pinned Docker, the app-deploy gate (`docs/runbooks/deploy-compose-app.md`) |
 | `scripts/` | offline tests (`policy-test.sh`, `caddy-routing-test.sh`), `stun-probe.py`, `tls-check.py`, `runner-tailnet.sh`, `init_secrets.py` |
 | `policy/policy.hujson` | headscale grants + `tests` (tests run in CI only; see `docs/decisions.md`) |
-| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, `compose.yml` |
+| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, Gatus `config.yaml`, commsgun config, `compose.yml` |
 | `inventories/prod/group_vars/all/` | `main.yml` (settings), `versions.yml` (every pin; rationale in `docs/versions.md`), `generated.yml` (reserved IP) |
 | `secrets/` | SOPS files only (`secrets/README.md`) |
-| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `bump-webhooks-mcp` |
+| `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `app-host`, `db-host`, `bump-webhooks-mcp`, `bump-commsgun`, `bump-happybabytracker` |
 
 ## Rebuild from scratch
 
@@ -75,7 +106,7 @@ the VPS waits for approval on the `production` environment.
    **Settings → Secrets and variables → Actions → Repository secrets**: `DIGITALOCEAN_READ_TOKEN`, a second DO token
    with the single custom scope `firewall:read`. The daily **verify** schedule uses it without the `production` gate.
    **Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull requests"**:
-   tick it once; the daily **bump-webhooks-mcp** workflow opens its PR with the workflow token. Without it the PR step fails with a clear GitHub error.
+   tick it once; the daily **bump-webhooks-mcp**, **bump-commsgun** and **bump-happybabytracker** workflows open their PRs with the workflow token. Without it the PR step fails with a clear GitHub error.
 3. **Actions → deploy → `provision`**. Creates the droplet and reserved IPv4 and commits `generated.yml`.
 4. **DNS and tokens** (needs the reserved IP from `generated.yml`):
    - Cloudflare (`natanddavehouse.com`, all **DNS-only / grey cloud**):
@@ -83,16 +114,12 @@ the VPS waits for approval on the `production` environment.
      | Name | Type | Value |
      |---|---|---|
      | `hs` | A | reserved IPv4 |
-     | `xstockstrat` | A | reserved IPv4 |
-     | `webhooks-mcp` | A | reserved IPv4 |
      | `_acme-challenge.hs` | CNAME | `hs.acme.natanddavehouse.com` |
-     | `_acme-challenge.xstockstrat` | CNAME | `xstockstrat.acme.natanddavehouse.com` |
-     | `_acme-challenge.webhooks-mcp` | CNAME | `webhooks-mcp.acme.natanddavehouse.com` |
-     | `_acme-challenge.ts` | CNAME | `ts.acme.natanddavehouse.com` (wildcard `*.ts…`) |
-     | `xstockstrat-staging` | A | reserved IPv4 |
-     | `_acme-challenge.xstockstrat-staging` | CNAME | `xstockstrat-staging.acme.natanddavehouse.com` |
+     | `*.public` | A | reserved IPv4 (wildcard zone; every `zone: public` site) |
+     | `_acme-challenge.public` | CNAME | `public.acme.natanddavehouse.com` (wildcard `*.public…`) |
+     | `_acme-challenge.private` | CNAME | `private.acme.natanddavehouse.com` (wildcard `*.private…`; the zone itself has no public records) |
 
-   - deSEC: create a token that can only write those five TXT RRsets (`hs`, `xstockstrat`, `xstockstrat-staging`, `webhooks-mcp`, `ts`), only from the droplet's egress addresses
+   - deSEC: create a token that can only write those three TXT RRsets (`hs`, `public`, `private`), only from the droplet's egress addresses
      (see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)). Store it as environment secret `DESEC_TOKEN`.
    - healthchecks.io: one check, period 5 min, grace 10 min, email to you; ping URL → secret `HC_PING_URL`
      ([`docs/runbooks/alerts.md`](docs/runbooks/alerts.md)).
@@ -119,8 +146,16 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 | Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
-| Build or change the DB host (PostgreSQL, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
+| Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
+| Add a workload (tag, grants, shared Postgres, staging route) | [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) |
+| Deploy, configure or operate commsgun (email/SMS hub) | [`docs/runbooks/commsgun.md`](docs/runbooks/commsgun.md) |
+| Deploy, configure or operate happybabytracker (family tracker): admin, parents, rotation, restore | [`docs/runbooks/happybabytracker.md`](docs/runbooks/happybabytracker.md) |
+| SSO (Authelia) admin reference: people, groups, linking app accounts (design, not deployed) | [`docs/runbooks/sso.md`](docs/runbooks/sso.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
+| A workflow fails to push to `main` (GH013); the commit-back token | [`docs/runbooks/github-push-token.md`](docs/runbooks/github-push-token.md) |
+| Grants and tags (test with `scripts/policy-test.sh`) | [`policy/policy.hujson`](policy/policy.hujson) |
+| Public routes and limits (test with `scripts/caddy-routing-test.sh`) | [`roles/stack/templates/Caddyfile.j2`](roles/stack/templates/Caddyfile.j2) |
+| What each secret file holds | [`secrets/README.md`](secrets/README.md) |
 | Set up Proxmox by hand (interactive script) | [`docs/runbooks/proxmox-setup.md`](docs/runbooks/proxmox-setup.md) |
 | Every pinned version and why | [`docs/versions.md`](docs/versions.md) |
 | Design decisions and traps already hit | [`docs/decisions.md`](docs/decisions.md) |

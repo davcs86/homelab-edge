@@ -14,8 +14,8 @@ tag and reaches nothing until a grant says so (default deny). Prod and staging o
 Migrating from the old `tag:app`: no node may still carry `tag:app` when the policy that drops it is deployed. Check
 `node-admin → list-devices`; if one does, re-tag it to `tag:xstockstrat` first.
 The edge's Caddy and Gatus upstreams resolve `xstockstrat.<ts domain>` (and `xstockstrat-staging` for staging): the VM
-must be registered under that hostname before the deploy. Gatus probes each by its tag name (`home_xstockstrat-ui`,
-`home_xstockstrat-agent`, `home_xstockstrat-staging-ui`, `home_xstockstrat-staging-agent`) and alerts through ntfy. Each environment's public name is also probed from the internet
+must be registered under that hostname before the deploy. Gatus probes each machine directly, by its tag name plus `-vm` in group `machines` (`machines_xstockstrat-ui-vm`,
+`machines_xstockstrat-agent-vm`, `machines_xstockstrat-staging-ui-vm`, `machines_xstockstrat-staging-agent-vm`), and alerts through ntfy. Each environment's public name is also probed from the internet
 (`public_xstockstrat-ui-public`, `public_xstockstrat-staging-ui-public`: `/trader/api/health`, 200 + `status == ok`); a probe for a
 VM that does not exist yet alerts after 3 failed minutes, so register the node first. Renaming a probe starts a new history;
 the old key stays in Gatus's database and nowhere on the status page.
@@ -42,13 +42,30 @@ The DB server is shared, so the tailnet cannot separate databases. `playbooks/db
 - pgBackRest is cluster-wide: one retention policy and one restore point for every database. Restoring one workload
   means restoring to a scratch instance and dumping that database out.
 
-## 4. Edge exposure (only if it needs a public or `*.ts` name)
+## 4. Edge exposure (only if it needs a public or tailnet name)
+
+**New portals go under the two wildcard zones; nothing is registered in Cloudflare or deSEC for them.** `*.ts` is for
+machines only: a new service is never added there, and a machine never gets a `*.private` or `*.public` name
+(`CLAUDE.md` rule 8; CI enforces it).
+
+- `<service>.public.<domain>` (internet): an `edge_sites` entry with `zone: public`. Its Caddy handle inside the `*.public` site,
+  and `tls-check` are generated from it (it gets no split-horizon record); add a Gatus probe. Any other name under the zone answers 404.
+- `<service>.private.<domain>` (tailnet-only): four places (EDGE-07) — a hostname var, a `host` handle in the
+  `*.private` site of `Caddyfile.j2`, the name in `_names` (`roles/tailscale/tasks/main.yml`), and a Gatus probe. The zone has no
+  public DNS records; tailnet nodes resolve it through headscale's DNS route for the zone, so a node joined with
+  `--accept-dns=false` cannot resolve it.
+
+An app that holds a single origin (commsgun's `ORIGIN`, xstockstrat's `APP_URL`) works on one name at a time: serving a second
+name proves DNS, certificate, routing and health only, and login or OAuth move with the origin.
 
 Every public hostname on 443 is an entry in `edge_sites` (`inventories/prod/group_vars/all/main.yml`): its Caddy site, `tls-check`
-and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (OAuth routes, tailnet
-bypass; `ui_public` also serves the whole UI), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
-are still written per service. `webhooks_ingest_hostname` is a tailnet-only `*.ts` name needing only the split-horizon record; its
-handle in the `*.ts:8443` site (tailnet-only, not in the firewall) must keep `import tailnet_only` (see `docs/decisions.md`).
+and the tailscale split-horizon records are generated from it. `kind: app` is an xstockstrat-style app (MCP and OAuth
+routes; `ui_public` also serves the whole UI; no tailnet bypass), `kind: bearer_mcp` is one path to a local container behind a static key. Gatus probes
+are still written per service. The webhooks ingest is `webhooks.private.<domain>` (`webhooks_ingest_private_hostname`) on 443, one URL for every
+environment: it is the one `*.private` name the staging VM may reach (see `docs/decisions.md`).
+A workload that must send email or SMS needs no route of its own: it POSTs to commsgun's tailnet-only enqueue name
+(`commsgun_enqueue_private_hostname`, `comms.private.<domain>`) with its own app key, over the `tag:edge:443` grant its tag already needs;
+register the app as in `docs/runbooks/commsgun.md` § 2.
 
 A new public hostname with its own certificate also needs three things outside this repo, **all before the deploy**
 that introduces it:
@@ -58,10 +75,10 @@ that introduces it:
 3. deSEC: a `TXT` write policy for `<label>` on the existing ACME token —
    [`acme-token.md` § Add a name](acme-token.md#add-a-name-required-before-the-first-deploy-of-a-new-public-hostname).
 
-Skip step 3 and the deploy fails at the certificate check; a `*.ts` name needs none of the three.
+Skip step 3 and the deploy fails at the certificate check; a `*.public` or `*.private` name needs none of the three.
 
-Staging is `xstockstrat-staging.<domain>` on 443 like any other entry: label `xstockstrat-staging`, the three steps above, then redeploy
-the staging VM with `APP_URL` set to it. Its tailnet address is denied on every other hostname by `deny_staging_vm` (grants are per port,
+Staging is `xstockstrat-staging.public.<domain>`, a `zone: public` entry: no DNS or token step, one view for every client, and the
+staging VM's `APP_URL` is set to it. The VM's tailnet address is denied on every 443 site, its own included, by `deny_staging_vm` (grants are per port,
 so the grant alone cannot do it); Caddy learns the address from headscale on each deploy, so a re-registered VM keeps the old address
 in the rule until the next deploy.
 
@@ -70,6 +87,7 @@ in the rule until the next deploy.
 | Name | Is | Use for |
 |---|---|---|
 | `xstockstrat-staging.ts.<domain>` | the VM's MagicDNS node name (`staging_tailnet_host`; inventory host, `known_hosts`, tag name) | `DEPLOY_HOST`, SSH, `--limit`, and the upstream Caddy and Gatus connect to |
-| `xstockstrat-staging.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+| `xstockstrat-staging.public.<domain>` | the edge's public name (`staging_public_hostname`) | `APP_URL`, `AGENT_PUBLIC_URL`, the OAuth `resource`, and what browsers and clients open |
+| `xstockstrat-staging.<domain>` | the former public name | nothing: it is no longer served. Point MCP clients and bookmarks at the name above |
 
-The Gatus endpoint named `xstockstrat-staging-ui` is a probe label; it probes the node name, not the public name.
+The Gatus endpoint named `xstockstrat-staging-ui-vm` is a probe label; it probes the node name, not the public name.

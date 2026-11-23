@@ -58,7 +58,7 @@
             that: "'tag:ci' in (_nodes.stdout | from_json | selectattr('given_name', 'equalto', _node) | first).tags"
 
         - name: Extra record resolves on the test node via MagicDNS
-          ansible.builtin.command: docker exec {{ _node }} tailscale dns query {{ public_app_hostname }} A
+          ansible.builtin.command: docker exec {{ _node }} tailscale dns query {{ commsgun_ui_private_hostname }} A
           register: _dns
           until: _edge_ipv4 in _dns.stdout
           retries: 10
@@ -83,7 +83,7 @@
 
         - name: Result
           ansible.builtin.debug:
-            msg: "{{ _node }} joined as tag:ci, resolved {{ public_app_hostname }} to {{ _edge_ipv4 }}, and was removed after going offline."
+            msg: "{{ _node }} joined as tag:ci, resolved {{ commsgun_ui_private_hostname }} to {{ _edge_ipv4 }}, and was removed after going offline."
       rescue:
         - name: DNS evidence (records on disk, as headscale sees them, and as the test node received them)
           ansible.builtin.shell: |
@@ -91,11 +91,11 @@
             echo "## host file"; cat {{ edge_root }}/headscale/extra-records.json
             echo "## headscale log"; docker compose -f {{ edge_root }}/compose.yml logs --no-color headscale 2>&1 | grep -i 'extra' | tail -n 10
             echo "## test node DNS"; docker exec {{ _node }} tailscale dns status --all
-            echo "## node resolver, no network path"; docker exec {{ _node }} tailscale dns query {{ public_app_hostname }} A
+            echo "## node resolver, no network path"; docker exec {{ _node }} tailscale dns query {{ commsgun_ui_private_hostname }} A
             echo "## node health (names a failed DNS config step)"; docker exec {{ _node }} tailscale status --peers=false
             echo "## node resolv.conf and pre-tailscale backup"
             docker exec {{ _node }} sh -c 'ls -l /etc/resolv*; cat /etc/resolv.conf; cat /etc/resolv.pre-tailscale-backup.conf 2>/dev/null'
-            echo "## in-domain name"; docker exec {{ _node }} tailscale dns query {{ status_hostname }} A
+            echo "## in-domain name"; docker exec {{ _node }} tailscale dns query {{ edge_tailnet_hostname }}.{{ magicdns_base_domain }} A
           args:
             executable: /bin/bash
           register: _dns_evidence

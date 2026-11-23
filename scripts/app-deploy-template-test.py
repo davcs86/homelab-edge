@@ -46,6 +46,11 @@ class Pins(unittest.TestCase):
         self.assertIn(WORKFLOW["env"]["OP_CLI_SHA256"], VERSIONS)
         self.assertIn(WORKFLOW["env"]["OP_CLI_VERSION"], VERSIONS)
 
+    def test_tailscale_matches_the_edge_pins(self):
+        pins = yaml.safe_load((ROOT / "inventories/prod/group_vars/all/versions.yml").read_text())
+        self.assertEqual(WORKFLOW["env"]["TAILSCALE_VERSION"], pins["tailscale_package_version"])
+        self.assertEqual(WORKFLOW["env"]["TAILSCALE_SHA256"], pins["tailscale_tgz_amd64_sha256"])
+
     def test_the_cli_is_installed_before_the_action_so_the_action_never_downloads_latest(self):
         names = [s.get("name", "") for s in STEPS]
         self.assertLess(names.index("1Password CLI (pinned, checksum-verified)"), names.index("Load secrets from 1Password"))

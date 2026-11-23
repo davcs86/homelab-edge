@@ -1,5 +1,5 @@
 ---
-# Runs the nightly job on demand (backup, push, restore drill) and prints its journal, also when it fails.
+# Runs the backup job on demand (backup, push, restore drill) and prints its journal, also when it fails.
 - name: Backup and restore drill now
   hosts: edge
   become: true

@@ -29,8 +29,8 @@ jobs:
           {
             echo "ip=$(awk -F'"' '/^do_reserved_ipv4:/{print $2}' inventories/prod/group_vars/all/generated.yml)"
             echo "hs=hs.$d"
-            echo "app=xstockstrat.$d"
-            echo "staging=xstockstrat-staging.$d"
+            echo "app=xstockstrat.public.$d"
+            echo "staging=xstockstrat-staging.public.$d"
             echo "other=other.$d"
           } >> "$GITHUB_OUTPUT"
       - run: sudo apt-get install -y -q nmap
@@ -62,14 +62,15 @@ jobs:
           echo | openssl s_client -connect "${{ steps.t.outputs.hs }}:443" -servername "${{ steps.t.outputs.hs }}" 2>/dev/null \
             | openssl x509 -noout -issuer -subject -enddate
 
-      - name: Public routes - /agent proxied, everything else 404, login rate limited
+      - name: Public routes - /agent proxied, UI public, other agent paths 404, login rate limited
         run: |
           u="https://${{ steps.t.outputs.app }}"
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
           a="$(code -X POST "$u/agent")"; echo "POST /agent -> $a (401 = app up and demanding OAuth, 502 = app offline)"
           [ "$a" != 404 ]
           m="$(curl -fsS "$u/agent/.well-known/oauth-protected-resource" || true)"; echo "metadata: ${m:-<app offline>}"
-          for p in / /anything-else /agent/api/tools /trader /trader/api/health /api/health; do
+          c="$(code "$u/trader/api/health")"; echo "GET /trader/api/health -> $c"; [ "$c" = 200 ]
+          for p in /agent/api/tools /agent/anything; do
             c="$(code "$u$p")"; echo "GET $p -> $c"; [ "$c" = 404 ]
           done
           codes=""; for _ in 1 2 3 4 5 6 7; do codes+="$(code -X POST -H 'content-type: application/json' -d '{}' "$u/api/auth/login") "; done

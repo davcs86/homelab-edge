@@ -1,5 +1,5 @@
 # {{ ansible_managed }}
-# The only reverse proxy on the edge. Public surface: headscale, plus an allowlist on {{ public_app_hostname }}.
+# The only reverse proxy on the edge. Internet-facing: headscale and the *.{{ public_zone }} sites; *.{{ private_zone }} is tailnet-only.
 {
 	email {{ acme_email }}
 {% if acme_ca_url | default('') %}
@@ -14,6 +14,18 @@
 		output stderr
 		format json
 		level INFO
+		exclude http.log.error.private_zone http.handlers.reverse_proxy
+	}
+	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
+	log redacted_requests {
+		output stderr
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			wrap json
+		}
+		level INFO
+		include http.log.error.private_zone http.handlers.reverse_proxy
 	}
 }
 
@@ -64,7 +76,8 @@
 	}
 }
 
-# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every site except its own. First handle in its scope.
+# Tailnet grants are per port, so staging may reach 443; Caddy keeps it off every 443 name but the *.private ingest.
+# Import it before any handle the staging VM must not reach.
 (deny_staging_vm) {
 {% if staging_vm_ips | length > 0 %}
 	@staging_vm remote_ip {{ staging_vm_ips | join(' ') }}
@@ -247,26 +260,8 @@
 	}
 }
 
-{% for site in edge_sites %}
-{% if site.kind == 'app' %}
-{{ site.hostname }} {
-	import acme {{ site.name }}.{{ acme_zone }}
-	import access_log {{ site.name }}
-{% if site.isolate_staging_vm | default(true) %}
+{% macro app_body(site) %}
 	import deny_staging_vm
-{% endif %}
-
-	# Tailnet clients reach this name via the split-horizon extra record and get the full app.
-	@tailnet remote_ip {{ tailnet_v4_prefix }} {{ tailnet_v6_prefix }}
-	handle @tailnet {
-		@agent_any path /agent /agent/*
-		handle @agent_any {
-			import agent {{ site.upstream }}
-		}
-		handle {
-			import app_ui {{ site.upstream }}
-		}
-	}
 
 {% if site.ui_public | default(false) %}
 	# Internet: the whole UI plus the MCP/OAuth set from public_routes. Other /agent paths (incl. the unauthenticated /api/tools) stay tailnet-only.
@@ -291,19 +286,15 @@
 		}
 	}
 {% endif %}
-}
-
-{% elif site.kind == 'bearer_mcp' %}
-{{ site.hostname }} {
-	import acme {{ site.name }}.{{ acme_zone }}
-	import access_log {{ site.name }}
+{% endmacro %}
+{% macro bearer_mcp_body(site) %}
 	import deny_staging_vm
 
 	# Only {{ site.path }} is public; any other listener on the same container is tailnet-only.
 	@mcp path {{ site.path }}
 	handle @mcp {
 		rate_limit {
-			zone {{ site.limits }} {
+			zone {{ site.name }}_{{ site.limits }} {
 				key {remote_host}
 				window {{ ratelimit[site.limits].window }}
 				events {{ ratelimit[site.limits].events }}
@@ -321,53 +312,84 @@
 	handle {
 		respond "Not Found" 404
 	}
+{% endmacro %}
+# One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.
+*.{{ public_zone }} {
+	import acme public.{{ acme_zone }}
+	import access_log public
+
+{% for site in edge_sites if site.zone | default('') == 'public' %}
+	@site_{{ site.name | replace('-', '_') }} host {{ site.hostname }}
+	handle @site_{{ site.name | replace('-', '_') }} {
+{{ (app_body(site) if site.kind == 'app' else bearer_mcp_body(site)) | indent(width='\t', first=true) }}	}
+
+{% endfor %}
+	handle {
+		respond "Not Found" 404
+	}
 }
 
-{% endif %}
-{% endfor %}
-*.{{ magicdns_base_domain }} {
-	import acme ts.{{ acme_zone }}
-	import access_log tailnet
-	import deny_staging_vm
+# Tailnet-only; the zone has no public DNS records, tailnet clients resolve it through headscale.
+*.{{ private_zone }} {
+	import acme private.{{ acme_zone }}
 	import tailnet_only
 
-	@status host {{ status_hostname }}
+	# Must stay between tailnet_only and deny_staging_vm: the ingest is the one name here the staging VM may reach.
+	@webhooks_ingest host {{ webhooks_ingest_private_hostname }}
+	handle @webhooks_ingest {
+		request_body {
+			max_size {{ body_limits.webhooks_ingest }}
+		}
+		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
+	}
+
+	import deny_staging_vm
+
+	# Queries here carry recipient addresses, ntfy credentials and webhook tokens (and so do Referer and redirects).
+	# Per-host loggers match the exact lowercase name only, so the whole zone drops all three.
+	log private_zone {
+		output file /var/log/caddy/private.access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			resp_headers>Location delete
+			wrap json
+		}
+	}
+	# The dashboard derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
+	@commsgun_ui host {{ commsgun_ui_private_hostname }}
+	handle @commsgun_ui {
+		reverse_proxy 127.0.0.1:{{ commsgun_ui_port }}
+	}
+
+	# The UI derives its origin and login rate-limit key from Caddy's default X-Forwarded-*; do not strip them.
+	@happybabytracker_ui host {{ happybabytracker_ui_private_hostname }}
+	handle @happybabytracker_ui {
+		reverse_proxy 127.0.0.1:{{ happybabytracker_ui_port }}
+	}
+
+	@status host {{ status_private_hostname }}
 	handle @status {
 		reverse_proxy 127.0.0.1:{{ gatus_port }}
 	}
 
-	@ntfy host {{ ntfy_hostname }}
+	@ntfy host {{ ntfy_private_hostname }}
 	handle @ntfy {
 		reverse_proxy 127.0.0.1:2586 {
 			flush_interval -1
 		}
 	}
 
-	@webhooks_ingest host {{ webhooks_ingest_hostname }}
-	handle @webhooks_ingest {
+	@commsgun_enqueue host {{ commsgun_enqueue_private_hostname }}
+	handle @commsgun_enqueue {
 		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
+			max_size {{ body_limits.commsgun_enqueue }}
 		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
-	}
-
-	handle {
-		respond "Not Found" 404
-	}
-}
-
-# Tailnet-only (not in the cloud firewall): the staging environment's webhooks ingest, reached on its own port so staging never needs 443 for it.
-*.{{ magicdns_base_domain }}:{{ staging_edge_port }} {
-	import acme ts.{{ acme_zone }}
-	import access_log staging
-
-	@webhooks_ingest host {{ webhooks_ingest_hostname }}
-	handle @webhooks_ingest {
-		import tailnet_only
-		request_body {
-			max_size {{ body_limits.webhooks_ingest }}
-		}
-		reverse_proxy 127.0.0.1:{{ webhooks_ingest_port }}
+		reverse_proxy 127.0.0.1:{{ commsgun_enqueue_port }}
 	}
 
 	handle {

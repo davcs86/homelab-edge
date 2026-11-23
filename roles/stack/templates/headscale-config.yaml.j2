@@ -64,7 +64,10 @@ dns:
   override_local_dns: false
   nameservers:
     global: []
-    split: {}
+    # Without a route, Linux nodes never ask the tailnet resolver for this zone's extra records.
+    split:
+      {{ private_zone }}:
+        - 1.1.1.1
   search_domains: []
   extra_records_path: /etc/headscale/extra-records.json
 

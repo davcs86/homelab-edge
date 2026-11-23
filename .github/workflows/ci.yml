@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.13"
       - run: pip install -r requirements.txt
@@ -34,7 +34,7 @@ jobs:
         run: shellcheck scripts/*.sh templates/app-deploy/*.sh
       - name: App-deploy template (pins, secret handling, source and report steps)
         run: python3 scripts/app-deploy-template-test.py
-      - name: Workflows that commit to main (App token only when needed, key confined to production)
+      - name: Workflows that commit to main (PUSH_TOKEN PAT only when needed, key confined to production)
         run: python3 scripts/workflow-push-test.py
       - name: Image-pin bump script and its workflow (offline, fake registry, git and gh)
         run: python3 scripts/bump-image-pin-test.py
@@ -42,6 +42,22 @@ jobs:
         run: python3 scripts/secrets-keys-test.py
       - name: Gatus config renders with the expected probes (prod and staging)
         run: python3 scripts/gatus-config-test.py
+      - name: Portal zones (*.public, *.private) - names, first tenants, tailnet DNS route
+        run: python3 scripts/portal-zones-test.py
+      - name: Commsgun config, env files (read back by docker compose), assertions and compose services
+        env:
+          COMMSGUN_TEST_REQUIRE_DOCKER: "1"
+        run: python3 scripts/commsgun-config-test.py
+      - name: Happybabytracker env files (read back by docker compose), assertions and compose services
+        env:
+          HAPPYBABYTRACKER_TEST_REQUIRE_DOCKER: "1"
+        run: python3 scripts/happybabytracker-config-test.py
+      - name: Backup scripts and units; the happybabytracker snapshot under writes, as root in a Docker-like tree
+        env:
+          EDGE_BACKUP_TEST_REQUIRE_ROOT: "1"
+        run: |
+          command -v sqlite3 >/dev/null || sudo apt-get install -y --no-install-recommends sqlite3
+          sudo -n env "PATH=$PATH" EDGE_BACKUP_TEST_REQUIRE_ROOT="$EDGE_BACKUP_TEST_REQUIRE_ROOT" python3 scripts/edge-backup-test.py
       - name: No plaintext secrets in secrets/
         run: |
           for f in secrets/*.sops.yaml; do
@@ -60,7 +76,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.13"
       - run: pip install -r tools/pve-setup.requirements.txt
@@ -86,7 +102,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.13"
       - run: pip install -r requirements.txt
@@ -98,6 +114,7 @@ jobs:
             --build-arg CADDY_BUILDER_IMAGE="$(grep '^caddy_builder_image:' $v | cut -d'"' -f2)" \
             --build-arg CADDY_RUNTIME_IMAGE="$(grep '^caddy_runtime_image:' $v | cut -d'"' -f2)" \
             --build-arg CADDY_VERSION="$(grep '^caddy_version:' $v | cut -d'"' -f2)" \
+            --build-arg CADDY_GO_TOOLCHAIN="$(grep '^caddy_go_toolchain:' $v | awk '{print $2}')" \
             --build-arg CADDY_DNS_DESEC_VERSION="$(grep '^caddy_dns_desec_version:' $v | awk '{print $2}')" \
             --build-arg CADDY_RATELIMIT_COMMIT="$(grep '^caddy_ratelimit_commit:' $v | awk '{print $2}')" \
             -t edge-caddy:ci roles/stack/files/caddy

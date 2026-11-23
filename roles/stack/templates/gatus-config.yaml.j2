@@ -14,7 +14,7 @@ alerting:
     topic: {{ ntfy_alert_topic }}
     token: ${NTFY_TOKEN}
     priority: 4
-    click: https://{{ status_hostname }}
+    click: https://{{ status_private_hostname }}
     default-alert:
       failure-threshold: 3
       success-threshold: 2
@@ -65,20 +65,66 @@ endpoints:
       - "[STATUS] == 401"
     alerts: [{type: ntfy}]
 
-  - name: webhooks-mcp-requires-auth
+  - name: webhooks-mcp-portal-requires-auth
     group: public
-    url: https://{{ webhooks_mcp_hostname }}/mcp
+    url: https://{{ webhooks_mcp_public_hostname }}/mcp
     method: POST
     interval: 2m
     <<: *public
     conditions:
       - "[STATUS] == 401"
+    alerts: [{type: ntfy}]
+
+  - name: webhooks-ingest-private
+    group: edge
+    url: https://{{ webhooks_ingest_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-backlog
+    group: edge
+    url: https://{{ commsgun_enqueue_private_hostname }}/healthz/backlog
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-api-private
+    group: edge
+    url: https://{{ commsgun_enqueue_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+    alerts: [{type: ntfy}]
+
+  - name: commsgun-ui-private
+    group: edge
+    url: https://{{ commsgun_ui_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
       - "[CERTIFICATE_EXPIRATION] > 336h"
     alerts: [{type: ntfy}]
 
-  - name: webhooks-ingest
+  - name: happybabytracker-ui-private
     group: edge
-    url: https://{{ webhooks_ingest_hostname }}/healthz
+    url: https://{{ happybabytracker_ui_private_hostname }}/healthz
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
+  - name: happybabytracker-api-private
+    group: edge
+    url: https://{{ happybabytracker_ui_private_hostname }}/healthz/api
     interval: 1m
     <<: *tailnet
     conditions:
@@ -87,7 +133,7 @@ endpoints:
 
   - name: public-default-404
     group: public
-    url: https://{{ public_app_hostname }}/
+    url: https://unknown.{{ public_zone }}/
     interval: 10m
     <<: *public
     conditions:
@@ -137,8 +183,8 @@ endpoints:
       - "[STATUS] == 401"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-ui
-    group: home
+  - name: xstockstrat-ui-vm
+    group: machines
     url: http://{{ app_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
@@ -147,8 +193,8 @@ endpoints:
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-agent
-    group: home
+  - name: xstockstrat-agent-vm
+    group: machines
     url: http://{{ app_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
     interval: 1m
     <<: *tailnet
@@ -157,8 +203,8 @@ endpoints:
       - "[BODY].resource == https://{{ public_app_hostname }}/agent"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-staging-ui
-    group: home
+  - name: xstockstrat-staging-ui-vm
+    group: machines
     url: http://{{ staging_tailnet_host }}:{{ app_ui_port }}/trader/api/health
     interval: 1m
     <<: *tailnet
@@ -167,8 +213,8 @@ endpoints:
       - "[BODY].status == ok"
     alerts: [{type: ntfy}]
 
-  - name: xstockstrat-staging-agent
-    group: home
+  - name: xstockstrat-staging-agent-vm
+    group: machines
     url: http://{{ staging_tailnet_host }}:{{ app_agent_port }}/.well-known/oauth-protected-resource
     interval: 1m
     <<: *tailnet
@@ -177,8 +223,8 @@ endpoints:
       - "[BODY].resource == https://{{ staging_public_hostname }}/agent"
     alerts: [{type: ntfy}]
 
-  - name: proxmox
-    group: home
+  - name: proxmox-host
+    group: machines
     url: tcp://{{ pve_tailnet_host }}:8006
     interval: 1m
     <<: *tailnet
