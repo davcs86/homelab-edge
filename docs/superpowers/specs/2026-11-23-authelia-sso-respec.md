@@ -135,11 +135,12 @@ Every MCP client: `access_token_signed_response_alg: RS256`, an explicit `audien
 | `happybabytracker` | confidential | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
 
 ### 4.7 Identity, secrets and data
-- **Pinned `sub`:** each lldap user carries an `sso_sub` attribute. Before Authelia serves, a `compose run --rm` step runs the
-  storage migration, then reconciles each person: Authelia has an identifier and lldap none (first login minted it) → copy
-  it to lldap; lldap has one and Authelia none (Authelia's database lost) → `authelia storage user identifiers add`; both and
-  different → **fail the deploy** (S19). lldap must be up first (`depends_on`). Offboarding deletes the identifier; usernames
-  are never reused. Between a first login and the next deploy, the `sub` exists only in Authelia (and its twice-daily backup).
+- **Pinned `sub`:** each lldap user carries an `sso_sub` attribute. Before Authelia serves, a `compose run --rm` step runs
+  the storage migration, then reconciles each member of `sso_people`: Authelia has an identifier and lldap none (first login
+  minted it) → copy it to lldap; lldap has one and Authelia none (Authelia's database lost) → `authelia storage user
+  identifiers add`; both and different → **fail the deploy** (S19). lldap must be up first (`depends_on`). Offboarding
+  deletes the identifier and clears the attribute (otherwise a later deploy would re-apply it); usernames are never reused.
+  Between a first login and the next deploy, the `sub` exists only in Authelia (and its twice-daily backup).
 - **Secrets** (SOPS, `init_secrets.py fill_missing`, EDGE-08, `no_log`): session secret, storage encryption key, OIDC HMAC
   secret, OIDC JWKS RSA key, client secrets **and their pbkdf2 hashes, generated once** (as `ntfy_alerts_password_bcrypt`,
   so the rendered config is stable), lldap JWT secret, `key_seed`, lldap admin password, Authelia's bind password, the SMTP
@@ -184,9 +185,9 @@ and happybabytracker probes move to their public names; `verify.yml` cases for t
 
 | App | Edge | App repo |
 |---|---|---|
-| xstockstrat | Legacy `/agent/oauth/*`, register and login routes stay (DO, `local`, `both`); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED` (unless an auto-provision flag, default off); unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude Code clients; D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
+| xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` (DigitalOcean and rollback); the password login routes also serve `both`; VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED` (unless an auto-provision flag, default off); unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude Code clients; D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
 | webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401 | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; `OAUTH_ALLOWED_SUBJECTS` (`iss`+`sub`, including the automation client's) + required scope; C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`; the automation secret's home is named in its runbook |
-| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS on `authelia-smtp` only, app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
+| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by containers on `authelia-smtp` only (published on `127.0.0.1` for the Gatus probe), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
 | happybabytracker | `happybaby.public.<domain>`; EDGE-07 undone, `ORIGIN`/`PUBLIC_ORIGIN` follow; token paths redacted; `extra_hosts` | § 3 contract; admin principal table + identities; invites redeemable by SSO; non-goal (`:54`) and anti-goal (`:69`) amended; threat-model pass before P6 |
 
 ## 6. Memory budget
@@ -208,16 +209,17 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 
 ## 8. Lifecycles (`sso.md` carries the steps)
 - **Add a person:** create them in lldap's UI (username, display name, email, groups incl. `sso_people`); they use "Forgot
-  password", enrol a first second factor, link in each app; the next deploy copies their `sub` into lldap (switch the app to `both` for the linking window where a local login is needed).
+  password", enrol a first second factor, and link in each app (the app in `both` for the window where a local login is
+  needed); the next deploy copies their `sub` into lldap.
 - **Password reset:** self-service; the link lasts 1 h; login still needs the second factor.
 - **Lost every device:** the admin deletes the registrations (`authelia storage user totp delete`, `… webauthn delete`) and
   re-enrolment happens with the admin present (once no device is registered, the emailed code alone would suffice).
-- **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user (ends
-  sessions) and refuse that `(iss, sub)`; webhooks-mcp drops the `sub`; delete the Authelia identifier. S24 shows whether a
-  removed person's refresh token fails; if not, the app-side refusal is what stops them.
+- **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user
+  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp drops the `sub`; delete the Authelia identifier and clear
+  `sso_sub`. S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
 - **Authelia DB lost:** restore from the edge backup before anyone logs in. Without a backup, the `sso_sub` attributes are
-  re-applied before serving and links survive, but every account is briefly recoverable through its mailbox alone: re-enrol everyone
-  with an admin present (an accepted, recorded residual).
+  re-applied before serving and links survive, but every account is briefly recoverable through its mailbox alone:
+  re-enrol everyone with an admin present (an accepted, recorded residual).
 - **lldap DB lost:** restore from the edge backup; without one, the admin recreates each person by hand (same username),
   the next deploy copies each `sub` back from Authelia, and each person resets their password. If both databases are lost
   without backups, people relink in every app (`sso.md` § 7).
@@ -225,8 +227,8 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 ## 9. Notifier
 Authelia emails reset links and enrolment codes through an **SMTP submission listener inside commsgun-api**: STARTTLS with a
 certificate from an edge-local CA that Authelia trusts (`certificates_directory`, `tls.server_name`), on the `authelia-smtp`
-network only, authenticated as commsgun app `authelia`, `disable_startup_check: true`. Its messages expire with the reset
-link (1 h). Until P5 ships, the **file notifier** runs and an admin relays links and codes. commsgun down → no emails;
+network only (plus a loopback port for the Gatus probe), authenticated as commsgun app `authelia`,
+`disable_startup_check: true`. Its messages expire with the reset link (1 h). Until P5 ships, the **file notifier** runs and an admin relays links and codes. commsgun down → no emails;
 existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry); `authelia` limits 5 a minute, 30 a day
 (owner, 2026-11-23).
 
@@ -234,7 +236,7 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 | Phase | Gated on | Pass condition |
 |---|---|---|
-| P0 spike | — | S1–S25 each recorded here with observed output, under the § 11 guardrails |
+| P0 spike | — | Every S-item except S1, S5, S7, S15 and S18 (moved to P1) recorded here with observed output, under the § 11 guardrails |
 | P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created in lldap's UI resets their password and logs in, and the next deploy copies their `sub` into lldap; a `sub` survives an Authelia DB wipe and redeploy (restored from lldap), and a mismatched one fails the deploy; S1, S5, S7, S15 and S18 recorded against the deployed portal |
 | P2 xstockstrat-staging | 345 amended + shipped; people created in lldap (P1) | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: Claude.ai and Claude Code connect, list tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
 | P3 xstockstrat prod | P2 | Same checks on prod |
@@ -252,9 +254,10 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 - **S17** `prompt=login` forces re-authentication. **S18** an edge container reaches Caddy via `host-gateway` and gets the
   public issuer. **S19** `storage user identifiers add` on an existing identifier (repeat-safe, mismatch detectable).
   **S20** the pinned image's config-validation command.
-- **S21** Authelia password reset against the pinned lldap rootless release. **S22** the deploy's lldap step (groups and the `sso_sub` attribute)
-  is idempotent and never touches people, memberships or passwords; the `sub` reconcile handles all three cases. **S23** lldap RSS under N parallel binds. **S24** refresh fails once a person leaves `sso_people`
-  or their group. **S25** regulation bans by normalised username (case and email variants share one counter).
+- **S21** Authelia password reset against the pinned lldap rootless release. **S22** the deploy's lldap step (groups and the
+  `sso_sub` attribute) is idempotent and never touches people, memberships or passwords; the `sub` reconcile handles all
+  three cases. **S23** lldap RSS under N parallel binds. **S24** refresh fails once a person leaves `sso_people` or their
+  group. **S25** regulation bans by normalised username (case and email variants share one counter).
 
 (S6, S11, S13 and S14 were retired with superseded designs.)
 

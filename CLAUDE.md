@@ -70,7 +70,7 @@ Read only the row that matches the task.
 | Changing a webhooks-mcp port, body cap, `X-Forwarded-For` handling or hostname (cross-repo contracts C1–C9) | `davcs86/webhooks-mcp` `docs/contracts.md`, then `docs/decisions.md` § Known traps |
 | Deploy, configure or operate commsgun (email/SMS hub) | `docs/runbooks/commsgun.md` |
 | Deploy, configure or operate happybabytracker (family tracker): admin and parents, secret rotation, restore | `docs/runbooks/happybabytracker.md` |
-| SSO (Authelia): people, groups, emails, linking app accounts, recovery | `docs/runbooks/sso.md`, `docs/decisions.md` § SSO |
+| SSO (Authelia, lldap): people, groups, linking app accounts, recovery; the full design | `docs/runbooks/sso.md`, `docs/decisions.md` § SSO, `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` |
 | Why the design is the way it is; traps already hit (ACME, STUN, DNS, Ansible) | `docs/decisions.md` |
 | Patterns between the traps an edit can silently break (pin-line quoting, XFF trust, restart/handler shape, `*.private` four-place wiring, secret-read shapes, apt pin recipe, owner-app seams) — `EDGE-*` — plus the defects/doc-drift log | `docs/context-constitution.md`, `docs/context-constitution-findings.md` |
 | Changing grants / tags | `policy/policy.hujson`; test with `scripts/policy-test.sh` |

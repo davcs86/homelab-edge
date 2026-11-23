@@ -43,7 +43,7 @@ device login never uses SSO.
 3. **Group membership opens the door; the app grants the role.** A person in a group but not linked in that app is refused
    there until they link (§ 5).
 4. **Authelia's and lldap's SQLite are backed up twice a day and must stay so.** lldap's is the only copy of people and
-   passwords; each `sub` survives the loss of either database, not both (§ 8).
+   passwords; each `sub`, once a deploy has copied it, survives the loss of either database, not both (§ 8).
 5. **Passwords never go into SOPS or this repo.** lldap is their only writer.
 6. **One browser profile per account** for anyone with several (`david`, `david_admin`, `david_claude`): the portal cookie
    is shared, so one profile would land you in an app as the wrong account.
@@ -53,11 +53,12 @@ device login never uses SSO.
 1. Decide the username (permanent, § 2.1), email and groups.
 2. In lldap's UI (`https://lldap.private.<domain>`, signed in as lldap's `admin`), create the user with that username,
    display name and email, no password, and add them to `sso_people` and their app groups.
-4. At `https://auth.public.<domain>` they press **Forgot password**, set a password from the emailed link (valid 1 h), log
-   in, and enrol a passkey or TOTP app with an emailed code. The next deploy copies their new `sub` into lldap. Until commsgun's SMTP listener ships, the file notifier holds the
-   link and the code; an admin reads them on the edge and passes them on. `TODO(verify)`: path and command. For a new account
-   this first enrolment rests on the mailbox alone; enrol with the person to close that.
-5. In each app, link (§ 5).
+3. At `https://auth.public.<domain>` they press **Forgot password**, set a password from the emailed link (valid 1 h), log
+   in, and enrol a passkey or TOTP app with an emailed code. Until commsgun's SMTP listener ships, the file notifier holds
+   the link and the code; an admin reads them on the edge and passes them on. `TODO(verify)`: path and command. For a new
+   account this first enrolment rests on the mailbox alone; enrol with the person to close that.
+4. In each app, link (§ 5).
+5. Deploy: it copies their new `sub` into lldap (until then it exists only in Authelia and its backup).
 
 ## 4. Change access, password, second factor, or remove a person
 
@@ -69,7 +70,7 @@ device login never uses SSO.
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
 | Change email | edit it in lldap's UI | next login (xstockstrat copies it to linked accounts) |
-| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); disable them in every app; drop their `sub` from webhooks-mcp's allowlist; delete their Authelia identifier | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise |
+| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); disable them in every app; drop their `sub` from webhooks-mcp's allowlist; delete their Authelia identifier and clear their `sso_sub` in lldap (or a later deploy re-applies it) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | next session JWT (web) or within ~60 s (MCP) |
 
 ## 5. Linking app accounts

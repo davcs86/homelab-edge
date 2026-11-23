@@ -58,21 +58,21 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     provisioning only behind a flag. xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
   - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]`, 5 min ban.
-  - People live in lldap (rootless image; LDAP on the compose network only; admin UI tailnet-only at `lldap.private.<domain>`).
-    lldap owns people and passwords (owner, 2026-11-23): admins add, change and offboard people in its UI, and SOPS holds no
-    people. Being the passwords' only writer is what makes self-service reset possible (Authelia's file backend would rewrite
-    a file rendered from SOPS). The cost, accepted: no git audit trail for people, and no rebuild of people without a backup.
-    The repo declares only the group names Authelia's rules use and an `sso_sub` attribute; a deploy ensures they exist and
-    never touches people or memberships. Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the filter
-    also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
-  - Reset links last 1 h, to absorb Resend's rate limiting. Emails, from `auth@<domain>` (commsgun app `authelia`, 5 a minute and
-    30 a day), go through an SMTP listener inside commsgun-api, STARTTLS
-    with an edge-local CA (Authelia does not support plaintext SMTP), on a network shared only with Authelia so neither
-    reaches the other's other ports. `require_second_factor` makes another device need an existing one; recovery after
-    losing every device is an admin-present re-enrolment.
+  - lldap owns people and passwords (owner, 2026-11-23): rootless image, LDAP on the compose network only, admin UI tailnet-only
+    at `lldap.private.<domain>`, where admins add, change and offboard people; SOPS holds no people. Being the passwords' only
+    writer is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from SOPS). The
+    cost, accepted: no git audit trail for people, and no rebuild of people without a backup. The repo declares only the group
+    names Authelia's rules use and an `sso_sub` attribute; a deploy ensures they exist and never touches people or
+    memberships. Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the
+    filter also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
+  - Reset links last 1 h, to absorb Resend's rate limiting. Emails come from `auth@<domain>` (commsgun app `authelia`, 5 a
+    minute and 30 a day) through an SMTP listener inside commsgun-api: STARTTLS with an edge-local CA (Authelia does not
+    support plaintext SMTP), on a network shared only with Authelia, so neither reaches the other's remaining ports.
+    `require_second_factor` makes another device need an existing one; recovery after losing every device is an
+    admin-present re-enrolment.
   - Each person's `sub` lives in two places that restore each other: Authelia's storage and the `sso_sub` attribute on their
     lldap user. Before Authelia serves, a deploy copies a first-login `sub` into lldap, re-applies lldap's after an Authelia
-    database loss, and fails on a mismatch, so losing either database never breaks links; usernames are never reused.
+    database loss, and fails on a mismatch, so once copied, losing either database never breaks links; usernames are never reused.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens
     (30 days for MCP clients, rotating) survive. Client-secret hashes are generated once in SOPS so the rendered config is
     stable. Config reaches it through compose `configs:` content if that recreates the container on change (spike), else a
