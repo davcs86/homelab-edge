@@ -1,0 +1,35 @@
+# SSO people: template. Copy it OUTSIDE the repo, fill it in, and never commit the filled copy: emails are personal data,
+# and the result goes into SOPS (key decided by the Authelia role PR). Design: docs/superpowers/specs/2026-11-23-authelia-sso-respec.md
+#
+# Rules (docs/runbooks/sso.md § 2):
+#   - username is PERMANENT (the Authelia `sub` is bound to it). Use ^[a-z0-9._-]{3,32}$ so it also fits happybabytracker.
+#   - email is unique across people and exactly right: xstockstrat links an existing account by this email, once.
+#   - groups are the approval: a group opens one app. Leave it out and that app refuses the person.
+#   - no passwords here. Each person's argon2id hash is generated when they are added (sso.md § 3), never typed into this file.
+#
+# Groups: xstockstrat | xstockstrat-staging | webhooks-mcp | commsgun | happybabytracker
+#   (plus happybabytracker-admin only if Q13 is answered "map a group")
+---
+people:
+  - username: ""            # permanent, e.g. "david"
+    display_name: ""        # free text, editable later
+    email: ""               # unique; admins edit it in SOPS only
+    groups: []              # e.g. [xstockstrat, xstockstrat-staging, webhooks-mcp, commsgun, happybabytracker]
+    second_factor: passkey  # passkey | totp  (what they plan to enrol at first login; informational)
+
+    # How each app should treat this person's first SSO login. Delete an app's block if they are not in its group.
+    xstockstrat:            # homelab prod only (DigitalOcean stays legacy)
+      existing_account_email: ""   # the email on their current row (`manage-users.py list-users`); "" = create a new user
+      roles: [trader]              # admin | trader | viewer; keep at least one active admin
+    xstockstrat-staging:
+      existing_account_email: ""
+      roles: [trader]
+    happybabytracker:
+      existing_parent_username: "" # link to this parent row; "" = provision a new parent
+      kids_access: ""              # note only: which kids, guardian or caregiver (granted in the app, not by SSO)
+
+  # - username: ""
+  #   display_name: ""
+  #   email: ""
+  #   groups: []
+  #   second_factor: totp
