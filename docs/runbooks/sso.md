@@ -38,7 +38,7 @@ Gatus and Proxmox stay tailnet-only and outside SSO (a later phase). headscale d
 3. **Group membership is the approval.** Adding someone to `xstockstrat` lets them log in, and their first login creates
    an account with role `trader` unless their email already matches one. Trading still needs their own broker account;
    there are no shared accounts.
-4. **Authelia's SQLite file is backed up nightly and must stay so.** Losing it loses every `sub` and every passkey/TOTP
+4. **Authelia's SQLite file is backed up twice a day and must stay so.** Losing it loses every `sub` and every passkey/TOTP
    enrolment (§ 8).
 
 ## 3. Add a person
@@ -103,7 +103,7 @@ applied migrations are never edited, and only migrations not yet applied pick up
 | Situation | Effect | Action |
 |---|---|---|
 | Authelia down | no new logins anywhere; the commsgun dashboard is unreachable; xstockstrat MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. For xstockstrat, re-enable password login (the rollback flag) if it must stay usable. |
-| Authelia SQLite lost | every `sub` and second factor gone | **Restore it from the nightly backup** (the same `edge-<UTC>.tar.age` archives as headscale, `docs/runbooks/recovery.md`; the role PR adds the Authelia step). Without a backup, every person re-enrols, and each xstockstrat environment needs every row unlinked (§ 7 step 2) before rule 5.2 can relink them. |
+| Authelia SQLite lost | every `sub` and second factor gone | **Restore it from the edge backup** (the same `edge-<UTC>.tar.age` archives as headscale, `docs/runbooks/recovery.md`; the role PR adds the Authelia step). Without a backup, every person re-enrols, and each xstockstrat environment needs every row unlinked (§ 7 step 2) before rule 5.2 can relink them. |
 | `users_database.yml` lost | nobody can log in | redeploy from SOPS |
 
 headscale, SSH and the tailnet do not depend on Authelia; the break-glass path in `docs/runbooks/recovery.md` is unchanged.

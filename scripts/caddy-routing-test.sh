@@ -25,9 +25,9 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'staging_host={{ staging_public_hostname }}' 'wmcp_host={{ webhooks_mcp_public_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'staging_host={{ staging_public_hostname }}' 'wmcp_host={{ webhooks_mcp_public_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'hbpriv_host={{ happybabytracker_ui_private_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" staging_host="" wmcp_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntpriv_host="" whpriv_host=""
+app_host="" hs_host="" staging_host="" wmcp_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntpriv_host="" whpriv_host="" hbpriv_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
@@ -59,7 +59,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 gatus:8081 ntfy:2586; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 happybabytracker-ui:9212 gatus:8081 ntfy:2586; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
   if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
 done
@@ -160,6 +160,16 @@ expect "private dashboard gets Caddy's X-Forwarded-*, not the client's" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$v/echo-headers")"
 expect "private dashboard upstream keeps the query" "200 commsgun-ui GET /messages?recipient=canary@example.test" \
   "$(req "$cgpriv_host" --interface "$tailnet_ip" -H 'Referer: https://x/?recipient=canary@example.test' "$v/messages?recipient=canary@example.test")"
+# happybabytracker: a tailnet-only *.private name with one upstream (the UI; the API is never published); no body cap.
+hb="https://$hbpriv_host"
+expect "happybaby aborts publicly"             "000"                              "$(req "$hbpriv_host" "$hb/healthz")"
+expect "happybaby from the tailnet"            "200 happybabytracker-ui GET /healthz" "$(req "$hbpriv_host" --interface "$tailnet_ip" "$hb/healthz")"
+expect "happybaby API health goes through the UI" "200 happybabytracker-ui GET /healthz/api" "$(req "$hbpriv_host" --interface "$tailnet_ip" "$hb/healthz/api")"
+expect "staging VM denied on happybaby"        "000"                              "$(req "$hbpriv_host" --interface "$staging_vm_ip" "$hb/healthz")"
+expect "happybaby gets Caddy's X-Forwarded-*, not the client's" \
+  "200 happybabytracker-ui GET /echo-headers xfp=[https] xfh=[$hbpriv_host] xff=[$tailnet_ip]" \
+  "$(req "$hbpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$hb/echo-headers")"
+expect "happybaby name reaches only its UI"    "200 happybabytracker-ui POST /v1/messages" "$(req "$hbpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$hb/v1/messages")"
 # The enqueue API: its own body cap, the same isolation, its own upstream.
 e="https://$cmpriv_host"
 expect "private enqueue aborts publicly"       "000"                              "$(req "$cmpriv_host" -X POST -d '{}' "$e/v1/messages")"
