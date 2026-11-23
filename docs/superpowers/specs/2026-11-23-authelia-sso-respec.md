@@ -1,8 +1,9 @@
 # Authelia SSO — re-spec against the repo as of 2026-11-23 (DRAFT for approval)
 
-Status: **draft.** It re-reads the approved 2026-11-15 design (`docs/decisions.md` § Design decisions, "SSO is Authelia";
-`docs/runbooks/sso.md`) against `main` at `c06667e`, and against the app repos at: xstockstrat `6ce536f`, webhooks-mcp
-`c9be704`, commsgun `017db3e`, happybabytracker `d3820ab`. `sso.md` and `decisions.md` are edited only once § 7 is closed.
+Status: **design re-approved in part, not deployed.** It re-reads the approved 2026-11-15 design (`docs/decisions.md` § Design
+decisions, "SSO is Authelia"; `docs/runbooks/sso.md`) against `main` at `c06667e`, and against the app repos at: xstockstrat
+`6ce536f`, webhooks-mcp `c9be704`, commsgun `017db3e`, happybabytracker `d3820ab`. `sso.md` and `decisions.md` carry the
+settled parts; what is still open is § 7.
 
 ## 1. Owner rulings (2026-11-23)
 
@@ -13,10 +14,15 @@ Status: **draft.** It re-reads the approved 2026-11-15 design (`docs/decisions.m
 | Q3 webhooks-mcp | **Switches to Authelia** (the static bearer key goes) |
 | Q4 MCP clients | **Both Claude.ai and Claude Code** clients, per environment |
 | Q5 DigitalOcean | DO xstockstrat deployments exist and **stay legacy**: SSO is homelab only |
-| Q6 VMs | Wants `auth.private.<domain>` so the VMs reach Authelia internally → analysed in § 4 |
-| Q7 config delivery | Explore the options further → § 5 |
-| Q8 app repos | Attached read-only; findings in § 2 |
+| Q6 VM back-channel | **Option A**: the VMs use `auth.public.<domain>` over the home WAN; no `auth.private` (§ 4) |
+| Q7 config delivery | **Spike C** (compose `configs:` content); **fall back to A** (directory mount + hash-compare restart) (§ 5) |
+| Q8 app repos | Read; findings in § 2 |
 | Q9 people | Template: `docs/runbooks/sso-people.template.yaml` |
+| Q11 notifier | Owner asks for **commsgun** → § 5a |
+| Q12 commsgun password login | **Kept as a fallback**, not mapped to an Authelia group, **switchable off by configuration** (§ 5b) |
+| Q13 happybabytracker admin | **Same as Q12**: local env admin kept as fallback, not mapped, switchable off by configuration |
+| Q14 home WAN IP | **Not static** → no IP exemption; path-scoped zones instead (§ 4) |
+| Q15 app-repo amendments | Owner runs them in a new session with every repo; this one hands off (artifact + § 9) |
 
 ## 2. What still holds, and what changed
 
@@ -52,7 +58,7 @@ MCP clients public PKCE, audience `${APP_URL}/agent`, `requested_audience_mode: 
 ### 3.1 Edge, Authelia itself
 - **Names:** `authelia_public_hostname: "auth.{{ public_zone }}"`. Optional `authelia_private_hostname` per § 4.
 - **Caddy:** a dedicated `@authelia host` handle in `*.{{ public_zone }}` before the `edge_sites` loop. Zones
-  `authelia_general`, `authelia_login`, `authelia_token` (EDGE-12), the § 4 exemption, `body_limits.default`,
+  `authelia_login`, `authelia_backchannel`, `authelia_general` (EDGE-12; path-scoped, § 4), `body_limits.default`,
   `reverse_proxy 127.0.0.1:{{ authelia_port }}`, `Location` dropped from its log lines. No `trusted_proxies`.
 - **Compose:** `authelia` with `<<: *hardening`, `127.0.0.1:{{ authelia_port }}:9091`, named volume `authelia-data`
   (SQLite), uid 10001, `read_only`, `mem_limit` from S8 (start 128m) (EDGE-05). Digest pin + `docs/versions.md` row
@@ -89,10 +95,11 @@ MCP clients public PKCE, audience `${APP_URL}/agent`, `requested_audience_mode: 
   }} { uri /api/authz/forward-auth; copy_headers Remote-User Remote-Groups Remote-Email Remote-Name }`. Caddy deletes
   client-sent `Remote-*` first. Port 9202 stays loopback. EDGE-07 four-place wiring is undone for the private name, EDGE-11
   `ORIGIN` follows the public name, EDGE-02 holds (no XFF trust), and the zone's query/Referer redaction moves with it.
-  commsgun side: trust `Remote-User` only, drop `ADMIN_PASSWORD` login (or keep it as break-glass, Q12), amend its anti-goal.
+  commsgun side: trust `Remote-User` on the public origin only; keep the `ADMIN_PASSWORD` login as the switchable fallback
+  (§ 5b, reach per Q16); an SMTP door for Authelia's notifier (§ 5a); amend its anti-goal.
 - **happybabytracker (Q2):** OIDC client recommended over `forward_auth`: its spec's seam is exactly
   `identities(provider='authelia', subject=<sub>)`, and OIDC needs no trusted-header boundary. App side: an OIDC login route,
-  link-or-provision by `sub`, a decision on the env-only admin (Q13). Exposure: Q10.
+  link-or-provision by `sub`; the env-only admin stays a local login behind a switch (§ 5b). Exposure: Q10.
 
 ## 4. Q6 — `auth.private.<domain>` for the VMs
 
@@ -111,10 +118,20 @@ not the obstacle (the VMs already hold `tag:edge:443` grants, `policy/policy.huj
 | **B. `auth.private` with the host rewritten** | `*.private` handle for `auth.private.<domain>` (between `tailnet_only` and `deny_staging_vm`, like the ingest), restricted to discovery, JWKS and token paths, `header_up Host`/`X-Forwarded-Host` set to the public name so Authelia answers as `auth.public` | EDGE-07 four places; an explicit EDGE-02 exception (`header_up X-Forwarded-Host` in the `*.private` site, which also fronts commsgun); **and a 345 amendment**: an `oidc.internal_base_url` that rewrites the origin of discovered back-channel URLs, because discovery still returns public URLs | 345's byte-exact discovery design (needs a new D-n there) |
 | **C. Split-horizon `auth.public` for tailnet nodes** | headscale extra record → edge tailnet IP | Contradicts the "one view for every client" decision (`decisions.md:110`), and Linux nodes only resolve edge names through the `*.private` DNS route (EDGE-14) | Probably does not resolve on the VMs at all |
 
-**Recommendation: A now.** B is the only way to get `auth.private`, but it needs an xstockstrat change plus an EDGE-02
-exception, which is worth it only if the WAN IP is unstable or the owner wants zero back-channel over the internet.
-webhooks-mcp needs neither: it runs on the edge and can reach Authelia over the compose network if S11 shows JWKS answers
-with the public `Host`.
+**Chosen: A.** webhooks-mcp needs no name at all: it runs on the edge and reaches Authelia over the compose network if S11
+shows JWKS answers with the public `Host`.
+
+**No IP exemption (Q14: the WAN IP is dynamic).** The rate-limit exemption 345 D-74 asks for is not possible by address.
+Instead the zones are scoped by path, so the VM's calls never share a counter with brute-force targets:
+
+| Zone | Paths | Who hits it | Limit |
+|---|---|---|---|
+| `authelia_login` | `POST /api/firstfactor`, `/api/secondfactor/*`, `/api/reset-password/*` | browsers only; never the VMs | tight (like `ratelimit.login`) |
+| `authelia_backchannel` | `/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server`, `/jwks.json`, `/api/oidc/token`, `/api/oidc/revocation` | the VMs (discovery cached 600 s, JWKS on rotation, one token call per login), MCP clients refreshing | generous; sized from S15 |
+| `authelia_general` | everything else | browsers | default |
+
+Authelia's own regulation (per-username lockout) is unaffected by the shared IP. The 345 cutover runbook's D-74 line becomes
+"no zone on a back-channel path is tight" (a 345 amendment, § 9).
 
 ## 5. Q7 — how Authelia's configuration reaches the container
 
@@ -133,10 +150,46 @@ session (commsgun). OIDC refresh tokens and consents live in SQLite and survive.
 | Secret exposure | Config file holds no secrets; `users_database.yml` (hashes, emails) mode 0400, uid 10001 | Secrets and hashes in the container env (`docker inspect`), as for the other services today | Content sits in `compose.yml`; keep secrets out via env |
 | New code | One hash-compare task + one restart task (EDGE-03 shape) | Entrypoint override + tmpfs; no task | Compose top-level `configs:`, a first in this repo |
 
-**Lean: A**, because it is the only option where adding or removing a person does not sign everybody out, and its failure
-mode (lost handler) is removed by the hash-compare task rather than a handler. C wins if S12 and S13 pass, since it is native
-compose with no extra task. B is the simplest and fits EDGE-04 best, but session loss on every people change is a user-visible
-cost. Owner to choose after the spikes.
+**Chosen: spike C, fall back to A.** C is taken only if **S12** (compose 5.5.1 recreates on a `configs.content` change)
+passes. A people change under C recreates the container and signs everyone out; the owner accepts that, or **S13** decides
+whether `users_database.yml` alone moves to A's watched directory mount. If S12 fails, A is built as specified above. B is
+dropped.
+
+## 5a. Q11 — commsgun as Authelia's notifier
+
+Authelia v4.39 notifies through **SMTP or a file only**; commsgun accepts mail only through its HTTP enqueue API
+(`POST /v1/messages` with `X-Commsgun-App`, `Authorization: Bearer`, `Idempotency-Key`; contracts K1–K6). So "use commsgun"
+needs an SMTP door into it.
+
+| Option | How | Cost |
+|---|---|---|
+| **A. SMTP listener inside commsgun-api** *(recommended)* | A small SMTP submission listener on the compose network only (never published, like the admin listener), `AUTH PLAIN` with app id `authelia` + its app key; each accepted message is enqueued as that app, reusing its limits, bounce tracking and dashboard | commsgun code + a contract row (new container port, K-item); edge: `commsgun_apps` gains `authelia`, compose network `commsgun` gains Authelia |
+| B. Bridge sidecar on the edge | A tiny SMTP→HTTP relay container | A second custom-code service on the edge to pin, harden and back up; duplicates commsgun's validation |
+| C. File notifier + a watcher | Authelia writes `notification.txt`; a systemd path unit posts it to commsgun | Parses Authelia's file format (not a contract); fragile |
+
+Authelia side for A: `notifier.smtp.address: submission://commsgun-api:<port>`, plain on the internal network
+(`disable_require_tls: true`, `disable_starttls: true`; `TODO(verify)` in S16 that v4.39 permits this with a non-loopback
+host), `disable_startup_check: true` so an Authelia start never waits on commsgun. Failure mode: commsgun down → no
+enrolment or reset codes; existing logins unaffected. Until A ships, the **file notifier** is the bootstrap (an admin reads
+the code on the edge), so P1 does not wait for commsgun.
+
+## 5b. Q12/Q13 — local logins kept as a switchable fallback
+
+Both apps keep their own login as a break-glass path, **not mapped to any Authelia group**, with an app config flag that
+turns it off (default on until each cutover proves SSO; the edge sets it from inventory, e.g. `commsgun_password_login_enabled`,
+`happybabytracker_admin_login_enabled`).
+
+- **happybabytracker:** easy. OIDC is app-level, so the login page offers "Sign in with SSO" plus, when the flag is on, the
+  env admin's local form on the same host. Reachable while Authelia is down.
+- **commsgun: the fallback is unreachable as specified.** On the public name, Caddy's `forward_auth` runs before the app, so
+  with Authelia down the password form is never served. And the dashboard enforces a **single** `ORIGIN`, so it cannot also be
+  served on `commsgun.private.<domain>`. Options (Q16):
+  - **(a)** commsgun accepts a list of origins; the public name runs `forward_auth` + `Remote-User`; the private name
+    (tailnet-only, no `forward_auth`, `Remote-*` deleted) serves the password login when the flag is on. EDGE-07 four-place
+    wiring stays for the private name. *(recommended)*
+  - **(b)** one origin; break-glass = flip an edge variable that drops `forward_auth` and puts the name back under
+    `*.private`, then deploy. Simpler code, but the fallback costs a deploy and the tailnet path.
+  - **(c)** commsgun becomes an OIDC client like happybabytracker instead of `forward_auth` (reverses the Q1 mechanism).
 
 ## 6. Phases and pass conditions (Rule 6: shown, not claimed)
 
@@ -147,8 +200,8 @@ cost. Owner to choose after the spikes.
 | P2 xstockstrat-staging | 345 shipped; staging config rows set; `sso.md` § 6 cutover | Claude.ai **and** Claude Code complete OAuth against Authelia and list tools; web login links the seeded row by email (ledger audit event seen); rollback (clear issuers, flag true) rehearsed |
 | P3 xstockstrat prod | Same | Same checks on prod |
 | P4 webhooks-mcp | § 3.3; C1/C4 amended | Unauthenticated `POST /mcp` 401 with `resource_metadata`; Claude.ai + Claude Code connect; a token for another audience gets 401 |
-| P5 commsgun | § 3.3 | Dashboard via the public name redirects to Authelia; a forged `Remote-User` from the client is ignored (routing test); group-less person gets 403; old private name 404 |
-| P6 happybabytracker | § 3.3 | A parent logs in via Authelia and lands on their kids; an `identities` row with `provider='authelia'` exists; group-less person refused |
+| P5 commsgun | § 3.3 | Dashboard via the public name redirects to Authelia; a forged `Remote-User` from the client is ignored (routing test); group-less person gets 403; the fallback password login works on its Q16 path with Authelia stopped, and is refused with the flag off; an enrolment code sent through commsgun arrives (if § 5a A) |
+| P6 happybabytracker | § 3.3 | A parent logs in via Authelia and lands on their kids; an `identities` row with `provider='authelia'` exists; group-less person refused; the env admin logs in locally with Authelia stopped, and cannot with the flag off |
 
 ### 6.1 Spike items
 S1–S5 as in `decisions.md:51-53` (345's 2026-11-16 local spike already passed most of them; re-run against the edge shape).
@@ -159,25 +212,30 @@ S1–S5 as in `decisions.md:51-53` (345's 2026-11-16 local spike already passed 
 - **S11** JWKS fetched over the compose network with `Host: auth.public.<domain>` returns the keys.
 - **S12** compose 5.5.1 recreates the container when `configs.content` changes.
 - **S13** `file.watch` reloads after an Ansible rename-replace inside a read-only directory mount.
-- **S14** the v4.39.28 image runs a `sh` entrypoint override as uid 10001 with `read_only` + `tmpfs`.
+- ~~**S14**~~ dropped with option B.
+- **S15** back-channel request rate per VM (discovery, JWKS, token, refresh) over one day of staging, to size `authelia_backchannel`.
+- **S16** the SMTP notifier accepts a plain, unauthenticated-TLS submission to a non-loopback compose host (`disable_require_tls`).
 
-## 7. Still open (block P1 unless noted)
+## 7. Still open
 
-- **Q6′** Option A, B or C in § 4 (recommended A).
-- **Q7′** Option A, B or C in § 5, after S12–S14 (lean A).
-- **Q10** happybabytracker exposure: public under `*.public` (parents off the tailnet can reach it; its spec § 15 expects
-  the Authelia work to decide this) *(recommended)*, or private with a second cookie domain `private.<domain>` and a browser
-  portal `auth.private.<domain>`, which means a second login per person.
-- **Q11** Notifier for enrolment and reset codes: the file notifier (an admin reads the code on the edge and relays it; fine
-  for a handful of people) *(recommended to start)*, or SMTP through Resend. `TODO(verify)`: whether the droplet can reach
-  Resend's SMTP ports at all (DigitalOcean restricts outbound SMTP).
-- **Q12** commsgun: drop its password login entirely, or keep it as tailnet-only break-glass for when Authelia is down?
-- **Q13** happybabytracker admin: keep the env-only local admin login, or map an Authelia group `happybabytracker-admin`?
-- **Q14** Is the home WAN IP static (for the § 4 A exemption)? If not, how is it learnt?
-- **Q15** Spec amendments in the app repos (345 issuer text + D12 + migration renumber; webhooks-mcp C1/C4; commsgun
-  anti-goal; happybabytracker § 5.4/§ 15): will you run those in each repo's own session? This session can read them but
-  cannot push to them.
-- **Q9** Fill `docs/runbooks/sso-people.template.yaml` (not blocking P1: one test person is enough there).
+- **Q10** happybabytracker exposure (blocks P6): public under `*.public` *(recommended: parents off the tailnet can reach it;
+  its spec § 15 leaves the path to this work)*, or private with a second cookie domain `private.<domain>` and a browser
+  portal `auth.private.<domain>` (a second login per person).
+- **Q11′** confirm option A of § 5a (blocks commsgun-as-notifier; P1 starts on the file notifier).
+- **Q16** commsgun fallback reach, § 5b (a)/(b)/(c) (blocks P5).
+- **Q9** fill `docs/runbooks/sso-people.template.yaml` (blocks P2; P1 needs one test person).
+
+## 9. Handoff: work per repo
+
+The next session has every repo. Order follows § 6. Each item cites what it must honour.
+
+| Repo | Work | Must honour |
+|---|---|---|
+| homelab-edge | P0 spike (S1–S16); P1 § 3.1 (C-or-A config, path-scoped zones, file notifier, backup, Gatus, routing tests); later the per-app edge wiring | Rules 1–8, EDGE-01…14; the spec's pass conditions |
+| xstockstrat | Amend 345 before `/sdd-execute`: issuer value `https://auth.public.<domain>`; Claude Code clients `…-mcp-claude-code[-ro]` (D12, S9); D-74 rewritten to path-scoped zones (§ 4); config migration renumbered to the next free number (056 at `6ce536f`); then execute | 345 `design.md`, `debate.md` D-74/D-96/D-97, `merge-order.md:274` |
+| webhooks-mcp | Spec § 6 amendment for C1/C4; JWKS `TokenVerifier`, `AuthSettings(issuer_url, resource_server_url, required_scopes)`, PRM route; drop `MCP_AUTH_KEY` | `docs/contracts.md` (C1, C4, C8), rule WM-08 revisited |
+| commsgun | Amend the "dashboard reachable from the internet" anti-goal; `Remote-User` trust on the public origin; switchable password fallback; reach per Q16; SMTP submission door for Authelia (§ 5a) | K1–K6, U1–U4, CG-01…09 (CG-03 XFF, CG-08 three-place env) |
+| happybabytracker | Amend non-goal (line 54) and anti-goal (line 69); OIDC login → `identities(provider='authelia', subject=<sub>)`; switchable env-admin fallback; exposure per Q10 | spec § 5.4, § 13, § 15; `CLAUDE.md` Rule 1 contracts |
 
 ## 8. Docs to change when implemented
 

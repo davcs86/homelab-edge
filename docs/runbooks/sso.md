@@ -1,11 +1,13 @@
 # SSO (Authelia): platform admin reference
 
-> **Status: design approved 2026-11-15, not deployed.** No `authelia` role, Caddy site or SOPS key exists yet. The PR
-> that adds them updates this page to match the code. Items marked `TODO(verify)` are settled by the spike on the
-> pinned release, not here. Decision record: `docs/decisions.md` § Design decisions, "SSO is Authelia".
+> **Status: design approved 2026-11-15, re-specced 2026-11-23, not deployed.** No `authelia` role, Caddy site or SOPS key
+> exists yet. The PR that adds them updates this page to match the code. Items marked `TODO(verify)` are settled by the spike
+> on the pinned release, not here. Decision record: `docs/decisions.md` § Design decisions, "SSO is Authelia"; open items:
+> `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md` § 7.
 
-Authelia on the edge is the one login (password + passkey or TOTP) and the one OAuth/OIDC token issuer for every
-**public** app. It knows people and which apps they may open; it does not know app roles or xstockstrat environments.
+Authelia on the edge (`https://auth.public.<domain>`) is the one login (password + passkey or TOTP) and the one OAuth/OIDC
+token issuer for the homelab apps. It knows people and which apps they may open; it does not know app roles or xstockstrat
+environments. DigitalOcean xstockstrat deployments never use it.
 
 ## 1. Model
 
@@ -24,9 +26,12 @@ Groups (each app's client or route denies everyone outside its group, and every 
 | `xstockstrat` | xstockstrat (prod) web + MCP | OIDC clients with `authorization_policy: xstockstrat` |
 | `xstockstrat-staging` | xstockstrat-staging web + MCP | OIDC clients with `authorization_policy: xstockstrat-staging` |
 | `commsgun` | commsgun dashboard | Caddy `forward_auth`; commsgun trusts `Remote-User` |
-| `webhooks-mcp` | webhooks-mcp `/mcp` | OIDC client; webhooks-mcp validates Authelia JWTs |
+| `webhooks-mcp` | webhooks-mcp `/mcp` (Claude.ai and Claude Code clients) | OIDC clients; webhooks-mcp validates Authelia JWTs |
+| `happybabytracker` | happybabytracker | OIDC client; a login links the parent by `sub` (`identities`, provider `authelia`) |
 
-Gatus and Proxmox stay tailnet-only and outside SSO (a later phase). headscale device login never uses SSO.
+xstockstrat also gets Claude Code clients next to the Claude.ai ones. commsgun's password login and happybabytracker's env
+admin stay as fallbacks outside every group, each switched off by its own config flag. Gatus and Proxmox stay tailnet-only
+and outside SSO (a later phase). headscale device login never uses SSO.
 
 ## 2. Hard rules
 
@@ -47,7 +52,8 @@ Gatus and Proxmox stay tailnet-only and outside SSO (a later phase). headscale d
 2. Add them to `users_database.yml` in SOPS with an argon2id password hash. `TODO(verify)`: the exact SOPS key and the
    hash command (`authelia crypto hash generate argon2` in the pinned image).
 3. Deploy.
-4. They log in at `https://auth.<domain>` and enrol a passkey or a TOTP app.
+4. They log in at `https://auth.public.<domain>` and enrol a passkey or a TOTP app. Enrolment first sends a one-time code:
+   with the file notifier an admin reads it on the edge and passes it on. `TODO(verify)`: the file path and command.
 5. They open each app. What xstockstrat does on their first login is § 5.
 
 ## 4. Change access, email or remove a person
@@ -102,7 +108,8 @@ applied migrations are never edited, and only migrations not yet applied pick up
 
 | Situation | Effect | Action |
 |---|---|---|
-| Authelia down | no new logins anywhere; the commsgun dashboard is unreachable; xstockstrat MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. For xstockstrat, re-enable password login (the rollback flag) if it must stay usable. |
+| Authelia down | no new SSO logins anywhere; the commsgun dashboard is unreachable through its public name; MCP calls keep working until their access token expires | Gatus alerts via ntfy; fix and restart. Fallbacks: xstockstrat's password login (the rollback flag), happybabytracker's env admin, commsgun's password login (where it is reachable is still open). |
+| Authelia restarted | every portal and `forward_auth` session is signed out (sessions are in memory); OIDC refresh tokens survive | none; people log in again |
 | Authelia SQLite lost | every `sub` and second factor gone | **Restore it from the edge backup** (the same `edge-<UTC>.tar.age` archives as headscale, `docs/runbooks/recovery.md`; the role PR adds the Authelia step). Without a backup, every person re-enrols, and each xstockstrat environment needs every row unlinked (§ 7 step 2) before rule 5.2 can relink them. |
 | `users_database.yml` lost | nobody can log in | redeploy from SOPS |
 

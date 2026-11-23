@@ -34,15 +34,20 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   }
   respond @not_anthropic 403
   ```
-- **SSO is Authelia, not a custom identity provider (decided 2026-11-15, not deployed).** Admin reference: `docs/runbooks/sso.md`.
+- **SSO is Authelia, not a custom identity provider (decided 2026-11-15, re-specced 2026-11-23, not deployed).** Admin reference:
+  `docs/runbooks/sso.md`; current design and open items: `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`.
   - Why not custom: xstockstrat's own OAuth server (agent facade + identity) covers MCP OAuth only (no ID tokens, JWKS, key rotation
     or logout), and its MFA and lockout never got built (see "Login hardening is upstream's gap"). Why not Authentik, Keycloak or
     Zitadel: each needs 0.5–1.5 GB or its own Postgres on a 2 GB droplet. Pocket ID has no `forward_auth`. Authelia is one Go
     binary with OIDC, `forward_auth`, WebAuthn/TOTP and brute-force regulation, storing its state in SQLite (a handful of users).
-  - Scope: the public apps only: xstockstrat and xstockstrat-staging (web + MCP), the commsgun dashboard (made public), webhooks-mcp `/mcp`
-    (its static bearer key is removed). Gatus and Proxmox are a later phase. headscale device login never uses SSO, so Authelia
-    can be down or lost without touching the tailnet or the break-glass path.
-  - `auth.<domain>` is public on 443 (new deSEC token policy, its own rate-limit zone, Gatus probe from 1.1.1.1).
+  - Scope, homelab only (DigitalOcean deployments stay legacy): xstockstrat and xstockstrat-staging (web + MCP), webhooks-mcp
+    `/mcp` (its static bearer key is removed), the commsgun dashboard (made public) and happybabytracker. Gatus and Proxmox are a
+    later phase. headscale device login never uses SSO, so Authelia can be down or lost without touching the tailnet or break-glass.
+  - `auth.public.<domain>` (Rule 8), under the existing `*.public` wildcard: no new deSEC policy or ACME label. Gatus probe from 1.1.1.1.
+    There is no `auth.private` name: v4.39 derives the issuer and discovery URLs from the request's host, and xstockstrat checks the
+    issuer byte for byte, so a second name would be a second issuer. The VMs reach the public name over the home WAN.
+  - Rate-limit zones are scoped by path, not exempted by address (the home WAN IP is dynamic): a tight zone on the factor and reset
+    endpoints, which the VMs never call, and a generous one on discovery, JWKS, token and revocation, which they do.
   - Authelia is the only token issuer. Clients are pre-registered (Authelia has no released RFC 7591 registration; Claude.ai
     connectors accept a pre-registered public client). MCP resource servers validate its JWT access tokens against its JWKS,
     with the token audience bound to the resource (RFC 8707). Fallback if the spike fails: keep xstockstrat's own OAuth server
@@ -53,17 +58,23 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     group re-check on refresh, Claude.ai and Claude Code with a pre-registered client, `sub` bound to the username.
   - Client IDs (xstockstrat feature 345, FR-13; per app, staging prefixed `xstockstrat-staging-`): `xstockstrat-web`
     (confidential), `xstockstrat-mcp-claude` (all `xstockstrat.*` scopes) and `xstockstrat-mcp-claude-ro` (`xstockstrat.read`),
-    redirect `https://claude.ai/api/mcp/auth_callback` for the MCP clients.
+    redirect `https://claude.ai/api/mcp/auth_callback` for the MCP clients; plus Claude Code (loopback redirect) clients for
+    xstockstrat and webhooks-mcp, which 345 does not list yet.
   - Access is one group per app, with `default_policy: deny` and `two_factor` everywhere; a person may hold several groups.
     Authelia knows nothing of xstockstrat's environments: `xstockstrat` and `xstockstrat-staging` are separate apps.
   - xstockstrat keeps `identity.users` (migrations and FKs depend on it) and its roles per environment. A login links by `sub`,
     else by exactly one matching email, else creates a user with roles written as `{trader}`. Email is copied from Authelia at
     each login. MCP effective scope = roles ∩ OAuth scopes granted to the client (read-only connectors against prompt
     injection), with a ~60 s fail-closed role cache. Password login stays behind a flag as the rollback path, so the Caddy login
-    limits stay until the flag is removed (fail closed when its key is missing). Each xstockstrat deployment (DigitalOcean or
-    homelab) switches mode by its own config: legacy (today's login and OAuth server) until its cutover, then Authelia only;
-    clearing the issuer keys rolls it back. The xstockstrat side is feature 345 (`authelia-sso`).
-  - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`; its password login goes. This only holds if Caddy
+    limits stay until the flag is removed (fail closed when its key is missing). Each xstockstrat deployment switches mode by
+    its own config: legacy (today's login and OAuth server) until its cutover, then Authelia only; clearing the issuer keys rolls
+    it back. DigitalOcean never cuts over. The xstockstrat side is feature 345 (`authelia-sso`).
+  - commsgun and happybabytracker keep their own login (commsgun's password, happybabytracker's env admin) as a fallback that is
+    not mapped to any Authelia group and that a config flag switches off. Where commsgun's fallback is reachable is still open
+    (behind `forward_auth` it is not, and the dashboard allows one `ORIGIN`).
+  - Authelia notifies by SMTP or file only. It starts on the file notifier; commsgun as the mail path needs an SMTP door into
+    commsgun (proposed, not decided).
+  - commsgun's dashboard sits behind `forward_auth` and trusts `Remote-User`. This only holds if Caddy
     deletes client-sent `Remote-*` headers, port 9202 stays loopback, the query-stripping log filter covers the public name,
     and Authelia's session cookie is kept from the other upstreams. `scripts/caddy-routing-test.sh` must pin all four. The move also
     crosses three constitution seams: no `trusted_proxies` on the new public site (EDGE-02); the four-place wiring is
@@ -71,6 +82,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     change).
   - Usernames are immutable (the `sub` is bound to them), emails are edited by admins in SOPS only, and Authelia's SQLite is in the
     edge backup (twice a day): losing it loses every `sub` and second factor.
+  - Sessions are in memory (no Redis), so an Authelia restart signs everyone out of the portal and `forward_auth` apps; OIDC
+    refresh tokens survive in SQLite. Config reaches it through compose `configs:` content if that recreates the container on
+    change (spike), else a mounted directory with a hash-compare restart task (the Caddy precedent), never a handler.
 
 ## Known traps
 
