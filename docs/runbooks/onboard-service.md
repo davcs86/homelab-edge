@@ -107,5 +107,6 @@ The design is `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`; § 3 t
    stripped before it, Caddy login limits on its local-login POST (local login is off in steady state: `AUTH_MODE=oidc`),
    query/`Referer`/token-path redaction if its URLs carry tokens, a Gatus probe, and its database in the edge backup if it
    holds identities.
-4. **People.** Add the group to each person in SOPS, deploy, and each person links in the app (`sso.md` § 5), with the app
+4. **People.** Add the group name to the repo's lldap group list (the deploy creates it), add each person to it in lldap's
+   UI, and each person links in the app (`sso.md` § 5), with the app
    in `both` for that window.

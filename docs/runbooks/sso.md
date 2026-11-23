@@ -14,9 +14,9 @@ xstockstrat deployments never use SSO (`AUTH_MODE=local`).
 
 | Concept | Lives in | Owner | Notes |
 |---|---|---|---|
-| Person (username, display name, email, groups, pinned `sub`) | SOPS, synced into lldap at deploy | platform admin | One account per person. Nobody edits their own email. Every person is in `sso_people`. |
+| Person (username, display name, email, groups) | lldap only (never SOPS or this repo) | platform admin, in lldap's UI | One account per person. Nobody edits their own email. Every person is in `sso_people`. |
 | Password | lldap only (never SOPS) | the person | Set and reset with **Forgot password**; the link lasts 1 h. |
-| `sub` (UUID) | SOPS, applied to Authelia's SQLite before it serves | platform admin | Pinned, so restores and rebuilds keep every app link. |
+| `sub` (UUID) | Authelia's SQLite and the person's `sso_sub` attribute in lldap | the deploy | Minted at first login; each deploy copies it to lldap, and restores either copy from the other, so links survive losing one database. |
 | Second factor (passkey / TOTP) | Authelia SQLite | the person | Any TOTP app (e.g. Authy) works. Another device needs an existing one; losing every device needs an admin. |
 | App access | the person's groups | platform admin | One group per app; a person holds any number. |
 | App account, role, link to the `sub` | each app's database | each app's admin | Never in Authelia. xstockstrat roles: `manage-users.py update-roles`. |
@@ -42,19 +42,19 @@ device login never uses SSO.
    passkey's RP ID; stored passwords depend on the seed.
 3. **Group membership opens the door; the app grants the role.** A person in a group but not linked in that app is refused
    there until they link (§ 5).
-4. **Authelia's and lldap's SQLite are backed up twice a day and must stay so.** Pinned `sub`s survive Authelia's loss;
-   second factors do not. People survive lldap's loss; passwords do not (§ 8).
+4. **Authelia's and lldap's SQLite are backed up twice a day and must stay so.** lldap's is the only copy of people and
+   passwords; each `sub` survives the loss of either database, not both (§ 8).
 5. **Passwords never go into SOPS or this repo.** lldap is their only writer.
 6. **One browser profile per account** for anyone with several (`david`, `david_admin`, `david_claude`): the portal cookie
    is shared, so one profile would land you in an app as the wrong account.
 
 ## 3. Add a person
 
-1. Decide the username (permanent, § 2.1), email and groups; generate a UUID for the `sub`.
-2. Add them to SOPS (no password). `TODO(verify)`: the SOPS key.
-3. Deploy (creates them in lldap in `sso_people` with no password, applies the `sub` before Authelia serves).
+1. Decide the username (permanent, § 2.1), email and groups.
+2. In lldap's UI (`https://lldap.private.<domain>`, signed in as lldap's `admin`), create the user with that username,
+   display name and email, no password, and add them to `sso_people` and their app groups.
 4. At `https://auth.public.<domain>` they press **Forgot password**, set a password from the emailed link (valid 1 h), log
-   in, and enrol a passkey or TOTP app with an emailed code. Until commsgun's SMTP listener ships, the file notifier holds the
+   in, and enrol a passkey or TOTP app with an emailed code. The next deploy copies their new `sub` into lldap. Until commsgun's SMTP listener ships, the file notifier holds the
    link and the code; an admin reads them on the edge and passes them on. `TODO(verify)`: path and command. For a new account
    this first enrolment rests on the mailbox alone; enrol with the person to close that.
 5. In each app, link (§ 5).
@@ -63,13 +63,13 @@ device login never uses SSO.
 
 | Change | Steps | Takes effect |
 |---|---|---|
-| Grant an app | add the group in SOPS, deploy; the person links in that app (§ 5) | after linking |
-| Revoke an app | remove the group in SOPS, deploy; disable the user in that app | new logins at once; app sessions end when disabled in the app |
+| Grant an app | add the group in lldap's UI; the person links in that app (§ 5) | after linking |
+| Revoke an app | remove the group in lldap's UI; disable the user in that app | new logins at once; app sessions end when disabled in the app |
 | Reset a password | the person uses **Forgot password** | at once; login still needs the second factor |
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
-| Change email | edit in SOPS, deploy | next login (xstockstrat copies it to linked accounts) |
-| Remove a person | remove from SOPS, deploy (drops `sso_people`: no login, no reset); disable them in every app; drop their `sub` from webhooks-mcp's allowlist; delete their Authelia identifier | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise |
+| Change email | edit it in lldap's UI | next login (xstockstrat copies it to linked accounts) |
+| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); disable them in every app; drop their `sub` from webhooks-mcp's allowlist; delete their Authelia identifier | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | next session JWT (web) or within ~60 s (MCP) |
 
 ## 5. Linking app accounts
@@ -98,7 +98,7 @@ auto-provision flag is on (off on the homelab). Where a local login is needed, s
 
 ## 7. A username must change anyway
 
-1. Create the new person (§ 3) with a new `sub`.
+1. Create the new person (§ 3); they get a new `sub` at first login.
 2. In each app, unlink the old identity (xstockstrat: `manage-users.py unlink-sso`) and link the new one (§ 5).
 3. Remove the old person (§ 4), including their Authelia identifier; the old username is never reused.
 
@@ -108,9 +108,9 @@ auto-provision flag is on (off on the homelab). Where a local login is needed, s
 |---|---|---|
 | Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires | Gatus alerts via ntfy; fix and restart. Break-glass: switch the app to `both` and use its local login. |
 | Authelia restarted | portal sessions end (they are in memory); app sessions and refresh tokens survive | none |
-| Authelia SQLite lost | second factors and refresh tokens gone; `sub`s re-applied before it serves | Restore from the edge backup (`docs/runbooks/recovery.md`) **before anyone logs in**. Without one: redeploy and re-enrol everyone with an admin present; app links survive. |
+| Authelia SQLite lost | second factors and refresh tokens gone; `sub`s re-applied from lldap before it serves | Restore from the edge backup (`docs/runbooks/recovery.md`) **before anyone logs in**. Without one: redeploy and re-enrol everyone with an admin present; app links survive. |
 | lldap down | no logins and no resets | Gatus alerts; fix and restart. Break-glass as for Authelia down. |
-| lldap SQLite lost | passwords gone; people recreated from SOPS at the next deploy | Restore from the edge backup; without one, redeploy and everyone resets their password. |
+| lldap SQLite lost | people and passwords gone | Restore from the edge backup. Without one: recreate each person by hand with the same username; the next deploy copies each `sub` back from Authelia; everyone resets their password. Both databases lost without backups: people relink in every app (§ 7). |
 | commsgun down | no reset or enrolment emails; logins unaffected | fix commsgun; meanwhile switch Authelia to the file notifier and relay by hand |
 
 headscale, SSH and the tailnet do not depend on Authelia; the break-glass path in `docs/runbooks/recovery.md` is unchanged.
