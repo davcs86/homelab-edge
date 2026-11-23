@@ -155,8 +155,13 @@ Gatus: `authelia-public` (`/api/health`) and `authelia-discovery` asserting the 
 
 ### 4.10 lldap (user store)
 - Compose service `lldap` with `<<: *hardening`, named volume `lldap-data` (SQLite), uid 10001, `read_only`, `mem_limit` from
-  S23; digest-pinned (Rule 4). LDAP on the `authelia` compose network only; **no hostname, no published port**: its web UI is
-  reached, if ever, through an SSH tunnel.
+  S23; digest-pinned (Rule 4). LDAP (container port 3890) on the `authelia` compose network only, never published.
+- **Admin UI at `lldap.private.<domain>`** (owner, 2026-11-23): `lldap_ui_private_hostname`, its web port (container 17170,
+  lldap's default) published as `127.0.0.1:{{ lldap_ui_port }}` (EDGE-05), wired in the four EDGE-07 places (hostname var,
+  a `host` matcher under `*.{{ private_zone }}` after `import deny_staging_vm`, the split-horizon `_names`, a Gatus probe,
+  which is also lldap's health check). Tailnet-only, so not on the internet; the zone's redacting logger covers it. The UI
+  lets a signed-in user change their own password, outside Authelia's password policy: lldap's admin account is for
+  admins, and people reset through Authelia.
 - Authelia binds as a service account in lldap's `lldap_password_manager` group, which is what lets it reset passwords
   (`implementation: lldap`, bind shape S21).
 - **People from SOPS, passwords never:** a deploy step creates or updates each person (username, display name, email,

@@ -57,7 +57,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
   - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]` with a 5 min ban;
     argon2 at most 32 MiB per check with a global first-factor zone, so parallel logins cannot OOM-kill Authelia.
-  - People live in lldap (a small LDAP server on the compose network, no hostname): SOPS says who exists and their groups and a
+  - People live in lldap (a small LDAP server; LDAP on the compose network only, its admin UI tailnet-only at `lldap.private.<domain>`): SOPS says who exists and their groups and a
     deploy step syncs them, but never holds passwords, so lldap is the passwords' only writer. That is what makes self-service
     password reset possible; Authelia's file backend would rewrite a file rendered from SOPS. Reset and enrolment emails go
     through an SMTP listener inside commsgun-api. `require_second_factor` makes registering another device need an existing
