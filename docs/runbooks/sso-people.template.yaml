@@ -8,7 +8,7 @@
 #   - no passwords here. Each person's argon2id hash is generated when they are added (sso.md § 3), never typed into this file.
 #
 # Groups: xstockstrat | xstockstrat-staging | webhooks-mcp | commsgun | happybabytracker
-#   proposed, pending spec Q18: xstockstrat-mcp | xstockstrat-staging-mcp (open only the MCP clients)
+#   proposed, pending spec Q20: happybabytracker-admin (an SSO login opens happybabytracker's admin area)
 #   The four people and their groups are in the spec § 3.4; copy them here and add the emails.
 ---
 people:

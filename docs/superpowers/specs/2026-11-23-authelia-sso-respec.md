@@ -27,6 +27,9 @@ settled parts; what is still open is § 7.
 | Q11′ notifier | **Confirmed**: SMTP submission listener inside commsgun-api (§ 5a A); file notifier until it ships |
 | Q16 commsgun mechanism | **(c)**: commsgun becomes an OIDC client; the password fallback sits on the same login page. **No `forward_auth` anywhere** |
 | Q9 people | Four people, § 3.4 |
+| Q17 xstockstrat MCP identity | **(b)**: connectors sign in as `david`; `david_claude` keeps webhooks-mcp only |
+| Q18 MCP-only groups | Not needed: `david` uses MCP himself; one group per app stays |
+| Q19 existing accounts | `david` = the seeded xstockstrat user (each environment) and the existing happybabytracker parent; `david_admin` only in apps with a superadmin (commsgun, happybabytracker); `natalia` is new |
 
 ## 2. What still holds, and what changed
 
@@ -104,19 +107,26 @@ MCP clients public PKCE, audience `${APP_URL}/agent`, `requested_audience_mode: 
 - **happybabytracker (Q2, Q10 public):** `happybabytracker_ui_public_hostname: "happybaby.{{ public_zone }}"`; EDGE-07 undone for
   the private name; `ORIGIN` and `PUBLIC_ORIGIN` follow (EDGE-11); Caddy login zones as for commsgun. App side: an OIDC login
   route, link-or-provision into `identities(provider='authelia', subject=<sub>)` (its designed seam); the env-only admin stays
-  a local login behind a switch (§ 5b). How a first SSO login finds an existing local parent is the app's design (Q19).
+  a local login behind a switch (§ 5b). A first SSO login links an existing local parent by username (§ 3.4); the admin role over SSO is Q20.
 
 ### 3.4 People (Q9)
 
 | Username | Groups | Opens |
 |---|---|---|
-| `david` | `xstockstrat`, `xstockstrat-staging`, `happybabytracker` | xstockstrat prod and staging, happybabytracker |
-| `david_claude` | `webhooks-mcp`, `xstockstrat-mcp`, `xstockstrat-staging-mcp` | the three MCP servers only (Q17) |
-| `david_admin` | every group | everything |
-| `natalia` | `happybabytracker` | happybabytracker |
+| Username | Groups | Opens | First login links to |
+|---|---|---|---|
+| `david` | `xstockstrat`, `xstockstrat-staging`, `happybabytracker` | xstockstrat prod and staging, web **and** MCP (Claude.ai and Claude Code connectors sign in as `david`); happybabytracker | xstockstrat: the seeded admin row in each environment (`admin@localhost`, `002_seed_admin`), its email set to `david`'s first (`sso.md` § 6); happybabytracker: the existing parent `david` |
+| `david_claude` | `webhooks-mcp` | webhooks-mcp only | — (single-owner service, no accounts) |
+| `david_admin` | `commsgun`, `happybabytracker-admin` (Q20) | the apps with a superadmin: the commsgun dashboard, happybabytracker's admin area | commsgun: its one principal; happybabytracker: the admin role, not a parent |
+| `natalia` | `happybabytracker` | happybabytracker | a new parent, provisioned at first login |
 
-All four usernames fit `^[a-z0-9._-]{3,32}$`, so they also work as happybabytracker usernames. Each needs its own email
-(emails are unique), kept out of the repo: they go into SOPS through the template. The open points are Q17–Q19.
+All four usernames fit `^[a-z0-9._-]{3,32}$`. Each has its own email, kept out of the repo (template → SOPS). One group per app
+still opens both its web and MCP clients: no MCP-only groups (Q17 = b, Q18). `david_admin` holds no xstockstrat or
+webhooks-mcp group.
+
+**happybabytracker linking (proposed for its repo):** a first SSO login links to an active local parent whose username equals
+the Authelia username and that has no `authelia` identity yet, once; otherwise it provisions a new parent. That is the
+username analogue of xstockstrat's email rule, and safe only because usernames are permanent and admin-set on both sides.
 
 ## 4. Q6 — `auth.private.<domain>` for the VMs
 
@@ -228,21 +238,15 @@ S1–S5 as in `decisions.md:51-53` (345's 2026-11-16 local spike already passed 
 
 ## 7. Still open
 
-- **Q17 `david_claude` in xstockstrat** (blocks P2). Each Authelia user is its own xstockstrat user: 345 links one `sub` to
-  one row, refuses a row already linked, and emails are unique. So `david_claude` would get a **separate** xstockstrat account,
-  with its own accounts, strategies and positions (`trader` by default), not `david`'s. Options:
-  - (a) `david_claude` is its own xstockstrat user with only what you grant it *(clean, but it does not see `david`'s data)*;
-  - (b) MCP connectors sign in as `david` himself, and `david_claude` keeps only webhooks-mcp;
-  - (c) amend 345 so one xstockstrat user may link several Authelia identities, an admin-only `link-sso` command
-    *(lets Claude act on `david`'s data under its own login, at the cost of a 345 design change)*.
-- **Q18 MCP-only enforcement.** One group per app opens both its web client and its MCP clients. Holding `david_claude` to
-  MCP only needs separate groups, `xstockstrat-mcp` and `xstockstrat-staging-mcp`, checked by the MCP clients' policies, while
-  the web client accepts only `xstockstrat[-staging]`. Accept the extra groups (as § 3.4 assumes), or let `david_claude` open
-  the web apps too? Does `david` need the MCP clients himself? (`xstockstrat` would then cover both.)
-- **Q19 Existing accounts.** Which existing xstockstrat rows (prod and staging; e.g. the seeded `admin@localhost`) should
-  `david` and `david_admin` link to, and with which roles? Do `david` and `natalia` already exist as happybabytracker parents,
-  to be linked rather than created? Should `david_admin` become a parent too (it holds `happybabytracker`)?
-- **Emails** for the four people, filled in the template outside the repo (blocks P2).
+Settled 2026-11-23: Q17 (b) xstockstrat MCP connectors sign in as `david`; Q18 `david` needs MCP, so no MCP-only groups;
+Q19 `david` is the seeded xstockstrat user and the existing happybabytracker parent, `david_admin` only opens apps with a
+superadmin; the owner fills the emails in the template.
+
+- **Q20 `david_admin` as happybabytracker's admin over SSO** (blocks P6). Q13 kept the env admin as a local fallback **not
+  mapped** to any group. Making `david_admin` the admin through SSO needs exactly such a mapping: a group
+  `happybabytracker-admin` whose login opens an admin session (the app's `sessions.kind = 'admin'`), next to the unmapped local
+  fallback. Confirm the mapping (as § 3.4 assumes), or keep happybabytracker's admin local-only, so `david_admin` holds
+  `commsgun` alone? (commsgun has one principal, so the `commsgun` group already means superadmin there.)
 
 ## 9. Handoff: work per repo
 
@@ -254,7 +258,7 @@ The next session has every repo. Order follows § 6. Each item cites what it mus
 | xstockstrat | Amend 345 before `/sdd-execute`: issuer value `https://auth.public.<domain>`; Claude Code clients `…-mcp-claude-code[-ro]` (D12, S9); D-74 rewritten to path-scoped zones (§ 4); config migration renumbered to the next free number (056 at `6ce536f`); then execute | 345 `design.md`, `debate.md` D-74/D-96/D-97, `merge-order.md:274` |
 | webhooks-mcp | Spec § 6 amendment for C1/C4; JWKS `TokenVerifier`, `AuthSettings(issuer_url, resource_server_url, required_scopes)`, PRM route; drop `MCP_AUTH_KEY` | `docs/contracts.md` (C1, C4, C8), rule WM-08 revisited |
 | commsgun | Amend the "dashboard reachable from the internet" anti-goal and the single-admin non-goal; OIDC client with `commsgun` group check; switchable password fallback on the same page; public `ORIGIN`; SMTP submission door for Authelia (§ 5a) | K1–K6, U1–U4 (U4 cookie), CG-01…09 (CG-03 XFF, CG-04 adapter pin, CG-08 three-place env) |
-| happybabytracker | Amend non-goal (line 54) and anti-goal (line 69); OIDC login → `identities(provider='authelia', subject=<sub>)`; switchable env-admin fallback; public `ORIGIN`/`PUBLIC_ORIGIN`; existing-parent linking (Q19) | spec § 5.4, § 13, § 15; `CLAUDE.md` Rule 1 contracts |
+| happybabytracker | Amend non-goal (line 54) and anti-goal (line 69); OIDC login → `identities(provider='authelia', subject=<sub>)`; switchable env-admin fallback; public `ORIGIN`/`PUBLIC_ORIGIN`; username linking (§ 3.4); `happybabytracker-admin` → admin session (Q20) | spec § 5.4, § 13, § 15; `CLAUDE.md` Rule 1 contracts |
 
 ## 8. Docs to change when implemented
 
