@@ -57,13 +57,16 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
   - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]` with a 5 min ban;
     argon2 at most 32 MiB per check with a global first-factor zone, so parallel logins cannot OOM-kill Authelia.
-  - Self-service password reset and change are off (the users file is rendered from SOPS and read-only); admins reset passwords and
-    second factors. Each person's `sub` is pinned (UUID in SOPS, applied at deploy), so a restore or rebuild never breaks links.
+  - People live in lldap (a small LDAP server on the compose network, no hostname): SOPS says who exists and their groups and a
+    deploy step syncs them, but never holds passwords, so lldap is the passwords' only writer. That is what makes self-service
+    password reset possible; Authelia's file backend would rewrite a file rendered from SOPS. Reset and enrolment emails go
+    through an SMTP listener inside commsgun-api. `require_second_factor` makes registering another device need an existing
+    one, so only an admin recovers someone who lost every device. Each person's `sub` is pinned (UUID in SOPS, applied at
+    deploy), so a restore or rebuild never breaks links.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens
     (30 days for MCP clients, rotating) survive. Config reaches it through compose `configs:` content if that recreates the
-    container on change (spike), else a mounted directory with a hash-compare restart task, never a handler; the users file is
-    always a mounted directory, since Compose interpolates the `$` in argon2 hashes.
-  - Authelia's and commsgun's databases are in the twice-daily edge backup; the storage encryption key is in SOPS. Release
+    container on change (spike), else a mounted directory with a hash-compare restart task, never a handler.
+  - Authelia's, lldap's and commsgun's databases are in the twice-daily edge backup; the storage encryption key is in SOPS. Release
     v4.39.28; a backup precedes every bump because storage migrates on start.
 
 ## Known traps

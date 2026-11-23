@@ -5,7 +5,7 @@
 #   - username and sub are PERMANENT: every app links to (issuer, sub). Use ^[a-z0-9._-]{3,32}$ for the username.
 #   - email is unique across people. No app links by email; it is contact data only.
 #   - groups open apps; roles are granted inside each app, and each person links in each app (sso.md § 5).
-#   - no passwords here. Each argon2id hash is generated when the person is added (sso.md § 3), never typed into this file.
+#   - no passwords anywhere in SOPS: each person sets their own in lldap with "Forgot password" (sso.md § 3).
 #
 # Groups: xstockstrat | xstockstrat-staging | webhooks-mcp | commsgun | happybabytracker
 # The four people and their groups are in the spec § 7; copy them here and add the emails.
