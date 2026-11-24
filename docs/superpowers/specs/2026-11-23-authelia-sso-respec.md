@@ -57,11 +57,13 @@ full record. Open: § 12.
 ## 3. The app auth contract (all four repos)
 
 - **Config:** `AUTH_MODE`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_SCOPES`, `OIDC_AUTO_PROVISION`
-  (default `false`). xstockstrat keeps its config-service keys (`ui/oidc.*`, `agent/oidc.issuer`) plus `auth.mode`, in place
+  (default `false`). Amended 2026-11-24 (owner, app-spec PRs): no app implements auto-provisioning; commsgun and
+  happybabytracker refuse `OIDC_AUTO_PROVISION` if set, and xstockstrat has no such key. xstockstrat keeps its config-service keys (`ui/oidc.*`, `agent/oidc.issuer`) plus `auth.mode`, in place
   of 345's issuer-presence switch and `password_login_enabled`.
 - **Modes:** `local` = password login (xstockstrat MCP: its built-in OAuth server); `oidc` = SSO only (MCP: the external
   issuer); `both` = SSO and password on one login page. The homelab runs `oidc`; `both` is a deliberate window for linking or
-  break-glass, and the login page must keep working in `both` while the issuer is unreachable.
+  break-glass, and the login page must keep working in `both` while the issuer is unreachable. xstockstrat's MCP uses its
+  built-in OAuth server in `local` and `both` and the external issuer only in `oidc` (owner, 2026-11-24).
 - **Data:** users with a role; `identities(user_id, issuer, subject)` unique on `(issuer, subject)`; local passwords stay
   with the user. happybabytracker keeps its admin in a separate principal table with its own identities.
 - **Relying party:** the UI server does the code flow (PKCE; `state` and `nonce` bound to the browser session; an OIDC
@@ -161,7 +163,7 @@ Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the r
 
 ### 4.9 Monitoring
 Gatus: `authelia-public` (`/api/health`) and `authelia-discovery` (exact `issuer`, non-empty JWKS) through 1.1.1.1;
-`lldap-private` (its UI's health through the private name); a TCP probe on the SMTP listener's loopback port; the commsgun
+`lldap-private` (its UI's health through the private name); a TCP probe on the SMTP listener's fixed `authelia-smtp` address (§ 9); the commsgun
 and happybabytracker probes move to their public names; `verify.yml` cases for the new hosts.
 
 ### 4.10 lldap (user store)
@@ -187,7 +189,7 @@ and happybabytracker probes move to their public names; `verify.yml` cases for t
 |---|---|---|
 | xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` (DigitalOcean and rollback); the password login routes also serve `both`; VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED` (unless an auto-provision flag, default off); unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude Code clients; D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
 | webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401 | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; `OAUTH_ALLOWED_SUBJECTS` (`iss`+`sub`, including the automation client's) + required scope; C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`; the automation secret's home is named in its runbook |
-| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by containers on `authelia-smtp` only (published on `127.0.0.1` for the Gatus probe), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
+| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by containers on `authelia-smtp` only (listeners bound per network, § 9), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
 | happybabytracker | `happybaby.public.<domain>`; EDGE-07 undone, `ORIGIN`/`PUBLIC_ORIGIN` follow; token paths redacted; `extra_hosts` | § 3 contract; admin principal table + identities; invites redeemable by SSO; non-goal (`:54`) and anti-goal (`:69`) amended; threat-model pass before P6 |
 
 ## 6. Memory budget
@@ -217,6 +219,8 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 - **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user
   (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp drops the `sub`; delete the Authelia identifier and clear
   `sso_sub`. S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
+  happybabytracker's disable (and an admin unlink) also deletes the parent's push subscriptions and ntfy topic; until the
+  admin does it, medication reminders keep reaching the person's devices (owner, 2026-11-24).
 - **Authelia DB lost:** restore from the edge backup before anyone logs in. Without a backup, the `sso_sub` attributes are
   re-applied before serving and links survive, but every account is briefly recoverable through its mailbox alone:
   re-enrol everyone with an admin present (an accepted, recorded residual).
@@ -227,8 +231,10 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 ## 9. Notifier
 Authelia emails reset links and enrolment codes through an **SMTP submission listener inside commsgun-api**: STARTTLS with a
 certificate from an edge-local CA that Authelia trusts (`certificates_directory`, `tls.server_name`), on the `authelia-smtp`
-network only (plus a loopback port for the Gatus probe), authenticated as commsgun app `authelia`,
-`disable_startup_check: true`. Its messages expire with the reset link (1 h). Until P5 ships, the **file notifier** runs and an admin relays links and codes. commsgun down → no emails;
+network only, authenticated as commsgun app `authelia`,
+`disable_startup_check: true`. Its messages expire with the reset link (1 h). commsgun-api binds each listener to one
+network's fixed address (owner, 2026-11-24): enqueue and admin on `commsgun`, SMTP on `authelia-smtp`, so Authelia can
+reach the SMTP port alone; Gatus (host networking) probes that address directly, with no loopback publish. Until P5 ships, the **file notifier** runs and an admin relays links and codes. commsgun down → no emails;
 existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry); `authelia` limits 5 a minute, 30 a day
 (owner, 2026-11-23).
 
@@ -258,6 +264,8 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
   `sso_sub` attribute) is idempotent and never touches people, memberships or passwords; the `sub` reconcile handles all
   three cases. **S23** lldap RSS under N parallel binds. **S24** refresh fails once a person leaves `sso_people` or their
   group. **S25** regulation bans by normalised username (case and email variants share one counter).
+- **S26** a container on two compose networks with per-address listener binds: the `127.0.0.1` publish of one port still
+  reaches the listener bound to that network's address, and a host-network probe reaches the other (commsgun, § 9).
 
 (S6, S11, S13 and S14 were retired with superseded designs.)
 
