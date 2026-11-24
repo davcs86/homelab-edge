@@ -54,8 +54,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     `forward_auth` for our own apps; allowed only for third-party software without OIDC.
   - Apps own users and roles; Authelia proves identity and gates which app a person opens (one group per app, `default_policy:
     deny`, `two_factor`). Linking is explicit ("Link SSO" from a signed-in local account, or an invite redeemed by SSO), keyed on
-    `(issuer, subject)`; unlinked logins and MCP tokens are refused; no email matching, no group-to-role mapping, just-in-time
-    provisioning only behind a flag. xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
+    `(issuer, subject)`; unlinked logins and MCP tokens are refused; no email matching, no group-to-role mapping, no just-in-time
+    provisioning (no app implements it; amended 2026-11-24). webhooks-mcp has no accounts: it authorizes by issuer,
+    audience and the `webhooks-mcp` scope, which only that group's clients and the automation client get. xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
   - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]`, 5 min ban.
   - lldap owns people and passwords (owner, 2026-11-23): rootless image, LDAP on the compose network only, admin UI tailnet-only
