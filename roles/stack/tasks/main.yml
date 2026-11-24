@@ -246,6 +246,18 @@
       loop:
         - {key: happybabytracker_admin_username}
 
+    # The app refuses one VAPID variable without the other and a key that is not 43 unpadded base64url characters.
+    - name: Happybabytracker VAPID key has the shape the app accepts
+      ansible.builtin.assert:
+        that:
+          - edge_secrets.happybabytracker_vapid_private_key is defined
+          - edge_secrets.happybabytracker_vapid_private_key is string
+          - edge_secrets.happybabytracker_vapid_private_key | length == 43
+          - edge_secrets.happybabytracker_vapid_private_key is match('^[A-Za-z0-9_-]{43}$')
+          - happybabytracker_ui_private_hostname | length > 0
+        fail_msg: "secrets/edge.sops.yaml: happybabytracker_vapid_private_key must be 43 unpadded base64url characters"
+        quiet: true
+
     - name: Happybabytracker API environment
       ansible.builtin.copy:
         dest: "{{ edge_root }}/happybabytracker/api.env"
@@ -254,6 +266,8 @@
           ADMIN_PASSWORD='{{ edge_secrets.happybabytracker_admin_password }}'
           INTERNAL_API_TOKEN='{{ edge_secrets.happybabytracker_internal_api_token }}'
           PUBLIC_ORIGIN='https://{{ happybabytracker_ui_private_hostname }}'
+          VAPID_PRIVATE_KEY='{{ edge_secrets.happybabytracker_vapid_private_key }}'
+          VAPID_SUBJECT='https://{{ happybabytracker_ui_private_hostname }}'
         mode: "0600"
 
     - name: Happybabytracker UI environment
