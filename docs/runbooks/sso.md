@@ -65,7 +65,7 @@ device login never uses SSO.
 | Change | Steps | Takes effect |
 |---|---|---|
 | Grant an app | add the group in lldap's UI; the person links in that app (§ 5) | after linking |
-| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp: not ended** (refresh survives a group removal, spike S4; only removing the person does it, owner call in SSO spec § 12) |
+| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp: not ended** (refresh survives a group removal, spike S4; removing the person from `sso_people` should, per spike S24; owner call in SSO spec § 12) |
 | Reset a password | the person uses **Forgot password** | at once; login still needs the second factor |
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
@@ -86,7 +86,7 @@ reconnect each one afterwards (§ 6).
   password). An unlinked SSO login or MCP token is refused with `not linked`.
 - **commsgun / happybabytracker admin:** the admin signs in locally, re-authenticates and presses **Link SSO**.
 - **happybabytracker parents:** an existing parent links like the admin; a new parent is created by the admin, whose invite
-  link is redeemed with SSO in `oidc` (a password redemption works only in `local`/`both`; reset links only in `both`). The admin can unlink a parent's SSO identity; unlinking also deletes
+  link is redeemed with SSO in `oidc` (a password redemption works only in `local`/`both`; reset links only in `local`/`both`). The admin can unlink a parent's SSO identity; unlinking also deletes
   their push subscriptions and ntfy topic.
 - **webhooks-mcp:** no accounts and nothing to link: group `webhooks-mcp` grants the scope it checks.
 
@@ -117,7 +117,7 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 ## 6b. webhooks-mcp cutover
 
 1. Deploy with `AUTH_MODE=static+oauth`, `OAUTH_ISSUER=https://auth.public.<domain>` (no trailing slash) and
-   `OAUTH_RESOURCE=https://webhooks-mcp.public.<domain>/mcp` (ending exactly in `/mcp`); the three are set and removed
+   `OAUTH_RESOURCE=https://webhooks-mcp.public.<domain>/mcp` (path exactly `/mcp`); the three are set and removed
    together (webhooks-mcp contract C4). Both the static key and Authelia tokens work.
 2. Move every `MCP_AUTH_KEY` consumer: the Claude.ai and Claude Code connectors sign in as `david_claude`; the headless
    consumer (`TODO(provide)`: which) uses `webhooks-mcp-automation`, whose plaintext secret lives in the edge's SOPS
