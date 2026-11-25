@@ -172,8 +172,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - The secrets block asserts what the app checks at start (password 16 characters, internal token 32, username `^[a-z0-9._-]{3,32}$`) before it writes an env
     file. It runs under `no_log: true`, and on ansible-core 2.21.4 that censors a failing assert completely: the task name shows, the key does not (the
     comment above the commsgun block claiming `fail_msg` is printed does not hold there). The runbook's first-deploy section says how to find the key.
-  - `happybabytracker_vapid_private_key` is generated and kept in SOPS but not rendered into `api.env`: the pinned app does not read it yet. The app's
-    reminder and Web Push release adds the env line and its assert. A changed key invalidates every push subscription, so `fill_missing` never replaces it.
+  - Web Push is on: `happybabytracker_vapid_private_key` is rendered into `api.env` with `VAPID_SUBJECT` set to the UI's `https:` origin, always as a
+    pair, after an assert of the app's start check (43 unpadded base64url characters). The subject is a tailnet-only name; whether Apple's push
+    service accepts it is `TODO(verify)` on a real iPhone. Rendering was added ahead of the image that reads it (plan 6): an older
+    image ignores both variables. A changed key invalidates every push subscription, so `fill_missing` never replaces it. `HBT_ALLOW_FAKE_PUSH` is never rendered.
   - Invite and reset tokens travel in the URL path, so `private.access.log` (path kept, query dropped) holds them until the active file reaches 50 MiB and its rolled copy ages out (720 h, at most 5 rolled copies); the owner accepted that,
     as each works once and expires in 72 h or 1 h. Caddy's `redacted_requests` logger keeps the path too and writes to stderr, so the tokens also sit in the `caddy` container's Docker `local` log (10 MiB, 3 files). No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
     rule is that those tokens never reach OTEL.

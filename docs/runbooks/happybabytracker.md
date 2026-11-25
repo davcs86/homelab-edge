@@ -92,6 +92,7 @@ done
 | "Happybabytracker secrets are present and fit a single-quoted env line" | a key is missing, empty, or holds a quote, backslash or line break | all three keys, the username included |
 | "Happybabytracker secrets are as long as the app requires" | the password or the token is too short | password 16 or more, token 32 or more (generated ones are 48) |
 | "Happybabytracker admin username has the shape the app accepts" | the username has an uppercase letter or another character, or is not 3 to 32 long | `^[a-z0-9._-]{3,32}$` |
+| "Happybabytracker VAPID key has the shape the app accepts" | `happybabytracker_vapid_private_key` is missing or is not 43 unpadded base64url characters | `^[A-Za-z0-9_-]{43}$` |
 
 ## 2. Add a parent
 
@@ -147,12 +148,29 @@ backup host is deferred: `backup_host_known_hosts` keeps its `TODO(provide)`, so
 sees (`StrictHostKeyChecking=accept-new`). The archives now hold health data; give the value (the output of
 `ssh-keyscan` for the backup host) when you have it.
 
-## 7. The VAPID key
+## 7. The VAPID key (Web Push)
 
-`happybabytracker_vapid_private_key` is generated and stored in SOPS, but nothing renders it into `api.env` yet: the
-app's reminder and Web Push release will add its env line and an assert. Changing it later invalidates every push
-subscription, and each browser has to subscribe again. `init-secrets` `fill_missing` never replaces it; `overwrite` does,
-so avoid `overwrite` once the app is live.
+The deploy renders `happybabytracker_vapid_private_key` into `api.env` as `VAPID_PRIVATE_KEY`, with
+`VAPID_SUBJECT='https://<happybabytracker_ui_private_hostname>'`, always as a pair (the API refuses to start with only one of
+the two). Before it writes the file, "Happybabytracker VAPID key has the shape the app accepts" checks that the key is
+43 unpadded base64url characters. `HBT_ALLOW_FAKE_PUSH` is a test switch and is never rendered on the edge.
+
+An API image older than the app's reminders release (plan 6) does not read either variable, so Web Push stays off until
+that image is deployed. From then on the API logs a `channels` line with `push` `on` at every start:
+
+```sh
+ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml logs happybabytracker-api | grep channels | tail -n 1'
+```
+
+and a parent's **Account → Notifications** page (`/account/notifications`) no longer says "Web Push is not configured on this server.". Each
+parent turns notifications on per device there; on iPhone and iPad only from the app added to the Home Screen (iOS and
+iPadOS 16.4 or later). The app's `docs/runbooks/reminders.md` covers a reminder that did not arrive.
+
+Changing the key stops delivery to every registered device: each parent must turn notifications off and on again on each
+device. `init-secrets` `fill_missing` never replaces it; `overwrite` does, so avoid `overwrite` once the app is live.
+
+To turn Web Push off, remove both `VAPID_*` lines (and the assert) from "Happybabytracker API environment" and deploy;
+devices stay registered.
 
 ## 8. Image updates
 
