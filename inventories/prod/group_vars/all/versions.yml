@@ -18,8 +18,8 @@ ntfy_image: "binwiederhier/ntfy:v2.38.1@sha256:038da2be5e668fee6d36a62884eea4897
 webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:449c955b496d4ccd70c64365fae30cd1be3f4167f388057435f5a0260beaeb72"
 commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:3ceb1f8954eb63123ac61dc154276fb9bcb1af931fbc53dc493bf21de9fd74f2"
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:485e18777bdafe6273519b37c2a1d6b6ea26a3f3dd793828d7b4503d751558f3"
-happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:2a85450ca9b5c858d05a76fe5484a47a96c7c828ee7b2eb1c4fbf698001023bb"
-happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:fe564807d51059f971f385ffc4fab46a69c640c653e5317be0f22ded9f2d957e"
+happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:d3afcaff586dc111ea9a19bb40dacf16106b58b383bd7e3d5e18a22e9932a827"
+happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:248e0189509bbd80932525b478ccfecae0b2870d0f422b023dbaec1e27ef6b0c"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
 db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
