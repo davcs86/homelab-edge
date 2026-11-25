@@ -49,7 +49,7 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
 | H4 | The **API server stays disabled** (`API_SERVER_ENABLED` unset, its default). Telegram, Slack and WhatsApp variables are never set | anti-goal |
 | H5 | Topology **A**: LXC container `llm` (`tag:llm`) runs Ollama with the Radeon 780M shared through `/dev/dri`. VM `hermes` (`tag:agent`) runs Hermes in Docker | owner, 2026-11-25; § 4 |
 | H6 | Models: chat on **OpenRouter** (`OPENROUTER_API_KEY`). Scheduled jobs pinned to Ollama through Hermes's `cron.model` / `cron.model_provider` (`provider: custom`, `base_url: http://llm.ts.<domain>:11434/v1`) | owner, 2026-11-24/25 (B, "likely OpenRouter") |
-| H7 | Hermes's xstockstrat identity is **`david`** for now, through its own OIDC client `xstockstrat-mcp-hermes` | owner, 2026-11-24 |
+| H7 | Hermes's xstockstrat identity is **`david`** for now, in **both prod and staging** (separate URLs and groups), through its own OIDC client per environment: `xstockstrat-mcp-hermes` and `xstockstrat-staging-mcp-hermes` | owner, 2026-11-24 / 2026-11-25 |
 | H8 | **Interim guard:** the xstockstrat MCP entry in Hermes allows only read tools (`tools.include`) until 363 ships | owner, 2026-11-25 |
 | H9 | The dashboard is an Authelia **public PKCE client** `hermes`, gated on a new lldap group **`hermes`** that holds only `david`. Hermes has no allowlist of its own: anyone the identity provider admits is owner-level | Hermes docs (dashboard OIDC: public clients only, no allowlist) |
 | H10 | Command sandbox: `terminal.backend: docker`, `docker_network: false`, approvals `manual`, `cron.allow_agent_scheduling: false` | anti-goals |
@@ -88,7 +88,8 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
     measurement (§ 11).
 - **Pins:** third-party pins must be at least two weeks old (`versions.yml` header). Hermes `v0.23.3` (released 2026-11-19)
   qualifies from 2026-12-03. Ollama follows the same rule.
-- **SSO:** the dashboard needs SSO phase P1. The MCP move to Authelia needs P3. Hermes is SSO phase **P7**.
+- **SSO:** the dashboard needs SSO phase P1. The MCP move to Authelia needs P2 for staging and P3 for prod. Hermes is SSO
+  phase **P7**.
 
 ## 6. Design
 
@@ -132,14 +133,17 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
 - **Off:** `API_SERVER_ENABLED` unset; no Telegram, Slack or WhatsApp variables.
 - **Sandbox:** H10. Hermes reaches the VM's Docker daemon to start sandbox containers (HS8). The **VM is the security boundary**:
   a compromised Hermes gets the VM and its secrets. Tailnet grants confine the VM (§ 6.5).
-- **MCP server `xstockstrat`:**
-  - `url` = the xstockstrat MCP endpoint (public name or tailnet; HS5);
+- **MCP servers `xstockstrat` (prod) and `xstockstrat-staging`**, one entry per environment, identical apart from the URL:
+  - `url` = that environment's MCP endpoint (public name or tailnet; HS5);
   - `auth: oauth`;
   - `tools.include` = the read tools only (H8): every `list_*`, `get_*` and `query_*` tool, plus `screen_symbols`. Write and
     trading tools are excluded, including `set_strategy_live`, `manage_*`, `ingest_signal`, `emit_alert`, `trigger_backfill`,
     `cancel_backfill`, `set_config`, `set_user_metadata`, `admin_set_user_metadata`, `instantiate_template` and `test_formula`.
     The exact list comes from the live tool catalog at build time.
-  - Tokens live in `hermes-data` (`mcp-tokens/`), obtained once with `hermes mcp login xstockstrat` (HS4).
+  - **Deferred to H2 (owner, 2026-11-25):** whether `run_backtest`, `run_fundamentals_scan`, `extract_email_content` and
+    `extract_website_content` join the list. Until the owner decides, all four stay excluded. Changing it later is a one-line
+    edit to the rendered `config.yaml` (§ 11).
+  - Tokens live in `hermes-data` (`mcp-tokens/`), one per server, each obtained once with `hermes mcp login <server>` (HS4).
 
 ### 6.3 Dashboard login
 - **Authelia client** (SSO spec § 4.6, new row): `hermes`, public, PKCE S256, group `hermes`, scopes `openid profile email`,
@@ -150,16 +154,19 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
   other client.
 
 ### 6.4 Hermes as an xstockstrat MCP client
-- **Before SSO P3** (xstockstrat `auth.mode=local`): Hermes registers dynamically with xstockstrat's built-in OAuth server and
-  signs in as `david`. xstockstrat's `agent.oauth.allowed_redirect_uris` (today only the two Claude.ai callbacks, `home-side.md`)
-  gains Hermes's loopback callback. This is a config-value change on the xstockstrat side, not a new key.
-- **From P3:**
-  - a new Authelia client `xstockstrat-mcp-hermes`: public PKCE, group `xstockstrat`, scopes **`xstockstrat.read`** and
-    `offline_access` (like the `-ro` clients), loopback redirect (or device flow, HS4), audience `${APP_URL}/agent`;
-  - with that scope, 345 FR-7 narrows the token to READ on the server side, so from P3 `tools.include` is the second guard,
-    not the only one (my call, in line with the owner's "read access for MCP");
-  - a separate client from Claude's, so revoking Hermes never logs out Claude sessions;
-  - Hermes logs in again once.
+Each environment moves on its own clock: staging at SSO P2, prod at P3.
+- **Before its SSO cutover** (that environment's `auth.mode=local`): Hermes registers dynamically with that environment's
+  built-in OAuth server and signs in as `david`. Each environment's `agent.oauth.allowed_redirect_uris` (today only the two
+  Claude.ai callbacks, `home-side.md`) gains Hermes's loopback callback. This is a config-value change on the xstockstrat side,
+  not a new key.
+- **After its cutover:**
+  - a new Authelia client per environment, `xstockstrat-mcp-hermes` (group `xstockstrat`) and `xstockstrat-staging-mcp-hermes`
+    (group `xstockstrat-staging`): public PKCE, scopes **`xstockstrat.read`** and `offline_access` (like the `-ro` clients),
+    loopback redirect (or device flow, HS4), audience that environment's `${APP_URL}/agent`;
+  - with that scope, 345 FR-7 narrows the token to READ on the server side, so after cutover `tools.include` is the second
+    guard, not the only one (my call, in line with the owner's "read access for MCP");
+  - separate clients from Claude's, so revoking Hermes never logs out Claude sessions;
+  - Hermes logs in again once per environment.
 - **Refresh tokens:** 30 days, rotated on use (SSO spec § 4.5). A dead refresh token parks the server silently, so § 6.7 alerts on it.
 - **Interim guard (H8):** stays until 363 ships. Then it is the owner's call to keep it or rely on 363's read-only default.
 
@@ -169,15 +176,18 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
   - `tag:edge → tag:agent tcp:9119`: Caddy proxies the dashboard;
   - `tag:agent → tag:edge tcp:443`: heartbeat push to Gatus via `status.private`. Grants are per port, so Caddy confines it
     (§ 6.6);
-  - `tag:ci → tag:agent, tag:llm tcp:22`: converge.
+  - `tag:ci → tag:agent, tag:llm tcp:22`: converge;
+  - `tag:agent → tag:xstockstrat-staging tcp:9000`: mirrors the prod grant below, under the same HS5 condition.
 - **Kept:**
   - `tag:agent → tag:llm tcp:11434`;
   - `tag:agent → tag:xstockstrat tcp:9000`, until HS5 shows whether the MCP is reached by tailnet or public name. If public,
-    the grant is removed;
+    both MCP grants (prod and staging) are removed;
   - `tag:xstockstrat → tag:llm tcp:11434`;
   - `tag:llm` initiates nothing.
 - **Tests** gain these accepts and denies:
-  - `tag:agent` denied `tag:db:*`, `tag:edge:22`, `tag:xstockstrat:22` and `tag:xstockstrat-staging:*`;
+  - `tag:agent` accepted to `tag:xstockstrat-staging:9000` (while that grant exists);
+  - `tag:agent` denied `tag:db:*`, `tag:edge:22`, `tag:xstockstrat:22`, `tag:xstockstrat:3000`,
+    `tag:xstockstrat-staging:22` and `tag:xstockstrat-staging:3000`;
   - `tag:edge` accepted to `tag:agent:9119` and denied `tag:agent:22`;
   - `tag:ci` accepted to `tag:agent:22` and `tag:llm:22`.
 
@@ -198,9 +208,9 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
   `success=true` only while all three hold:
   - the Hermes container is healthy;
   - `GET http://llm.ts.<domain>:11434/api/version` answers;
-  - the MCP check (HS10) confirms the xstockstrat token still works.
+  - the MCP check (HS10) confirms both xstockstrat tokens still work (prod and staging).
 
-  Otherwise it pushes `success=false&error=<hermes|ollama|mcp-auth>`. Silence for 11 min alerts.
+  Otherwise it pushes `success=false&error=<hermes|ollama|mcp-auth-prod|mcp-auth-staging>`. Silence for 11 min alerts.
 - `llm` itself pushes nothing: the agent checks it, which keeps `tag:llm` silent on the tailnet.
 
 ### 6.8 Secrets (`secrets/edge.sops.yaml`, `secrets/README.md`, `no_log`)
@@ -221,9 +231,10 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
 |---|---|---|
 | H0 spike | — | Every HS item recorded here with its observed output. `llm` built by hand, throwaway, test secrets only |
 | H1 `llm` | H0; model signed off (§ 11) | `ci` green incl. `policy-test.sh`; `agent-host` run converges `llm`; `ollama ps` shows the model on the GPU with a 65536 context; `tag:agent` reaches 11434 and `tag:edge`, members and the LAN do not |
-| H2 `hermes` gateway | H1 | Discord: the owner's DM gets an answer; a second account's DM is refused; a sandboxed `curl` fails with no network; a risky command waits for the Approve button. A scheduled job pinned to Ollama runs a read-only xstockstrat report and posts to the home channel. A write tool is absent from the tool list. With Ollama stopped, the job fails and the heartbeat reports `ollama`. API port 8642 is closed (`ss -ltn`) |
+| H2 `hermes` gateway | H1 | Discord: the owner's DM gets an answer; a second account's DM is refused; a sandboxed `curl` fails with no network; a risky command waits for the Approve button. A scheduled job pinned to Ollama runs a read-only report against each environment and posts to the home channel. A write tool is absent from both servers' tool lists. The owner settles the four deferred tools (§ 6.2). With Ollama stopped, the job fails and the heartbeat reports `ollama`. API port 8642 is closed (`ss -ltn`) |
 | H3 dashboard | H2; SSO P1 | `david` logs in through Authelia; a person outside `hermes` is refused by Authelia; no basic-auth form exists; `hermes-private` Gatus probe green; four-place wiring checked (`verify`) |
-| H4 MCP via Authelia | SSO P3 | Hermes logs in again with `xstockstrat-mcp-hermes`; a job still succeeds after more than 2 h idle (refresh rotates); a write tool called with that token (tools.include bypassed, test only) gets 403; revoking the client turns the heartbeat red with `mcp-auth` |
+| H4a MCP via Authelia, staging | SSO P2 | Hermes logs in again with `xstockstrat-staging-mcp-hermes`; a staging job still succeeds after more than 2 h idle (refresh rotates); a write tool called with that token (tools.include bypassed, test only) gets 403; revoking the client turns the heartbeat red with `mcp-auth-staging` while prod jobs keep working |
+| H4b MCP via Authelia, prod | SSO P3 | The same checks against prod with `xstockstrat-mcp-hermes` and `mcp-auth-prod` |
 
 ## 8. Spike items (H0)
 - **HS1** Ollama with Vulkan on the 780M in an LXC container with `/dev/dri`: the model sits on the GPU. Measure prompt-read and
@@ -261,7 +272,7 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
   read-only default per MCP client, full web access, app-side Scope Picker. Next step there: `/sdd-review sso-granular-scopes product-spec`.
 - **xstockstrat config:** add Hermes's loopback callback to `agent.oauth.allowed_redirect_uris` per environment (H2).
 - **SSO spec:**
-  - § 4.6 gains the `hermes` and `xstockstrat-mcp-hermes` rows;
+  - § 4.6 gains the `hermes` and `xstockstrat[-staging]-mcp-hermes` rows;
   - § 7 adds `hermes` to `david`'s groups;
   - § 10 gains P7 (= H3/H4 here);
   - § 4.10's ensured groups gain `hermes`.
@@ -273,6 +284,9 @@ A local model handles the scheduled jobs. A cloud model handles chat, where spee
 4. Proxmox guest IDs, hostnames (proposed `llm`, `hermes`) and LAN addresses, and whether `llm`'s storage is `local-zfs` like `db`.
 5. Backups of `hermes-data`. It holds memories, job definitions and tokens. Should it go to the backup host (a new grant
    `tag:agent → tag:backup:22` and an rrsync user), or is a rebuild without it acceptable?
+6. At H2, when the first job is written: whether `run_backtest`, `run_fundamentals_scan` and the two `extract_*` tools join
+   `tools.include` (§ 6.2). Recommendation: allow the two analysis tools (no trades, no strategy or config change) and keep
+   the `extract_*` URL fetchers out (server-side request forgery under prompt injection).
 
 ## 12. Sources
 Hermes docs:
