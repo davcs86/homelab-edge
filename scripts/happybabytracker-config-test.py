@@ -43,7 +43,8 @@ ORIGIN = f"https://{V['happybabytracker_ui_private_hostname']}"
 def secrets(**over):
     s = {"happybabytracker_admin_username": "fake-admin",
          "happybabytracker_admin_password": "fake-admin-password-".ljust(24, "x"),
-         "happybabytracker_internal_api_token": "fake-internal-api-token-".ljust(48, "x")}
+         "happybabytracker_internal_api_token": "fake-internal-api-token-".ljust(48, "x"),
+         "happybabytracker_vapid_private_key": "fake-vapid-key-".ljust(43, "x")}
     s |= over
     return {k: v for k, v in s.items() if v is not None}
 
@@ -225,7 +226,8 @@ class EnvFiles(unittest.TestCase):
         s = secrets()
         self.assertEqual(parse_env(render_env(API_ENV_TASK, s)), {
             "ADMIN_USERNAME": s["happybabytracker_admin_username"], "ADMIN_PASSWORD": s["happybabytracker_admin_password"],
-            "INTERNAL_API_TOKEN": s["happybabytracker_internal_api_token"], "PUBLIC_ORIGIN": ORIGIN})
+            "INTERNAL_API_TOKEN": s["happybabytracker_internal_api_token"], "PUBLIC_ORIGIN": ORIGIN,
+            "VAPID_PRIVATE_KEY": s["happybabytracker_vapid_private_key"], "VAPID_SUBJECT": ORIGIN})
         self.assertEqual(parse_env(render_env(UI_ENV_TASK, s)), {
             "INTERNAL_API_TOKEN": s["happybabytracker_internal_api_token"],
             "API_BASE_URL": "http://happybabytracker-api:9210", "ORIGIN": ORIGIN})
@@ -240,15 +242,33 @@ class EnvFiles(unittest.TestCase):
             self.assertFalse(names & {"DATA_DIR", "PORT", "GOMEMLIMIT"}, name)
             self.assertFalse([n for n in names if "FORWARD" in n or "PROXY" in n or n.endswith("_HEADER")], name)
 
-    def test_vapid_is_not_rendered_in_plan_2(self):
-        s = secrets(happybabytracker_vapid_private_key="fake-vapid-key")
-        for name in (API_ENV_TASK, UI_ENV_TASK):
-            self.assertFalse([n for n in parse_env(render_env(name, s)) if "VAPID" in n], name)
-        self.assertNotIn("vapid", yaml.safe_dump(BLOCK).lower())
-        self.assertNotIn("vapid", (ROOT / "roles/stack/templates/compose.yml.j2").read_text().lower())
+    def test_vapid_pair_is_rendered_into_the_api_env_only_and_fake_push_never(self):
+        s = secrets()
+        api, ui = parse_env(render_env(API_ENV_TASK, s)), parse_env(render_env(UI_ENV_TASK, s))
+        self.assertEqual({n for n in api if "VAPID" in n}, {"VAPID_PRIVATE_KEY", "VAPID_SUBJECT"})  # both or neither
+        self.assertEqual(api["VAPID_SUBJECT"], ORIGIN)
+        self.assertTrue(api["VAPID_SUBJECT"].startswith("https://"))
+        self.assertFalse([n for n in ui if "VAPID" in n])
+        for text in (yaml.safe_dump(TASKS), (ROOT / "roles/stack/templates/compose.yml.j2").read_text()):
+            self.assertNotIn("ALLOW_FAKE_PUSH", text)
         for svc in (S[API], S[UI]):
             self.assertNotIn("environment", svc)
 
+    def test_vapid_key_shape_mirrors_the_apps_startup_check(self):
+        # The app refuses a key that is not 43 unpadded base64url characters (api/internal/config loadPush).
+        key = "happybabytracker_vapid_private_key"
+        good = secrets()[key]
+        for bad in (None, "", 43, good[:42], good + "x", good[:42] + "+", good[:42] + "/", good[:42] + "=",
+                    good[:42] + "'", good[:42] + "\\", good + "\n", good[:42] + "\n"):
+            msg = first_failure(secrets(**{key: bad}))
+            self.assertIsNotNone(msg, repr(bad))
+            self.assertIn(key, msg)
+            if isinstance(bad, str) and bad:
+                self.assertNotIn(bad.strip(), msg)
+        for value in ("A" * 43, "-_" + "z" * 41, "0123456789" * 4 + "abc"):
+            self.assertIsNone(first_failure(secrets(**{key: value})), value)
+        text = yaml.safe_dump(BLOCK)
+        self.assertIn("edge_secrets.happybabytracker_vapid_private_key", text)  # EDGE-08: a literal read
 
 if __name__ == "__main__":
     unittest.main()
