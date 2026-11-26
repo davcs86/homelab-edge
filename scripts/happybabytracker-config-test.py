@@ -63,9 +63,9 @@ TASKS = yaml.safe_load((ROOT / "roles/stack/tasks/main.yml").read_text())
 BLOCK = find_task(TASKS, BLOCK_NAME) or {}
 
 
-def render_env(task_name, s):
+def render_env(task_name, s, **over):
     content = find_task(TASKS, task_name)["ansible.builtin.copy"]["content"]
-    return ENV.from_string(content).render(**V, edge_secrets=s)
+    return ENV.from_string(content).render(**(V | over), edge_secrets=s)
 
 
 def parse_env(text):
@@ -227,7 +227,7 @@ class EnvFiles(unittest.TestCase):
         self.assertEqual(parse_env(render_env(API_ENV_TASK, s)), {
             "ADMIN_USERNAME": s["happybabytracker_admin_username"], "ADMIN_PASSWORD": s["happybabytracker_admin_password"],
             "INTERNAL_API_TOKEN": s["happybabytracker_internal_api_token"], "PUBLIC_ORIGIN": ORIGIN,
-            "VAPID_PRIVATE_KEY": s["happybabytracker_vapid_private_key"], "VAPID_SUBJECT": ORIGIN})
+            "VAPID_PRIVATE_KEY": s["happybabytracker_vapid_private_key"], "VAPID_SUBJECT": ORIGIN, "NPI_SEARCH": "1"})
         self.assertEqual(parse_env(render_env(UI_ENV_TASK, s)), {
             "INTERNAL_API_TOKEN": s["happybabytracker_internal_api_token"],
             "API_BASE_URL": "http://happybabytracker-api:9210", "ORIGIN": ORIGIN})
@@ -241,6 +241,14 @@ class EnvFiles(unittest.TestCase):
             names = set(parse_env(render_env(name, s)))
             self.assertFalse(names & {"DATA_DIR", "PORT", "GOMEMLIMIT"}, name)
             self.assertFalse([n for n in names if "FORWARD" in n or "PROXY" in n or n.endswith("_HEADER")], name)
+
+    def test_npi_search_follows_its_switch_and_is_never_another_value(self):
+        s = secrets()
+        self.assertIs(V["happybabytracker_npi_search"], True)
+        for on in (True, False):
+            api = parse_env(render_env(API_ENV_TASK, s, happybabytracker_npi_search=on))
+            self.assertEqual(api.get("NPI_SEARCH"), "1" if on else None, on)  # the app accepts only 1 or unset
+        self.assertNotIn("NPI_SEARCH", parse_env(render_env(UI_ENV_TASK, s)))
 
     def test_vapid_pair_is_rendered_into_the_api_env_only_and_fake_push_never(self):
         s = secrets()

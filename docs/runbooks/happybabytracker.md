@@ -172,6 +172,18 @@ device. `init-secrets` `fill_missing` never replaces it; `overwrite` does, so av
 To turn Web Push off, remove both `VAPID_*` lines (and the assert) from "Happybabytracker API environment" and deploy;
 devices stay registered.
 
+## 7a. The US provider lookup (NPI_SEARCH)
+
+`happybabytracker_npi_search` in `inventories/prod/group_vars/all/main.yml` (default `true`) renders `NPI_SEARCH='1'`
+into `api.env`; `false` renders no line, which turns the lookup off. The API accepts only `1` or unset and refuses to start
+with any other value, so never set the variable another way. With it on, the API searches the US national provider
+registry (NPPES) at `https://npiregistry.cms.hhs.gov` over the droplet's open outbound HTTPS; no secret and no egress rule
+is needed. An API image older than happybabytracker #25 (plan 10) ignores the variable.
+
+To turn it off: set `happybabytracker_npi_search: false`, merge, run **Actions → deploy** (`tailnet`); the deploy rewrites
+`api.env` and recreates the API container. After the first deploy with it on, check one search by hand in the visit form
+("Find a US provider"): the app's smoke test never calls the real registry.
+
 ## 8. Image updates
 
 The `bump-happybabytracker` workflow opens one PR (branch `bump/happybabytracker`) that pins both
