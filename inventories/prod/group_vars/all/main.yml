@@ -111,6 +111,7 @@ commsgun_apps:
 # ---------- happybabytracker (tailnet-only family tracker; the API is never published) ----------
 happybabytracker_ui_private_hostname: "happybaby.{{ private_zone }}"   # the UI's ORIGIN
 happybabytracker_ui_port: 9212
+happybabytracker_npi_search: true   # renders NPI_SEARCH=1: the API's US provider lookup (NPPES); false renders nothing
 
 # Public hostnames on 443, all under the *.public wildcard certificate, one view for every client. `name`: rate-limit zone prefix.
 # kind app: MCP and OAuth routes (+ the whole UI with `ui_public`); bearer_mcp: one path behind a static key.
