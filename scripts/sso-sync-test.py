@@ -141,17 +141,20 @@ class Base(unittest.TestCase):
         self.lldap = FakeLldap(state)
         return self.lldap
 
-    def run_sync(self, *args):
+    def run_sync(self, *args, stdin=None):
         env = {**os.environ, "PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(self.log),
-               "FAKE_EXPORT": self.export, "LLDAP_ADMIN_PASSWORD": ADMIN_PW, "LLDAP_BIND_PASSWORD": BIND_PW}
+               "FAKE_EXPORT": self.export}
+        if stdin is None:
+            stdin = {"admin_password": ADMIN_PW} | ({"bind_password": BIND_PW} if args[0] == "ensure" else {})
         common = ["--lldap-url", self.lldap.url, "--compose", "/srv/edge/compose.yml"]
         r = subprocess.run([sys.executable, str(SCRIPT), args[0], *common, *args[1:]], capture_output=True, text=True,
-                           env=env, timeout=60)
+                           env=env, timeout=60, input=stdin if isinstance(stdin, str) else json.dumps(stdin))
         self.assertNotIn("Traceback", r.stderr)
         return r
 
-    def ensure(self):
-        return self.run_sync("ensure", "--groups", *GROUPS, "--bind-user", BIND, "--bind-email", "authelia@ldap.invalid")
+    def ensure(self, stdin=None):
+        return self.run_sync("ensure", "--groups", *GROUPS, "--bind-user", BIND, "--bind-email", "authelia@ldap.invalid",
+                             stdin=stdin)
 
     def docker_calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -249,6 +252,23 @@ class Ensure(Base):
         self.assertIn(f"--password={BIND_PW}", argv)
         self.assertNotIn(ADMIN_PW, argv)
         self.assertNotIn(BIND_PW, argv)
+
+    def test_the_secrets_come_on_stdin_only(self):
+        src = SCRIPT.read_text()
+        self.assertNotIn("os.environ", src)
+        self.assertNotIn("LLDAP_ADMIN_PASSWORD", src)
+        fake = self.serve(lldap_state())
+        for cmd, stdin, key in (("ensure", {"admin_password": ADMIN_PW}, "bind_password"),
+                                ("ensure", {"bind_password": BIND_PW}, "admin_password"),
+                                ("reconcile", {}, "admin_password"), ("reconcile", "not json", None),
+                                ("reconcile", '["x"]', None), ("ensure", {"admin_password": "", "bind_password": BIND_PW}, "admin_password")):
+            with self.subTest(cmd=cmd, stdin=stdin):
+                r = self.ensure(stdin=stdin) if cmd == "ensure" else self.run_sync("reconcile", stdin=stdin)
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn(key or "not a JSON object", r.stderr)
+                self.assertEqual(r.stdout, "")
+                self.assertNoValues(r)
+        self.assertEqual((fake.mutations, self.docker_calls()), ([], []))
 
 
 def export_yaml(*rows):

@@ -6,14 +6,14 @@
   reconcile  each sso_people member's `sub` is the same in Authelia's storage and in lldap's `sso-sub`.
 
 Usage: sso_sync.py ensure --lldap-url URL --compose FILE --groups G... --bind-user NAME --bind-email EMAIL
-         (env LLDAP_ADMIN_PASSWORD, LLDAP_BIND_PASSWORD)
-       sso_sync.py reconcile --lldap-url URL --compose FILE   (env LLDAP_ADMIN_PASSWORD)
+         (stdin: {"admin_password": ..., "bind_password": ...})
+       sso_sync.py reconcile --lldap-url URL --compose FILE   (stdin: {"admin_password": ...})
+The secrets come on stdin as one JSON object, never in argv or the environment.
 Exit 0 done, 2 refused (unsafe state or mismatch; nothing written), 1 error. Prints one JSON object of usernames and
 counts; deploy logs are public, so never a sub, an email, an attribute value or a secret.
 """
 import argparse
 import json
-import os
 import subprocess
 import sys
 import urllib.request
@@ -166,8 +166,20 @@ def authelia_run(compose_file, *args):
     return compose(compose_file, "run", "--rm", "--no-deps", "-T", "authelia", *args)
 
 
-def ensure(args) -> dict:
-    admin_password, bind_password = os.environ["LLDAP_ADMIN_PASSWORD"], os.environ["LLDAP_BIND_PASSWORD"]
+def read_secrets(stream, *keys) -> list:
+    try:
+        doc = json.loads(stream.read())
+    except ValueError:
+        raise SyncError("stdin is not a JSON object") from None
+    if not isinstance(doc, dict):
+        raise SyncError("stdin is not a JSON object")
+    for k in keys:
+        if not isinstance(doc.get(k), str) or not doc[k]:
+            raise SyncError(f"stdin lacks {k}")
+    return [doc[k] for k in keys]
+
+
+def ensure(args, admin_password, bind_password) -> dict:
     ld = Lldap(args.lldap_url, admin_password)
     state = ld.state()
     plan = ensure_plan(state, args.groups, args.bind_user)
@@ -208,8 +220,8 @@ def authelia_export(compose_file) -> dict:
     return parse_export(r.stdout)
 
 
-def reconcile(args) -> tuple:
-    ld = Lldap(args.lldap_url, os.environ["LLDAP_ADMIN_PASSWORD"])
+def reconcile(args, admin_password) -> tuple:
+    ld = Lldap(args.lldap_url, admin_password)
     users = ld.state()["users"]
     ids = {u["id"].lower(): u["id"] for u in users}
     in_lldap = lldap_subs(users)
@@ -249,9 +261,9 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     try:
         if args.cmd == "ensure":
-            print(json.dumps(ensure(args)))
+            print(json.dumps(ensure(args, *read_secrets(sys.stdin, "admin_password", "bind_password"))))
             return 0
-        summary, refused = reconcile(args)
+        summary, refused = reconcile(args, *read_secrets(sys.stdin, "admin_password"))
         print(json.dumps(summary))
         if refused:
             raise refused

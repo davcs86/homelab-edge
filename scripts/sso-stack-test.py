@@ -159,15 +159,16 @@ class HardenedStart(unittest.TestCase):
 
     @classmethod
     def sync(cls, cmd):
-        """The deploy's call: the real script, its secrets in the environment only."""
+        """The deploy's call: the real script, its secrets on stdin only."""
         args = [sys.executable, str(ROOT / "scripts/sso_sync.py"), cmd, "--lldap-url", LLDAP_URL,
                 "--compose", str(cls.dir / "compose.yml")]
         if cmd == "ensure":
             args += ["--groups", *cfg.V["sso_groups"], "--bind-user", cfg.V["authelia_ldap_bind_user"],
                      "--bind-email", cfg.V["authelia_ldap_bind_email"]]
-        env = {**os.environ, "LLDAP_ADMIN_PASSWORD": cls.secrets["lldap_admin_password"],
-               "LLDAP_BIND_PASSWORD": cls.secrets["authelia_ldap_bind_password"]}
-        return subprocess.run(args, capture_output=True, text=True, env=env, timeout=600)
+        stdin = {"admin_password": cls.secrets["lldap_admin_password"]}
+        if cmd == "ensure":
+            stdin["bind_password"] = cls.secrets["authelia_ldap_bind_password"]
+        return subprocess.run(args, capture_output=True, text=True, input=json.dumps(stdin), timeout=600)
 
     @classmethod
     def lldap(cls):

@@ -58,6 +58,7 @@ ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
 ENV.filters["b64encode"] = lambda s: base64.b64encode(s.encode()).decode()
 ENV.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None  # Ansible's `match` test
 ENV.filters["from_json"] = json.loads
+ENV.filters["to_json"] = json.dumps
 CLIENT_KEYS = [c["key"] for c in V["authelia_oidc_clients"] if "key" in c]
 
 
@@ -488,6 +489,7 @@ YAML_TASK, IMAGES_TASK = "PyYAML for the SSO sync (Ubuntu archive)", "Images of 
 DIGEST_BLOCK = "Back up, then stop Authelia, before an Authelia or lldap digest change"
 BACKUP_TASK, STOP_TASK = "Back up before the digest change", "Stop Authelia before the digest change"
 LLDAP_UP_TASK = "Start lldap first"
+SYNC_COPY_TASK, SYNC_BIN = "SSO sync script", "/usr/local/sbin/edge-sso-sync"
 SYNC = {"ensure": ("Ensure lldap's SSO groups, its sso-sub attribute and Authelia's bind account", "Lldap ensure summary",
                    "Stop on a failed lldap ensure", "_sso_ensure"),
         "reconcile": ("Reconcile each sub between Authelia and lldap", "Sub reconcile summary", "Stop on a failed sub reconcile",
@@ -541,26 +543,37 @@ class DeployOrder(unittest.TestCase):
         self.assertEqual(up["ansible.builtin.command"], COMPOSE_CMD + "up -d --wait lldap")
         self.assertIs(up["changed_when"], True)  # N9
         self.assertTrue(before(OWNER_TASK, LLDAP_UP_TASK))
-        steps = [LLDAP_UP_TASK]
+        copy_task = find_task(TASKS, SYNC_COPY_TASK)
+        self.assertEqual(copy_task["ansible.builtin.copy"], {"src": "{{ playbook_dir }}/../scripts/sso_sync.py", "dest": SYNC_BIN,
+                                                            "owner": "root", "group": "root", "mode": "0750"})
+        steps = [LLDAP_UP_TASK, SYNC_COPY_TASK]
+        fake = {"lldap_admin_password": "-fake-admin", "authelia_ldap_bind_password": "-fake-bind"}
         for cmd, (run, summary, stop, reg) in SYNC.items():
             steps += [run, summary, stop]
             t = find_task(TASKS, run)
-            self.assertEqual(t["ansible.builtin.script"]["executable"], "python3")
-            argv = ENV.from_string(t["ansible.builtin.script"]["cmd"]).render(**V, playbook_dir="PB").split()
-            self.assertEqual(argv[:2], ["PB/../scripts/sso_sync.py", cmd])
-            self.assertIn("{{ lldap_ui_port }}", t["ansible.builtin.script"]["cmd"])
+            c = t["ansible.builtin.command"]
+            argv = c["argv"]
+            argv = (ENV.compile_expression(argv.strip()[2:-2])(**V) if isinstance(argv, str)
+                    else [ENV.from_string(a).render(**V) for a in argv])
+            self.assertEqual(argv[:3], ["python3", SYNC_BIN, cmd])
             opts = {"--lldap-url": ["http://127.0.0.1:17170"], "--compose": [V["edge_root"] + "/compose.yml"]}
-            want = {"LLDAP_ADMIN_PASSWORD": "{{ edge_secrets.lldap_admin_password }}"}
+            want = {"admin_password": fake["lldap_admin_password"]}
             if cmd == "ensure":
-                want["LLDAP_BIND_PASSWORD"] = "{{ edge_secrets.authelia_ldap_bind_password }}"
+                want["bind_password"] = fake["authelia_ldap_bind_password"]
                 opts |= {"--groups": V["sso_groups"], "--bind-user": [V["authelia_ldap_bind_user"]],
                          "--bind-email": [V["authelia_ldap_bind_email"]]}
             got, key = {}, None
-            for a in argv[2:]:
+            for a in argv[3:]:
                 key = a if a.startswith("--") else key
                 got.setdefault(key, []) if a.startswith("--") else got[key].append(a)
             self.assertEqual(got, opts)
-            self.assertEqual(t["environment"], want)  # EDGE-08 literal reads
+            # environment: and argv both land on sudo's command line; stdin does not.
+            self.assertNotIn("environment", t)
+            self.assertEqual(json.loads(ENV.from_string(c["stdin"]).render(edge_secrets=fake)), want)
+            self.assertIn("edge_secrets.lldap_admin_password", c["stdin"])  # EDGE-08: literal reads
+            if cmd == "ensure":
+                self.assertIn("edge_secrets.authelia_ldap_bind_password", c["stdin"])
+            self.assertNotIn("edge_secrets", json.dumps(c["argv"]))
             self.assertEqual((t["no_log"], t["failed_when"], t["register"]), (True, False, reg))
             # no_log censors a failing task completely (ansible-core 2.21.x): print the summary, then fail.
             dbg = find_task(TASKS, summary)
@@ -573,6 +586,18 @@ class DeployOrder(unittest.TestCase):
         steps.append(START)
         self.assertEqual([n for n in ORDER if n in steps], steps)
         self.assertEqual(ORDER.index(START) - ORDER.index(LLDAP_UP_TASK), len(steps) - 1)
+
+    def test_no_task_passes_an_lldap_secret_through_the_environment(self):
+        reads = re.compile(r"edge_secrets(\.|\[\s*['\"])(lldap_[a-z_]+|authelia_ldap_bind_password)")
+        readers = [t for t in FLAT if "block" not in t and reads.search(yaml.safe_dump(t))]
+        self.assertTrue(readers)
+        for t in readers:
+            self.assertNotIn("environment", t, t.get("name"))
+            for module in ("ansible.builtin.command", "ansible.builtin.shell", "ansible.builtin.script"):
+                body = t.get(module)
+                if body is not None:
+                    self.assertNotRegex(json.dumps(body.get("argv", body.get("cmd", body)) if isinstance(body, dict) else body),
+                                        reads, t.get("name"))  # argv is on the command line too
 
     def test_the_config_restart_is_an_unconditional_hash_compare(self):
         self.assertTrue(before(START, FLUSH) and before(FLUSH, HASH_TASK))

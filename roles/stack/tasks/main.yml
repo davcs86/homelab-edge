@@ -463,17 +463,23 @@
   ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml up -d --wait lldap
   changed_when: true
 
+- name: SSO sync script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/sso_sync.py"
+    dest: /usr/local/sbin/edge-sso-sync
+    owner: root
+    group: root
+    mode: "0750"
+
 # On a failing task no_log hides everything, so the script never fails here: the summary prints, then the play stops.
+# Secrets on stdin: environment: lands on sudo's command line.
 - name: Ensure lldap's SSO groups, its sso-sub attribute and Authelia's bind account
-  ansible.builtin.script:
-    cmd: >-
-      {{ playbook_dir }}/../scripts/sso_sync.py ensure --lldap-url http://127.0.0.1:{{ lldap_ui_port }}
-      --compose {{ edge_root }}/compose.yml --groups {{ sso_groups | join(' ') }}
-      --bind-user {{ authelia_ldap_bind_user }} --bind-email {{ authelia_ldap_bind_email }}
-    executable: python3
-  environment:
-    LLDAP_ADMIN_PASSWORD: "{{ edge_secrets.lldap_admin_password }}"
-    LLDAP_BIND_PASSWORD: "{{ edge_secrets.authelia_ldap_bind_password }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', '/usr/local/sbin/edge-sso-sync', 'ensure', '--lldap-url', 'http://127.0.0.1:' ~ lldap_ui_port,
+          '--compose', edge_root ~ '/compose.yml', '--groups'] + sso_groups
+         + ['--bind-user', authelia_ldap_bind_user, '--bind-email', authelia_ldap_bind_email] }}
+    stdin: "{{ {'admin_password': edge_secrets.lldap_admin_password, 'bind_password': edge_secrets.authelia_ldap_bind_password} | to_json }}"
   register: _sso_ensure
   changed_when: true
   failed_when: false
@@ -489,13 +495,10 @@
   when: _sso_ensure.rc | default(1) != 0
 
 - name: Reconcile each sub between Authelia and lldap
-  ansible.builtin.script:
-    cmd: >-
-      {{ playbook_dir }}/../scripts/sso_sync.py reconcile --lldap-url http://127.0.0.1:{{ lldap_ui_port }}
-      --compose {{ edge_root }}/compose.yml
-    executable: python3
-  environment:
-    LLDAP_ADMIN_PASSWORD: "{{ edge_secrets.lldap_admin_password }}"
+  ansible.builtin.command:
+    argv: [python3, /usr/local/sbin/edge-sso-sync, reconcile, --lldap-url, "http://127.0.0.1:{{ lldap_ui_port }}",
+           --compose, "{{ edge_root }}/compose.yml"]
+    stdin: "{{ {'admin_password': edge_secrets.lldap_admin_password} | to_json }}"
   register: _sso_reconcile
   changed_when: >-
     _sso_reconcile.rc | default(1) == 0 and
