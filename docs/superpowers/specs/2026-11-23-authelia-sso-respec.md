@@ -125,7 +125,7 @@ full record. Open: § 12.
   alias cannot stand in for the name.
 
 ### 4.3 Caddy
-- Zones (EDGE-12 prefixes): `authelia_login` (`POST /api/firstfactor`, `/api/secondfactor/*`, `/api/reset-password/*`; per
+- Zones (EDGE-12 prefixes): `authelia_login` (`POST /api/firstfactor`, `/api/firstfactor/*` (re-authentication), `/api/secondfactor/*`, `/api/reset-password`, `/api/reset-password/*`, `/api/user/session/elevation`, `/api/user/session/elevation/*`; 10/min, owner 2026-11-27; per
   IP, tight); `authelia_backchannel` (discovery, `/jwks.json`, `/api/oidc/token`, `/api/oidc/revocation`; generous, S15);
   `authelia_general`.
 - `authelia_session` (scoped to `public.<domain>`) stripped by `header_up Cookie` before every app upstream.
