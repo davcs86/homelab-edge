@@ -141,7 +141,7 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 
 | Situation | Effect | Action |
 |---|---|---|
-| Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires | Gatus alerts via ntfy; fix and restart. Break-glass: switch the app to `both` and use its local login. A happybabytracker parent who joined by SSO has no password: the admin sends a reset link, redeemable in `both`. For xstockstrat that ends MCP access through Authelia at once: its MCP moves to the built-in server (§ 6 rollback). |
+| Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires | Gatus alerts via ntfy; fix and restart. Break-glass: switch the app to `both` and use its local login. A happybabytracker parent who joined by SSO has no password: the admin presses **Reset link**, which for a parent without one issues an invite link (72 h); with the app in `both` the parent opens it, sets a password and signs in with it. For xstockstrat that ends MCP access through Authelia at once: its MCP moves to the built-in server (§ 6 rollback). |
 | Authelia restarted | portal sessions end (they are in memory); app sessions and refresh tokens survive | none |
 | Authelia SQLite lost | second factors and refresh tokens gone; `sub`s re-applied from lldap before it serves | Restore from the edge backup (`docs/runbooks/recovery.md`) **before anyone logs in**. Without one: redeploy and re-enrol everyone with an admin present; app links survive. |
 | lldap down | no logins and no resets | Gatus alerts; fix and restart. Break-glass as for Authelia down. |
