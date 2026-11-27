@@ -169,6 +169,27 @@ class Gatus(unittest.TestCase):
         self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
         self.assertEqual(e["conditions"], ["[STATUS] == 401"])
 
+    def test_the_portal_is_probed_from_the_internet_resolver(self):
+        e = ENDPOINTS["authelia-public"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("public", f"https://{V['authelia_public_hostname']}/api/health", "2m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200"])
+        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
+
+    def test_the_discovery_probe_pins_the_exact_issuer(self):
+        auth = f"https://{V['authelia_public_hostname']}"
+        e = ENDPOINTS["authelia-discovery"]
+        self.assertEqual((e["group"], e["url"]), ("public", f"{auth}/.well-known/openid-configuration"))
+        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
+        self.assertIn(f"[BODY].issuer == {auth}", e["conditions"])
+        self.assertFalse(auth.endswith("/"))
+        self.assertIn(f"[BODY].jwks_uri == {auth}/jwks.json", e["conditions"])
+
+    def test_the_jwks_probe_requires_a_key(self):
+        e = ENDPOINTS["authelia-jwks"]
+        self.assertEqual((e["group"], e["url"]), ("public", f"https://{V['authelia_public_hostname']}/jwks.json"))
+        self.assertEqual(e["client"]["dns-resolver"], "tcp://1.1.1.1:53")
+        self.assertIn("len([BODY].keys) > 0", e["conditions"])
+
     def test_an_unknown_public_zone_name_is_probed_for_404(self):
         e = ENDPOINTS["public-default-404"]
         self.assertEqual((e["group"], e["url"]), ("public", f"https://unknown.{V['public_zone']}/"))
