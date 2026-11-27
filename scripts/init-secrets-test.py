@@ -2,6 +2,7 @@
 """Runs scripts/init_secrets.py --fill-missing against a throwaway SOPS file (real sops, throwaway ssh-ed25519 key)."""
 import base64
 import contextlib
+import hashlib
 import io
 import os
 import re
@@ -38,6 +39,11 @@ OWNER_KEYS = ["resend_api_key", "commsgun_senders"]
 HBT_GENERATED = ["happybabytracker_admin_password", "happybabytracker_internal_api_token", "happybabytracker_vapid_private_key"]
 HBT_OWNER_KEYS = ["happybabytracker_admin_username"]
 P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+SSO_TOKENS = ["authelia_session_secret", "authelia_storage_encryption_key", "authelia_reset_password_jwt_secret", "authelia_oidc_hmac_secret",
+              "authelia_ldap_bind_password", "lldap_jwt_secret", "lldap_key_seed", "lldap_admin_password"]
+SSO_GENERATED = SSO_TOKENS + ["authelia_oidc_jwks_key"]
+OIDC_PAIR_KEYS = [k + s for k in getattr(init_secrets, "OIDC_CLIENT_KEYS", []) for s in ("", "_pbkdf2")]
+PBKDF2 = re.compile(r"^\$pbkdf2-sha512\$310000\$([./A-Za-z0-9]{22})\$([./A-Za-z0-9]{86})$")
 SENDERS = {"xstockstrat": {"senders": ["Alerts <alerts@example.com>"], "default_sender": "Alerts <alerts@example.com>"},
            "ops": {"senders": ["Ops <ops@example.com>"], "default_sender": "Ops <ops@example.com>"}}
 
@@ -76,7 +82,8 @@ class FillMissing(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         got = self.read()
         self.assertEqual({k: v for k, v in got.items() if k in OLD}, OLD)
-        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key", *COMMSGUN_GENERATED, *HBT_GENERATED})
+        self.assertEqual(set(got) - set(OLD), {"gatus_heartbeat_db_token", "webhooks_mcp_auth_key", *COMMSGUN_GENERATED, *HBT_GENERATED,
+                                               *SSO_GENERATED, *OIDC_PAIR_KEYS})
         self.assertRegex(got["gatus_heartbeat_db_token"], r"^[A-Za-z0-9_-]{43}$")
         self.assertRegex(got["webhooks_mcp_auth_key"], r"^[A-Za-z0-9_-]{48}$")
         for k in COMMSGUN_GENERATED:
@@ -156,7 +163,7 @@ class FillMissing(unittest.TestCase):
         self.assertEqual({k: got[k] for k in old | base.keys()}, {**old, **base})  # nothing existing changed
         self.assertEqual(set(got) - set(old) - set(base),
                          {"gatus_heartbeat_db_token", "gatus_heartbeat_pgbackrest_token", "db_role_admin_password", "db_role_superadmin_password", "db_role_xstockstrat_production_password", "db_role_xstockstrat_staging_password", "webhooks_mcp_auth_key",
-                          *COMMSGUN_GENERATED, *HBT_GENERATED, *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
+                          *COMMSGUN_GENERATED, *HBT_GENERATED, *SSO_GENERATED, *OIDC_PAIR_KEYS, *init_secrets.DB_TLS_KEYS, *init_secrets.PGBACKREST_DB_KEYS})
         host = init_secrets.db_host()
         self.assertEqual(host, "db.ts.natanddavehouse.com")
         # the database TLS CA is its own: it signs the server cert and is not the pgBackRest CA
@@ -209,6 +216,9 @@ class Registry(unittest.TestCase):
         full = set(re.findall(r'^        "([a-z_]+)": ', src, re.M))  # operator keys written in main()
         self.assertEqual(full, set(init_secrets.OPERATOR_KEYS))
         self.assertEqual(set(init_secrets.GENERATED) & set(init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS), set())
+        self.assertEqual(len(OIDC_PAIR_KEYS), 8)
+        self.assertEqual(set(OIDC_PAIR_KEYS) & (set(init_secrets.GENERATED) | set(init_secrets.OPERATOR_KEYS + init_secrets.PKI_KEYS)), set())
+        self.assertIn("**oidc_client_pairs()", src)
 
     def test_the_webhooks_mcp_key_is_48_url_safe_characters(self):
         self.assertRegex(init_secrets.GENERATED["webhooks_mcp_auth_key"](), r"^[A-Za-z0-9_-]{48}$")
@@ -228,7 +238,7 @@ class Registry(unittest.TestCase):
         self.assertEqual(set(HBT_GENERATED) - set(init_secrets.GENERATED), set())
 
     def test_happybabytracker_generated_keys_are_filled_when_missing_and_kept_when_present(self):
-        held = {**OLD, **{k: "fake" for k in init_secrets.GENERATED if k not in HBT_GENERATED}}
+        held = {**OLD, **{k: "fake" for k in [*init_secrets.GENERATED, *OIDC_PAIR_KEYS] if k not in HBT_GENERATED}}
         for present in ({}, {"happybabytracker_vapid_private_key": "vapid-OLD"}):
             written = {}
             with mock.patch.object(init_secrets, "run", return_value=yaml.safe_dump({**held, **present}).encode()), \
@@ -270,10 +280,86 @@ class Registry(unittest.TestCase):
 
     def test_every_secret_the_roles_use_is_generated_or_known(self):
         known = (set(init_secrets.GENERATED) | set(init_secrets.OPERATOR_KEYS) | set(init_secrets.PKI_KEYS)
-                 | set(init_secrets.DB_TLS_KEYS) | set(init_secrets.PGBACKREST_DB_KEYS) | set(init_secrets.HAND_KEYS))
+                 | set(init_secrets.DB_TLS_KEYS) | set(init_secrets.PGBACKREST_DB_KEYS) | set(init_secrets.HAND_KEYS) | set(OIDC_PAIR_KEYS))
         used = secret_keys.used_keys()
         self.assertTrue(used)
         self.assertEqual(used - known, set())
+
+
+
+def fill_in_memory(held):
+    """fill_missing against a decrypted document held in memory; openssl runs for real, sops is never called."""
+    real, written = init_secrets.run, {}
+    fake = lambda *cmd, stdin=None: yaml.safe_dump(held).encode() if cmd[0] == "sops" else real(*cmd, stdin=stdin)  # noqa: E731
+    with mock.patch.object(init_secrets, "run", side_effect=fake), \
+            mock.patch.object(init_secrets, "encrypt_to", lambda doc, out: written.update(doc)), \
+            contextlib.redirect_stdout(io.StringIO()):
+        init_secrets.fill_missing("unused.sops.yaml")
+    return written
+
+
+def adapted_b64decode(s):
+    return base64.b64decode(s.replace(".", "+") + "=" * (-len(s) % 4))
+
+
+class Sso(unittest.TestCase):
+    def test_sso_generated_keys_are_filled_when_missing_and_kept_when_present(self):
+        held = {**OLD, **{k: "fake" for k in init_secrets.GENERATED if k not in SSO_GENERATED}}
+        written = fill_in_memory(held)
+        self.assertEqual({k: written[k] for k in held}, held)
+        self.assertEqual(set(written) - set(held), {*SSO_GENERATED, *OIDC_PAIR_KEYS})
+        present = {"lldap_key_seed": "seed-OLD", "authelia_oidc_jwks_key": "jwks-OLD"}
+        written = fill_in_memory({**held, **present})
+        self.assertEqual({k: written[k] for k in present}, present)
+        self.assertEqual(set(written) - set(held) - set(present), {*SSO_GENERATED, *OIDC_PAIR_KEYS} - set(present))
+
+    def test_sso_secrets_are_64_url_safe_characters(self):
+        for k in SSO_TOKENS:
+            self.assertRegex(init_secrets.GENERATED[k](), r"^[A-Za-z0-9_-]{64}$", k)
+        for k in init_secrets.OIDC_CLIENT_KEYS:
+            self.assertRegex(init_secrets.oidc_client_pairs()[k], r"^[A-Za-z0-9_-]{64}$", k)
+
+    def test_the_jwks_key_is_a_2048_bit_rsa_pkcs8_pem(self):
+        pem = init_secrets.GENERATED["authelia_oidc_jwks_key"]()
+        self.assertTrue(pem.startswith("-----BEGIN PRIVATE KEY-----\n"), "PKCS#8")
+        text = subprocess.run(["openssl", "pkey", "-noout", "-text"], input=pem, capture_output=True, text=True, check=True).stdout
+        self.assertRegex(text, r"Private-Key: \(2048 bit")
+        self.assertIn("publicExponent", text)
+
+    def test_the_client_digest_has_authelias_pbkdf2_format_and_rederives(self):
+        secret = "throwaway-value"
+        a, b = init_secrets.pbkdf2_sha512_digest(secret), init_secrets.pbkdf2_sha512_digest(secret)
+        self.assertNotEqual(a, b)
+        for digest in (a, b):
+            m = PBKDF2.match(digest)
+            self.assertIsNotNone(m, digest)
+            salt, key = adapted_b64decode(m[1]), adapted_b64decode(m[2])
+            self.assertEqual((len(salt), len(key)), (16, 64))
+            self.assertEqual(hashlib.pbkdf2_hmac("sha512", secret.encode(), salt, 310000, dklen=64), key)
+        pairs = init_secrets.oidc_client_pairs()
+        for k in init_secrets.OIDC_CLIENT_KEYS:
+            m = PBKDF2.match(pairs[f"{k}_pbkdf2"])
+            self.assertEqual(hashlib.pbkdf2_hmac("sha512", pairs[k].encode(), adapted_b64decode(m[1]), 310000, dklen=64), adapted_b64decode(m[2]), k)
+
+    def test_a_client_pair_is_created_whole_and_a_half_pair_is_refused(self):
+        held = {**OLD, **{k: "fake" for k in init_secrets.GENERATED}}
+        written = fill_in_memory(held)
+        self.assertEqual(set(written) - set(held), set(OIDC_PAIR_KEYS))
+        key = init_secrets.OIDC_CLIENT_KEYS[0]
+        for half in ({key: "plain-OLD"}, {f"{key}_pbkdf2": "$pbkdf2-sha512$OLD"}):
+            with mock.patch.object(init_secrets, "run", return_value=yaml.safe_dump({**held, **half}).encode()), \
+                    mock.patch.object(init_secrets, "encrypt_to") as enc, self.assertRaises(SystemExit) as e:
+                init_secrets.fill_missing("unused.sops.yaml")
+            enc.assert_not_called()  # the file is left untouched
+            msg = str(e.exception.code)
+            self.assertIn(key, msg)
+            self.assertNotIn("OLD", msg)
+
+    def test_no_sso_secret_contains_a_quote_backslash_or_line_break(self):
+        for _ in range(20):
+            values = {k: init_secrets.GENERATED[k]() for k in SSO_TOKENS} | init_secrets.oidc_client_pairs()
+            for k, v in values.items():
+                self.assertIsNone(re.search(r"[\"'\\\r\n]", v), k)
 
 
 if __name__ == "__main__":

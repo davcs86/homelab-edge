@@ -4,12 +4,14 @@
 Operator-chosen values come from the environment (GitHub environment secrets in CI):
   DESEC_TOKEN, HC_PING_URL, ADMIN_CONSOLE_PASSWORD, NTFY_DAVID_PASSWORD
 Everything else (ntfy publisher credentials, Gatus heartbeat tokens, database role passwords, pgBackRest mTLS PKI,
-the database host's TLS CA) is generated here.
+the database host's TLS CA, the Authelia and lldap secrets, the OIDC client secrets with their pbkdf2 hashes, the OIDC
+JWKS key) is generated here.
 Usage: init_secrets.py <edge-tls-hostname> <output.sops.yaml>   (needs: sops, openssl, python bcrypt)
        init_secrets.py --fill-missing <existing.sops.yaml>      adds only the generated credentials the file lacks; the
                                                                  file is decrypted in memory and nothing existing changes
 """
 import base64
+import hashlib
 import os
 import secrets
 import string
@@ -50,6 +52,18 @@ def generate_vapid_private_key() -> str:
             return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
+def pbkdf2_sha512_digest(secret: str, salt: bytes | None = None, iterations: int = 310000) -> str:
+    """Authelia's `$pbkdf2-sha512$<iterations>$<salt>$<digest>`, in adapted base64 (`+` as `.`, no padding)."""
+    salt = secrets.token_bytes(16) if salt is None else salt
+    digest = hashlib.pbkdf2_hmac("sha512", secret.encode(), salt, iterations, dklen=64)
+    b64 = lambda b: base64.b64encode(b).decode().rstrip("=").replace("+", ".")  # noqa: E731
+    return f"$pbkdf2-sha512${iterations}${b64(salt)}${b64(digest)}"
+
+
+def rsa_private_key_pem() -> str:
+    return run("openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048").decode()
+
+
 # Plain credentials that can be added to an existing file without touching anything else.
 GENERATED = {
     "ntfy_alerts_password_bcrypt": lambda: bcrypt_hash(secrets.token_urlsafe(32)),
@@ -68,7 +82,14 @@ GENERATED = {
         "commsgun_app_key_xstockstrat", "commsgun_app_key_xstockstrat_staging", "commsgun_app_key_ops",
         "happybabytracker_admin_password", "happybabytracker_internal_api_token")},
     "happybabytracker_vapid_private_key": generate_vapid_private_key,
+    **{k: lambda: secrets.token_urlsafe(48) for k in (
+        "authelia_session_secret", "authelia_storage_encryption_key", "authelia_reset_password_jwt_secret", "authelia_oidc_hmac_secret",
+        "authelia_ldap_bind_password", "lldap_jwt_secret", "lldap_key_seed", "lldap_admin_password")},
+    "authelia_oidc_jwks_key": rsa_private_key_pem,
 }
+# Each is created whole with its `<key>_pbkdf2` hash (Authelia's copy); fill-missing refuses half a pair.
+OIDC_CLIENT_KEYS = ["authelia_client_secret_xstockstrat_web", "authelia_client_secret_xstockstrat_staging_web",
+                    "authelia_client_secret_commsgun", "authelia_client_secret_happybabytracker"]
 OPERATOR_KEYS = ["desec_token", "healthchecks_ping_url", "admin_console_password_hash", "ntfy_david_password_bcrypt"]
 PKI_KEYS = [f"pgbackrest_tls_{n}_{k}" for n in ("ca", "server", "client") for k in ("crt", "key")]
 # Values the owner adds with `sops set` (gate public keys, Resend key, sender map, happybabytracker admin username); neither mode writes them, fill-missing
@@ -77,6 +98,14 @@ HAND_KEYS = [f"app_gate_xstockstrat_{env}_public_key" for env in ("staging", "pr
 # Sets that are created whole, never completed: the TLS CA of the database host, and the certs the pull direction adds.
 DB_TLS_KEYS = [f"db_tls_{n}_{k}" for n in ("ca", "server") for k in ("crt", "key")]
 PGBACKREST_DB_KEYS = ["pgbackrest_db_server_crt", "pgbackrest_db_server_key", "pgbackrest_edge_client_crt", "pgbackrest_edge_client_key"]
+
+
+def oidc_client_pairs(keys: list[str] = OIDC_CLIENT_KEYS) -> dict:
+    out = {}
+    for k in keys:
+        out[k] = secrets.token_urlsafe(48)
+        out[f"{k}_pbkdf2"] = pbkdf2_sha512_digest(out[k])
+    return out
 
 
 def inventory_var(name: str) -> str:
@@ -107,7 +136,11 @@ def fill_missing(path: str) -> None:
         have = [k for k in group if k in current]
         if have and len(have) != len(group):
             sys.exit(f"{path} holds only part of the set {', '.join(group)}; a certificate set is created whole, so fix it by hand or regenerate with overwrite")
+    for k in OIDC_CLIENT_KEYS:
+        if (k in current) != (f"{k}_pbkdf2" in current):
+            sys.exit(f"{path} holds only half of the client secret pair {k}, {k}_pbkdf2; a pair is created whole, so fix it by hand or regenerate with overwrite")
     new = {k: GENERATED[k]() for k in GENERATED if k not in current}
+    new |= oidc_client_pairs([k for k in OIDC_CLIENT_KEYS if k not in current])
     if not all(k in current for k in DB_TLS_KEYS):
         new |= db_tls_pki()
     if not all(k in current for k in PGBACKREST_DB_KEYS):
@@ -207,6 +240,7 @@ def main() -> None:
                                            stdin=os.environ["ADMIN_CONSOLE_PASSWORD"].encode()).decode().strip(),
         "ntfy_david_password_bcrypt": bcrypt_hash(os.environ["NTFY_DAVID_PASSWORD"]),
         **{k: gen() for k, gen in GENERATED.items()},
+        **oidc_client_pairs(),
         **(base := pki(edge_host, client_cn)),
         **db_tls_pki(),
         **pgbackrest_db_pki(base["pgbackrest_tls_ca_crt"], base["pgbackrest_tls_ca_key"]),
