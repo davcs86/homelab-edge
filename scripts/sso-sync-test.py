@@ -39,7 +39,14 @@ if "sh" in args and "-c" in args:
     if text:
         sys.stdout.write(text)
     else:
-        sys.stderr.write("Error: no data to export\n")
+        sys.stderr.write(os.environ.get("FAKE_EXPORT_STDERR") or "Error: no data to export\n")
+        sys.exit(1)
+elif "identifiers" in args and "add" in args:
+    with open(os.environ["FAKE_DOCKER_LOG"]) as f:
+        n = sum(1 for line in f if '"identifiers", "add"' in line)
+    if str(n) == os.environ.get("FAKE_ADD_FAIL_AT"):
+        sys.stderr.write("Error: error inserting user opaque id: UNIQUE constraint failed\n")
+        sys.exit(1)
 elif "migrate" in args:
     sys.stderr.write("Error: schema already up to date\n")
     sys.exit(1)
@@ -131,6 +138,7 @@ class Base(unittest.TestCase):
         docker.chmod(0o755)
         self.log = self.tmp / "docker.log"
         self.export = ""
+        self.fake_env = {}
         self.lldap = None
 
     def tearDown(self):
@@ -143,7 +151,7 @@ class Base(unittest.TestCase):
 
     def run_sync(self, *args, stdin=None):
         env = {**os.environ, "PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(self.log),
-               "FAKE_EXPORT": self.export}
+               "FAKE_EXPORT": self.export, **self.fake_env}
         if stdin is None:
             stdin = {"admin_password": ADMIN_PW} | ({"bind_password": BIND_PW} if args[0] == "ensure" else {})
         common = ["--lldap-url", self.lldap.url, "--compose", "/srv/edge/compose.yml"]
@@ -372,10 +380,49 @@ class Reconcile(Base):
         steps = [s.strip() for s in argv[-1].split(";")]
         m = re.fullmatch(r"rm -f (/data/\S+)", steps[0])
         self.assertTrue(m, steps)
-        self.assertEqual(steps[-1], f"rm -f {m.group(1)}")
-        self.assertIn(f"authelia storage user identifiers export --file {m.group(1)} --config /config/configuration.yml >/dev/null",
-                      steps)
-        self.assertIn(f"cat {m.group(1)}", steps)
+        f = m.group(1)
+        self.assertEqual(steps[1:], [  # the export's own status is the run's exit code, after the cleanup
+            f"authelia storage user identifiers export --file {f} --config /config/configuration.yml >/dev/null && cat {f}",
+            "rc=$?", f"rm -f {f}", "exit $rc"])
+
+    def test_a_failed_export_that_is_not_no_data_is_an_error(self):
+        self.fake_env = {"FAKE_EXPORT_STDERR": "Error: failed to decrypt: encryption key mismatch\n"}
+        fake, r, before = self.reconcile([user("alice", ["sso_people"], SUB_A)])
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("export", r.stderr)
+        self.assertEqual((fake.mutations, self.adds(), fake.state), ([], [], before))
+        self.assertNoValues(r)
+
+    def test_a_sub_held_by_two_usernames_writes_nothing_and_exits_2(self):
+        cases = (([user("aaron", ["sso_people"], SUB_A), user("alice", ["sso_people"], SUB_A), user("carol", ["sso_people"], SUB_C)],
+                  [], ["aaron", "alice"]),
+                 ([user("alice", ["sso_people"]), user("bob", ["sso_people"], SUB_A), user("carol", ["sso_people"])],
+                  [("openid", "", "alice", SUB_A), ("openid", "", "carol", SUB_C)], ["alice", "bob"]),
+                 ([user("bob", ["sso_people"], SUB_A), user("carol", ["sso_people"], SUB_C)],  # an offboarded person's row
+                  [("openid", "", "dave", SUB_A)], ["bob", "dave"]))
+        for users, rows, shared in cases:
+            with self.subTest(shared=shared):
+                self.log.unlink(missing_ok=True)
+                fake, r, before = self.reconcile(users, rows)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertEqual(json.loads(r.stdout)["mismatched"], shared)
+                for name in shared:
+                    self.assertIn(name, r.stderr)
+                self.assertEqual((fake.mutations, self.adds(), fake.state), ([], [], before))  # carol's write waits too
+                self.assertNoValues(r)
+                fake.close()
+                self.lldap = None
+
+    def test_a_failed_write_still_prints_what_was_written(self):
+        self.fake_env = {"FAKE_ADD_FAIL_AT": "2"}
+        fake, r, _ = self.reconcile([user("alice", ["sso_people"], SUB_A), user("bob", ["sso_people"], SUB_B),
+                                     user("carol", ["sso_people"])], [("openid", "", "carol", SUB_C)])
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"copied_to_lldap": ["carol"], "added_to_authelia": ["alice"], "mismatched": [],
+                                                "unchanged": 0})
+        self.assertIn("bob", r.stderr)
+        self.assertEqual(len(self.adds()), 2)
+        self.assertNoValues(r, SUB_A, SUB_B, SUB_C)
 
     def test_an_empty_authelia_store_is_no_data_not_an_error(self):
         _, r, _ = self.reconcile([user("alice", ["sso_people"])])

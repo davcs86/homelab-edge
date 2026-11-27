@@ -419,7 +419,8 @@
   ansible.builtin.shell: |
     set -o pipefail
     for s in authelia lldap; do
-      id=$(docker compose -f {{ edge_root }}/compose.yml ps -aq "$s")
+      id=$(docker ps -aq --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service="$s" \
+        --filter label=com.docker.compose.oneoff=False)
       [ -z "$id" ] || echo "$s $(docker inspect --format '{{ '{{' }}.Config.Image{{ '}}' }}' "$id")"
     done
   args:

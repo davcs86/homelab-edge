@@ -126,6 +126,14 @@ def reconcile_plan(authelia: dict, lldap: dict) -> ReconcilePlan:
             plan.copy_to_lldap[name] = asub
         elif lsub:
             plan.add_to_authelia[name] = lsub
+    holders = {}  # Authelia's identifier column is UNIQUE: one sub, one username
+    for name, sub in [*authelia.items(), *((n, v) for n, v in lldap.items() if v is not None)]:
+        holders.setdefault(sub, set()).add(name)
+    shared = {n for names in holders.values() if len(names) > 1 for n in names}
+    for name in shared:
+        plan.copy_to_lldap.pop(name, None)
+        plan.add_to_authelia.pop(name, None)
+    plan.mismatched = sorted(set(plan.mismatched) | shared)
     return plan
 
 
@@ -209,14 +217,12 @@ def ensure(args, admin_password, bind_password) -> dict:
 
 def authelia_export(compose_file) -> dict:
     script = (f"rm -f {EXPORT_PATH}; authelia storage user identifiers export --file {EXPORT_PATH} "
-              f"--config {AUTHELIA_CONFIG} >/dev/null; cat {EXPORT_PATH}; rm -f {EXPORT_PATH}")
+              f"--config {AUTHELIA_CONFIG} >/dev/null && cat {EXPORT_PATH}; rc=$?; rm -f {EXPORT_PATH}; exit $rc")
     r = authelia_run(compose_file, "sh", "-c", script)
     if r.returncode != 0:
-        raise SyncError(f"Authelia's identifier export exited {r.returncode}")
-    if not r.stdout.strip():
-        if "no data to export" in r.stderr:
+        if not r.stdout.strip() and "no data to export" in r.stderr:  # 4.39.28 exits 1 on an empty store
             return {}
-        raise SyncError("Authelia's identifier export failed")
+        raise SyncError(f"Authelia's identifier export exited {r.returncode}")
     return parse_export(r.stdout)
 
 
@@ -229,21 +235,25 @@ def reconcile(args, admin_password) -> tuple:
     if r.returncode != 0 and "schema already up to date" not in r.stdout + r.stderr:
         raise SyncError(f"Authelia's storage migration exited {r.returncode}")
     plan = reconcile_plan(authelia_export(args.compose), in_lldap)
+    acted = set(plan.copy_to_lldap) | set(plan.add_to_authelia) | set(plan.mismatched)
     summary = {"copied_to_lldap": [], "added_to_authelia": [], "mismatched": plan.mismatched,
-               "unchanged": len(in_lldap) - len(plan.copy_to_lldap) - len(plan.add_to_authelia) - len(plan.mismatched)}
+               "unchanged": len(set(in_lldap) - acted)}
     if plan.mismatched:
-        return summary, Refused("sub differs between Authelia and lldap, or lldap's is not a version-4 UUID, for: "
-                                + ", ".join(plan.mismatched))
-    for name, sub in sorted(plan.copy_to_lldap.items()):
-        ld.gql("mutation($user: UpdateUserInput!) { updateUser(user: $user) { ok } }",
-               {"user": {"id": ids[name], "insertAttributes": [{"name": SUB_ATTRIBUTE, "value": [sub]}]}}, "updateUser")
-        summary["copied_to_lldap"].append(name)
-    for name, sub in sorted(plan.add_to_authelia.items()):
-        r = authelia_run(args.compose, "authelia", "storage", "user", "identifiers", "add", ids[name],
-                         "--identifier", sub, "--service", "openid", "--config", AUTHELIA_CONFIG)
-        if r.returncode != 0:
-            raise SyncError(f"Authelia's identifiers add for {name} exited {r.returncode}")
-        summary["added_to_authelia"].append(name)
+        return summary, Refused("sub differs between Authelia and lldap, is not a version-4 UUID, or is held by two "
+                                "usernames, for: " + ", ".join(plan.mismatched))
+    try:
+        for name, sub in sorted(plan.copy_to_lldap.items()):
+            ld.gql("mutation($user: UpdateUserInput!) { updateUser(user: $user) { ok } }",
+                   {"user": {"id": ids[name], "insertAttributes": [{"name": SUB_ATTRIBUTE, "value": [sub]}]}}, "updateUser")
+            summary["copied_to_lldap"].append(name)
+        for name, sub in sorted(plan.add_to_authelia.items()):
+            r = authelia_run(args.compose, "authelia", "storage", "user", "identifiers", "add", ids[name],
+                             "--identifier", sub, "--service", "openid", "--config", AUTHELIA_CONFIG)
+            if r.returncode != 0:
+                raise SyncError(f"Authelia's identifiers add for {name} exited {r.returncode}")
+            summary["added_to_authelia"].append(name)
+    except SyncError as x:  # the writes done so far still print
+        return summary, x
     return summary, None
 
 

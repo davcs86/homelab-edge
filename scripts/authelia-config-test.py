@@ -519,7 +519,11 @@ class DeployOrder(unittest.TestCase):
     def test_a_digest_change_backs_up_then_stops_authelia_before_the_sync(self):
         images = find_task(TASKS, IMAGES_TASK)
         script = images["ansible.builtin.shell"]
-        self.assertIn("ps -aq", script)
+        self.assertEqual(COMPOSE["name"], "edge")  # one-off `compose run` containers carry the same service label
+        self.assertIn('docker ps -aq --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service="$s"',
+                      script)
+        self.assertIn("--filter label=com.docker.compose.oneoff=False", script)
+        self.assertNotIn("compose.yml ps", script)
         self.assertIn(".Config.Image", script)
         self.assertEqual((images["register"], images["changed_when"]), ("_sso_images", False))
         block = find_task(TASKS, DIGEST_BLOCK)
