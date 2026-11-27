@@ -52,6 +52,8 @@ jobs:
         env:
           HAPPYBABYTRACKER_TEST_REQUIRE_DOCKER: "1"
         run: python3 scripts/happybabytracker-config-test.py
+      - name: Authelia configuration renders to the SSO spec (portal, limits, LDAP, the nine OIDC clients)
+        run: python3 scripts/authelia-config-test.py
       - name: Backup scripts and units; the happybabytracker snapshot under writes, as root in a Docker-like tree
         env:
           EDGE_BACKUP_TEST_REQUIRE_ROOT: "1"
@@ -126,11 +128,24 @@ jobs:
       - name: Routing, rate limits, body caps, tailnet split (offline, mock upstreams)
         run: scripts/caddy-routing-test.sh edge-caddy:ci
 
+  sso:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
+      - name: Pinned Authelia validates the rendered config and the generated client hashes
+        env:
+          SSO_STACK_TEST_REQUIRE_DOCKER: "1"
+        run: python3 scripts/sso-stack-test.py
+
   # The only check the `main` ruleset should require; skipped upstream jobs count as passing.
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [lint, policy, tools, secrets, caddy]
+    needs: [lint, policy, tools, secrets, caddy, sso]
     runs-on: ubuntu-24.04
     steps:
       - name: Evaluate upstream results
@@ -140,6 +155,7 @@ jobs:
           echo "tools:   ${{ needs.tools.result }}"
           echo "secrets: ${{ needs.secrets.result }}"
           echo "caddy:   ${{ needs.caddy.result }}"
+          echo "sso:     ${{ needs.sso.result }}"
       - name: Fail on upstream failure or cancellation
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |

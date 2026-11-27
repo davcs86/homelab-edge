@@ -1,0 +1,120 @@
+# {{ ansible_managed }}
+# No plaintext secret here: Authelia expands its env templates only with X_AUTHELIA_CONFIG_FILTERS='template' set.
+server:
+  address: 'tcp://0.0.0.0:9091/'
+  disable_healthcheck: true
+  endpoints:
+    rate_limits:
+{% for name in ['token', 'revocation', 'userinfo', 'introspection', 'pushed_authorization_request'] %}
+      openid_connect_{{ name }}:
+        buckets:
+          - period: 1m
+            requests: {{ ratelimit.authelia_backchannel.events }}
+{% endfor %}
+
+identity_validation:
+  reset_password:
+    jwt_lifespan: 1h
+    jwt_secret: '{% raw %}{{ env "EDGE_RESET_PASSWORD_JWT_SECRET" }}{% endraw %}'
+  elevated_session:
+    require_second_factor: true
+
+authentication_backend:
+  password_reset:
+    disable: false
+  ldap:
+    implementation: lldap
+    address: 'ldap://lldap:3890'
+    base_dn: '{{ lldap_base_dn }}'
+    users_filter: '(&({username_attribute}={input})(objectClass=person)(memberOf=cn=sso_people,ou=groups,{{ lldap_base_dn }}))'
+    user: 'uid={{ authelia_ldap_bind_user }},ou=people,{{ lldap_base_dn }}'
+    password: '{% raw %}{{ env "EDGE_LDAP_BIND_PASSWORD" }}{% endraw %}'
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: '{{ authelia_public_hostname }}'
+      policy: two_factor
+      subject: 'group:sso_people'
+
+session:
+  secret: '{% raw %}{{ env "EDGE_SESSION_SECRET" }}{% endraw %}'
+  cookies:
+    - domain: '{{ public_zone }}'
+      authelia_url: 'https://{{ authelia_public_hostname }}'
+      name: authelia_session
+      expiration: 1h
+      inactivity: 15m
+      remember_me: 720h
+
+regulation:
+  modes: [user]
+  max_retries: 3
+  find_time: 2m
+  ban_time: 5m
+
+storage:
+  encryption_key: '{% raw %}{{ env "EDGE_STORAGE_ENCRYPTION_KEY" }}{% endraw %}'
+  local:
+    path: /data/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /data/notification.txt
+
+identity_providers:
+  oidc:
+    hmac_secret: '{% raw %}{{ env "EDGE_OIDC_HMAC_SECRET" }}{% endraw %}'
+    jwks:
+      - algorithm: RS256
+        use: sig
+        key: {% raw %}{{ env "EDGE_OIDC_JWKS_KEY_B64" | b64dec | mindent 10 "|" | msquote }}{% endraw %}
+
+    lifespans:
+      access_token: 1h
+      refresh_token: 720h
+      custom:
+        webhooks-mcp:
+          access_token: 5m
+          refresh_token: 720h
+    claims_policies:
+      web:
+        id_token: [email, preferred_username]
+    authorization_policies:
+{% for group in sso_groups if group != 'sso_people' %}
+      {{ group }}:
+        default_policy: deny
+        rules:
+          - policy: two_factor
+            subject: 'group:{{ group }}'
+{% endfor %}
+    clients:
+{% for client in authelia_oidc_clients %}
+      - client_id: '{{ client.id }}'
+        authorization_policy: '{{ client.group }}'
+        consent_mode: explicit
+        require_pkce: true
+        pkce_challenge_method: S256
+        response_types: [code]
+{% if client.kind == 'web' %}
+        public: false
+        client_secret: '{{ edge_secrets[client.key] }}'
+        token_endpoint_auth_method: client_secret_basic
+        redirect_uris: ['{{ client.redirect_uri }}']
+        scopes: [openid, profile, email]
+        grant_types: [authorization_code]
+        claims_policy: web
+{% else %}
+        public: true
+        token_endpoint_auth_method: none
+        redirect_uris: ['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback']
+        scopes: [{{ client.scopes | join(', ') }}]
+        audience: ['{{ client.audience }}']
+        requested_audience_mode: implicit
+        access_token_signed_response_alg: RS256
+        grant_types: [authorization_code, refresh_token]
+{% if client.lifespan is defined %}
+        lifespan: '{{ client.lifespan }}'
+{% endif %}
+{% endif %}
+{% endfor %}
