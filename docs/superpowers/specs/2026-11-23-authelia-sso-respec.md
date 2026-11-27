@@ -28,7 +28,7 @@ full record. Open: § 12.
 | 17 | Authelia's, lldap's and commsgun's databases are in the **edge backup**; a deploy runs the backup before an Authelia or lldap digest change |
 | 18 | Local logins, when switched on, are **public behind Caddy's login limits** (the pattern xstockstrat already uses); a tailnet-only rule cannot work on a `*.public` name (F9) |
 | 19 | Each person's **`sub` is pinned** in two places that restore each other: Authelia's storage and an `sso-sub` attribute on their lldap user; reconciled before Authelia serves; a mismatch fails the deploy (§ 4.7) |
-| 20 | Config delivery: spike compose `configs:` content (C), fall back to a mounted directory + hash-compare restart (A) (§ 4.8) |
+| 20 | Config delivery: spike compose `configs:` content (C), fall back to a mounted directory + hash-compare restart (A) (§ 4.8). *Settled 2026-11-27 by S12: **A** (Compose 5.5.1 does not recreate on a `configs.content` change)* |
 | 21 | Claude.ai **and** Claude Code clients per environment; both Claude.ai callback hosts; `requested_audience_mode: implicit`. *Amended 2026-11-27 (owner): Claude.ai clients only; the edge access logs (30 days) show no local Claude Code MCP client. Adding one later is a new Authelia client, no app code* |
 | 22 | People: § 7. Login is gated on lldap group **`sso_people`**; offboarding removes the person from it (lldap has no disable flag) |
 | 23 | Notifier: an **SMTP submission listener inside commsgun-api, STARTTLS** with an edge-local CA, on a network shared only with Authelia; file notifier until it ships (§ 9) |
@@ -120,6 +120,9 @@ full record. Open: § 12.
 - **VMs** (xstockstrat UI and agent): `auth.public.<domain>` over the home WAN; the VMs already hold `tag:edge:443`.
 - **Edge containers** (commsgun-ui, happybabytracker-ui, webhooks-mcp): `extra_hosts: ["auth.public.<domain>:host-gateway"]`,
   reaching Caddy (host networking) with the right name, certificate and issuer (S18).
+- Every back-channel request carries `Host: auth.public.<domain>`, and Caddy passes `Host` through unchanged: v4.39.28
+  serves discovery only for its configured portal URL and answers `400` for any other host (S10), so an IP address or an
+  alias cannot stand in for the name.
 
 ### 4.3 Caddy
 - Zones (EDGE-12 prefixes): `authelia_login` (`POST /api/firstfactor`, `/api/secondfactor/*`, `/api/reset-password/*`; per
@@ -170,7 +173,8 @@ the xstockstrat web client gains `profile`.
 ### 4.7 Identity, secrets and data
 - **Pinned `sub`:** each lldap user carries an `sso-sub` attribute (lldap v0.6.3 accepts only `a-z`, `A-Z`, `0-9` and `-`
   in attribute names, so not `sso_sub`: P0 spike S22, 2026-11-27). Before Authelia serves, a `compose run --rm` step runs
-  the storage migration, then reconciles each member of `sso_people`: Authelia has an identifier and lldap none (first login
+  the storage migration, then reconciles each member of `sso_people` from `authelia storage user identifiers export`
+  (read first: `identifiers add` exits 1 on any existing row for that user, even an identical one, S19): Authelia has an identifier and lldap none (first login
   minted it) → copy it to lldap; lldap has one and Authelia none (Authelia's database lost) → `authelia storage user
   identifiers add`; both and different → **fail the deploy** (S19). lldap must be up first (`depends_on`). Offboarding
   deletes the identifier and clears the attribute (otherwise a later deploy would re-apply it); usernames are never reused.
@@ -190,9 +194,10 @@ the xstockstrat web client gains `profile`.
   changing the Authelia or lldap digest (both migrate on start); rollback = restore (`docs/versions.md`).
 
 ### 4.8 Config delivery
-C if S12 shows compose 5.5.1 recreating on a `configs.content` change, else A (directory mount + an unconditional
-hash-compare restart task, never a handler). No users file exists (lldap holds people); `compose.yml` stays free of secrets;
-Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the rendered config with the pinned image (S20).
+**A** (S12, 2026-11-27: Compose 5.5.1 kept a running container on the old `configs.content`): a directory mount plus an
+unconditional hash-compare restart task, never a handler. No users file exists (lldap holds people); `compose.yml` stays free of secrets;
+Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the rendered config with the pinned image (S20): `validate-config` exits 0 but warns about every custom
+scope (`xstockstrat.*`, `webhooks-mcp`), so CI passes on exit 0 and does not fail on warnings.
 
 ### 4.9 Monitoring
 - **P1:** `authelia-public` (`/api/health`) and `authelia-discovery` (exact `issuer`, non-empty JWKS) through 1.1.1.1;
@@ -239,13 +244,18 @@ cannot sit in front of it, and disabling the user in the app already refuses its
 |---|---|---|
 | xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` and `both` (DigitalOcean, the linking window, break-glass and rollback); the password login routes and `/accounts/api/sso/confirm` sit behind the login zones (§ 4.3); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED`; unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude.ai clients only (Claude Code keys left empty); D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
 | webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401; `AUTH_MODE`, `OAUTH_ISSUER` (no trailing slash) and `OAUTH_RESOURCE` (path exactly `/mcp`) set and removed together (C4) | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; issuer + audience + required `webhooks-mcp` scope, no allowlist (decision 16 as amended); C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`: Claude.ai's connector is the only one (`sso.md` § 6b) |
-| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` (`smtp_submission: true`, `send_window_seconds: 3600`); fixed IPv4 subnets (owner, 2026-11-27; outside Docker's default pools, free on the droplet): `commsgun` `172.16.200.0/28` (`ip_range` `172.16.200.0/29`, commsgun-api `172.16.200.10`) and `authelia-smtp` `172.16.200.16/28` (`ip_range` `172.16.200.16/29`, commsgun-api `172.16.200.26`); pinning the existing `commsgun` network's subnet recreates it, a short planned commsgun outage at P5 (S26b decides between recreate in place and a new network name); API env `ENQUEUE_ADDR`/`ADMIN_ADDR` (the `commsgun` address, 9200/9201), `SMTP_ADDR` (the `authelia-smtp` address, 9203), `SMTP_TLS_CERT_FILE`/`SMTP_TLS_KEY_FILE`, `AUTH_MODE`; UI env `OIDC_*` (never `OIDC_AUTO_PROVISION`); the CLI runs as a `commsgun-admin` service with `network_mode: none` (a plain `compose run` of the API would clash with its fixed addresses); login zones on `/login` and `/account` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by Authelia and by host-network processes on the droplet, never published (listeners bound per network, § 9; STARTTLS and the app key are the control), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
+| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` (`smtp_submission: true`, `send_window_seconds: 3600`); fixed IPv4 subnets (owner, 2026-11-27; outside Docker's default pools, free on the droplet): `commsgun` `172.16.200.0/28` (`ip_range` `172.16.200.0/29`, commsgun-api `172.16.200.10`) and `authelia-smtp` `172.16.200.16/28` (`ip_range` `172.16.200.16/29`, commsgun-api `172.16.200.26`); pinning the existing `commsgun` network's subnet recreates it, a short planned commsgun outage at P5 (Compose 5.5.1 recreates the network in place non-interactively, S26b: commsgun-api and commsgun-ui are stopped and recreated, bounded by the API's 30 s `stop_grace_period`); API env `ENQUEUE_ADDR`/`ADMIN_ADDR` (the `commsgun` address, 9200/9201), `SMTP_ADDR` (the `authelia-smtp` address, 9203), `SMTP_TLS_CERT_FILE`/`SMTP_TLS_KEY_FILE`, `AUTH_MODE`; UI env `OIDC_*` (never `OIDC_AUTO_PROVISION`); the CLI runs as a `commsgun-admin` service with `network_mode: none` (a plain `compose run` of the API would clash with its fixed addresses); login zones on `/login` and `/account` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by Authelia and by host-network processes on the droplet, never published (listeners bound per network, § 9; STARTTLS and the app key are the control), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
 | happybabytracker | `happybaby.public.<domain>`; EDGE-07 undone, `ORIGIN`/`PUBLIC_ORIGIN` follow; token paths and the callback query redacted; `extra_hosts`; API env `AUTH_MODE`; UI env `OIDC_*` and `SESSION_SEAL_KEY` (never `OIDC_AUTO_PROVISION`); login zones on its six password routes (§ 4.3) | § 3 contract; admin principal table + identities; invites redeemable by SSO (password redemption refused in `oidc`); non-goal (`:54`) and anti-goal (`:69`) amended; threat-model pass before P6 |
 
 ## 6. Memory budget
 Re-measure on the droplet before P1 (`free -m`, `docker stats --no-stream`): at least 400 MiB must stay free with Authelia's
 and lldap's limits added (declared limits are 1024m today on 2 GB). With lldap, password checks are LDAP binds: S8 and S23
 measure both services under N parallel logins.
+
+Measured 2026-11-27 (P0; `docker stats` snapshots, not true peaks): the droplet used 743 MiB with 1221 MiB available;
+Authelia 60 MiB idle and 68 MiB after 20 parallel logins; lldap 3 MiB idle and 54 MiB while hashing those logins.
+Proposed limits `authelia` 128m and `lldap` 128m (about twice the observed peak): `TODO(provide)`, the owner confirms
+them in the P1 plan.
 
 ## 7. People
 
@@ -294,7 +304,7 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 | Phase | Gated on | Pass condition |
 |---|---|---|
-| P0 spike | — | Every S-item except S1, S5, S7, S15 and S18 (moved to P1) recorded here with observed output, under the § 11 guardrails |
+| P0 spike | — | Every S-item except S1, S5, S7, S15 and S18 (moved to P1) recorded here with observed output, under the § 11 guardrails. **Done 2026-11-27** (§ 11 P0 record) |
 | P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; the P1 Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created in lldap's UI resets their password and logs in, and the next deploy copies their `sub` into lldap; a `sub` survives an Authelia DB wipe and redeploy (restored from lldap), and a mismatched one fails the deploy; S1, S5, S7, S15 and S18 recorded against the deployed portal |
 | P2 xstockstrat-staging | 345 amended + shipped; people created in lldap (P1); before `both`, 345's design § 6 gates: the § 4.3 confirm zone, S17 (fresh `auth_time`), the web client's scopes and claims policy (§ 4.6), the seed row's password | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: the Claude.ai connector connects, lists tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
 | P3 xstockstrat prod | P2 | Same checks on prod |
@@ -327,11 +337,31 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 - **S27** (§ 4.11) Authelia's bearer authz with a PAR + `form_post` + explicit-consent public client, for a JWT and an
   opaque access token: allowed at first, refused right after a group or `sso_people` removal, allowed again after re-adding,
   refused after revocation; introspection's `active` alongside. Its Claude.ai side (can the connector complete PAR,
-  `form_post` and explicit consent) runs with S5 in P1; both must pass for A.
+  `form_post` and explicit consent) was to run with S5 in P1; no longer needed, A was rejected (§ 4.11).
 - **S26b** pinning a subnet on an existing compose network with the pinned Compose, non-interactively: recreated in place,
   or refused (then a new network name and a one-off removal of the old one).
 
 (S6, S9, S11, S13 and S14 were retired: S9 and the client-credentials check with the unused clients, 2026-11-27.)
+
+**P0 record (2026-11-27, edge droplet, Compose 5.5.1, Authelia 4.39.28, lldap v0.6.3 rootless, mailpit v1.33.1).**
+
+| Item | Observed | Consequence |
+|---|---|---|
+| S20 | `validate-config` exit 0, one warning: custom scope `xstockstrat.read` outside the standard scopes | § 4.8: CI passes on exit 0 with warnings |
+| S22 | groups created once, `changes: none` on the second run, people and memberships unchanged; `sso_sub` refused ("Valid characters: a-z, A-Z, 0-9, and dash") | the attribute is `sso-sub` (§ 4.7) |
+| S10 | `auth.spike.test`: issuer and JWKS on the same origin, no `end_session_endpoint`; `auth2.spike.test` (same cookie domain and certificate): `400 Bad Request` | one portal name (decision 3); `Host` passed through (§ 4.2) |
+| S12 | container ID and start time unchanged after a `configs.content` edit; the container still saw `probe-v1` | decision 20 and § 4.8: A |
+| S26 | publish reaches the net_a-bound listener; host reaches net_b's address; a net_b-only peer reaches net_b's listener, is refused on net_a's port at net_b's address, cannot reach net_a | § 9 as designed; no fallback |
+| S26b | unpinned network got `172.22.0.0/16`; pinning `172.31.252.0/28` and `up -d </dev/null` recreated it in place, exit 0, container recreated | P5 recreates `commsgun` in place (§ 5) |
+| S21 + S16 (Authelia side) | reset mail from `auth@` over STARTTLS with the spike CA; new password set through lldap; login 200 | full S16 in P5 |
+| S2 / S3 | access token `RS256`, `typ` `at+jwt`, `kid`; `scp` array; `aud` from `requested_audience_mode: implicit`; 3600 s; refresh token; `iss` in the authorization response; custom scope granted; `offline_access` forces the consent page | webhooks-mcp reads `scp`; S5 expects a consent step |
+| S17 | ID token has `auth_time`, `email`, `preferred_username`; `prompt=login` → `require_login: true`, no code without re-authentication; after `/api/firstfactor/reauthenticate`: `max_age=0` still refused, `max_age=1` and `prompt=login` alone issue a code with a fresh `auth_time` | § 3: links send `max_age=1` |
+| S4 / S24 | refresh 200 after leaving the app group; 500 (`The error is unrecognizable`) after leaving `sso_people` | § 4.11 C holds; a removed connector sees a server error, not `invalid_grant` |
+| S25 | `Alice`/`ALICE`/`alice` share one counter; ban listed as `alice` for 5 min; `bans user revoke` works | `sso.md` § 4 unban as written |
+| S27 | JWT access token: authz 401 always; opaque: 200, 403 at once after the group removal, 401 at once after `sso_people`, 401 after revocation, ~185 ms per check; introspection `active` stays true until revocation | § 4.11: A rejected, C |
+| S19 | first add exit 0; the same pair again: exit 1 (`UNIQUE … identifier`); another UUID for the same user: exit 1 (`UNIQUE … username`), nothing overwritten; export lists every pinned `sub` | § 4.7: read the export first |
+| S8 / S23 | Authelia 60 → 68 MiB, lldap 3 → 54 MiB under 20 parallel logins (6.2 s, all 200) | § 6 limits proposed |
+| Guardrails | `guard`: no production restart (before and after teardown); `down -v`: 0 containers, 0 volumes left; available memory 1221 → 1200 MiB | — |
 
 **Where the spike runs (owner, 2026-11-23): the edge droplet itself.** It is production, so:
 - a separate compose project (`authelia-spike`) with its own networks and volumes, ports bound to `127.0.0.1` only, test
