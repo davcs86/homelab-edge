@@ -80,7 +80,8 @@ different body, 413 over 256 KiB, 422 invalid body or sender, 429 over the app's
 (retry with the same key).
 
 Log in to the dashboard at `https://commsgun.private.<domain>/login`: user `admin`, password from
-`sops decrypt --extract '["commsgun_admin_password"]' secrets/edge.sops.yaml`. Then check each of these:
+`sops decrypt --extract '["commsgun_admin_password"]' secrets/edge.sops.yaml` (from the SSO-capable image on, only until
+the first `admin reset-password`: § 3). Then check each of these:
 
 - **Delivered.** The send above returns `202`. The dashboard (default range 1h) shows it as Sent, then `delivered`
   within a few minutes (status is polled at 1 min, 5 min, 30 min, 2 h, ...).
@@ -150,14 +151,45 @@ filtered by that app.
    sops set secrets/edge.sops.yaml '["commsgun_app_key_ops"]' "\"$(python3 -c 'import secrets; print(secrets.token_urlsafe(36))')\""
    ```
 
-   The same works for `commsgun_admin_password`, `commsgun_session_secret` and `commsgun_admin_api_token`.
+   The same works for `commsgun_admin_password` (before the SSO-capable image only; below), `commsgun_session_secret`
+   and `commsgun_admin_api_token`.
 2. Commit, merge, run **Actions → deploy** (`tailnet`). The deploy rewrites the env files and recreates the containers
    whose environment changed; queued messages survive (the `commsgun-data` volume is kept).
 3. The old app key stops working at once (one key per app, no overlap): hand the subscriber the new one in the same
-   window. Changing `commsgun_admin_password` or `commsgun_session_secret` signs every dashboard session out; log in again.
+   window. Changing `commsgun_admin_password` or `commsgun_session_secret` signs every dashboard session out; log in again
+   (before the SSO-capable image only; below).
 
 Check: the old key now gets `401`, the new one `202`; for the dashboard, the old password is refused at `/login` and the new
 one works.
+
+**From the SSO-capable image on.** This applies once **Actions → deploy** has run with a commsgun pin at or after
+commsgun #11 (merge `ba56f28`; `docs/versions.md` names the pinned commit). At its first start that image's dashboard
+imports `commsgun_admin_password` once, as user `admin`, into the hub's database; from then on it ignores the variable
+(logging `ADMIN_PASSWORD is ignored: users exist` at each start); with `AUTH_MODE` unset the hub stays in `local`. App
+keys and `commsgun_admin_api_token` rotate as above. For the dashboard:
+
+- **Admin password.** `sops set` on `commsgun_admin_password` changes nothing. Reset it with the hub's CLI instead. Run
+  `read -rs PW`, type or paste the new password (16 or more characters) and press Enter, then:
+
+  ```sh
+  printf '%s\n' "$PW" | ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml run --rm -T --no-deps commsgun-api admin reset-password admin'
+  unset PW
+  ```
+
+  The password travels on stdin only, never in a command line or a log. The CLI prints
+  `password reset; sessions ended` and exits 0; exit 1 is a refusal (`no such user`, `invalid password`, or
+  `database busy; try again`: run it again), exit 2 a usage error. It ends that user's dashboard sessions. SOPS still
+  holds the old value, not the working one: keep the new password yourself.
+  Run it only on that image: an older one ignores `admin` and starts a second hub, worker included, on the same data.
+  The command is for today's `compose.yml`, where `commsgun-api` has no fixed addresses: the one-off container
+  publishes no port, does not restart, and does not answer to the name `commsgun-api`, so the dashboard keeps reaching
+  the running hub. Once the edge pins the hub's addresses (SSO spec § 5, phase P5) it would fail; P5 replaces it with
+  `docker compose run --rm -T commsgun-admin admin reset-password admin` (`network_mode: none`).
+- **Session secret.** Changing `commsgun_session_secret` no longer signs anyone out (sessions are opaque and held by the
+  hub); it voids only SSO logins in flight, and in `local` there are none.
+
+Check: after `reset-password`, the old password is refused at `/login`, the new one works, and a session opened before
+it is back at `/login`.
 
 ## 4. Change a limit
 
@@ -212,8 +244,9 @@ The `bump-commsgun` workflow opens one PR (branch `bump/commsgun`) that pins bot
 `commsgun_ui_image`: daily, or at once from **Actions → bump-commsgun → Run workflow** (optional digests to pin
 instead of the newest). It proposes nothing when the two images' revision labels differ or are missing, so the API and
 dashboard never ship from different commits. Merging deploys nothing: run **Actions → deploy** (`tailnet`) afterwards.
-A docs- or CI-only merge in `commsgun` also produces a bump PR that changes nothing on the edge. Pin format and
-rationale: `docs/versions.md`. Check: after the deploy, `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml ps commsgun-api commsgun-ui'`
+A docs- or CI-only merge in `commsgun` also produces a bump PR that changes nothing on the edge. From the SSO-capable
+image (§ 3) on, the hub migrates its database forward at start and never back: once it has run, never pin a digest older
+than commsgun #11. Pin format and rationale: `docs/versions.md`. Check: after the deploy, `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml ps commsgun-api commsgun-ui'`
 shows both running and the Gatus probes stay green.
 
 ## 9. Logs

@@ -74,7 +74,8 @@ Each prints `200`. Then check:
   ends with `happybabytracker database: integrity ok` and `restore drill OK`, and the service finishes without a failure
   (it then pushes the heartbeat).
 - **Sign in.** Open `https://happybaby.private.<domain>/login`: the admin username from SOPS and the password from
-  `sops decrypt --extract '["happybabytracker_admin_password"]' secrets/edge.sops.yaml`. The admin lands on the Parents page.
+  `sops decrypt --extract '["happybabytracker_admin_password"]' secrets/edge.sops.yaml` (from the first SSO-capable image
+  on, only until the first `admin reset-password`: § 4). The admin lands on the Parents page.
 
 If a deploy stops at one of the secret checks, Ansible 2.21 hides which key failed (the block runs under `no_log: true`, and
 the failing assert's message is censored with it); the task name still shows. Read it, then check the three values without
@@ -124,15 +125,48 @@ Check: the parent opens the link, sets a new password and signs in with it; the 
    ```
 
    The same works for `happybabytracker_internal_api_token`. Never rotate `happybabytracker_vapid_private_key` casually
-   (section 7). A new admin username must not equal any parent's.
+   (section 7). A new admin username must not equal any parent's. From the first SSO-capable image on, use this step
+   for the token only (below).
 2. Commit, merge, run **Actions → deploy** (`tailnet`). The deploy rewrites `/opt/edge/happybabytracker/api.env` and `ui.env` and
    recreates the containers whose environment changed (the token is in both files, the password and username only in the API's);
    the data volume is kept.
-3. The admin's sessions end at that start: the API stores a keyed fingerprint of the admin username, password and internal
-   token, and deletes every admin session when it differs from the last start, so changing any of the three signs the admin
-   out. Parents' sessions are not affected. Sign in again with the new value.
+3. (Before the first SSO-capable image only.) The admin's sessions end at that start: the API stores a keyed fingerprint of
+   the admin username, password and internal token, and deletes every admin session when it differs from the last start,
+   so changing any of the three signs the admin out. Parents' sessions are not affected. Sign in again with the new value.
 
 Check: the old admin password is refused at `/login` and the new one works.
+
+**From the first SSO-capable image (plan 8) on.** This applies once **Actions → deploy** has run with a happybabytracker
+pin built from plan 8 (`docs/superpowers/plans/2026-11-24-happybabytracker-sso.md` in `davcs86/happybabytracker`;
+`docs/versions.md` names the pinned commit). At its first start that image's API copies
+`happybabytracker_admin_username` and `happybabytracker_admin_password` into its database once and ends the admin's
+sessions once (sign in again); from then on it ignores both, with a warning at each start, and with `AUTH_MODE` unset
+it stays in `local`. Then:
+
+- **Admin password.** `sops set` on `happybabytracker_admin_password` changes nothing. Reset it with the API's CLI
+  instead. Run `read -rs PW`, type or paste the new password (16 to 256 characters) and press Enter, then:
+
+  ```sh
+  U=$(sops decrypt --extract '["happybabytracker_admin_username"]' secrets/edge.sops.yaml)
+  printf '%s\n' "$PW" | ssh david_admin@edge "sudo docker compose -f /opt/edge/compose.yml run --rm -T happybabytracker-api admin reset-password $U"
+  unset PW
+  ```
+
+  The password travels on stdin only, never in a command line or a log. The CLI exits 0 on success, 1 on a refusal
+  (such as no admin with that username) and 2 on a usage error, and ends that admin's sessions. `U` is the username the
+  app imported, which SOPS holds as long as nobody changed it there afterwards. SOPS still holds the old password, not
+  the working one: keep the new password yourself. The same form runs the CLI's other verbs, `create <username>` (only
+  while no admin exists) and `unlink-sso <username>` (`docs/runbooks/sso.md`).
+  Run it only on that image: an older API ignores `admin` and starts a second API, worker included, on the same
+  database. The command is for today's `compose.yml`: `happybabytracker-api` publishes no port and has no fixed
+  address, so the one-off container takes no port, does not restart, and does not answer to the name
+  `happybabytracker-api`, and the UI keeps reaching the running API; the two share the database as two SQLite writers.
+- **Admin username.** Permanent: changing `happybabytracker_admin_username` in SOPS changes nothing.
+- **Internal token.** Steps 1 and 2 above, without step 3: rotating `happybabytracker_internal_api_token` no longer ends
+  the admin's sessions (the fingerprint is gone). Parents' sessions are not affected either.
+
+Check: after `reset-password`, the old admin password is refused at `/login`, the new one works, and the admin's
+session opened before it is back at `/login`.
 
 ## 5. Restore the data
 
@@ -191,7 +225,9 @@ The `bump-happybabytracker` workflow opens one PR (branch `bump/happybabytracker
 Run workflow** (optional digests to pin instead of the newest). It proposes nothing when the two images' revision labels
 differ or are missing, so the API and the UI never ship from different commits. Merging deploys nothing: run
 **Actions → deploy** (`tailnet`) afterwards. A docs- or CI-only merge in `happybabytracker` also produces a bump PR that
-changes nothing on the edge. Pin format and rationale: `docs/versions.md`. Check: after the deploy,
+changes nothing on the edge. Before the deploy that brings the first SSO-capable image (§ 4), take an `edge-backup` archive
+(section 1, Backup): its migration is forward-only, so once it has run never pin an older digest. Pin format and rationale:
+`docs/versions.md`. Check: after the deploy,
 `ssh david_admin@edge 'sudo docker compose -f /opt/edge/compose.yml ps happybabytracker-api happybabytracker-ui'` shows both
 running and the Gatus probes stay green.
 
