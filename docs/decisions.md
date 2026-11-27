@@ -51,19 +51,21 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     `static+oauth` | `oauth`), so the OSS repos run without an identity provider. The homelab runs `oidc`; `both` is switched on
     only to link accounts or for break-glass. Local logins, when on, are public behind Caddy's login limits: public names have
     no split-horizon, so a tailnet client arrives from its WAN IP and a tailnet-only rule would lock everyone out. No
-    `forward_auth` for our own apps; allowed only for third-party software without OIDC.
+    `forward_auth` for our own apps; allowed only for third-party software without OIDC. Immediate MCP revocation through Authelia's bearer check was
+    rejected after spike S27 (it accepts only opaque tokens): webhooks-mcp tokens live 5 min instead (SSO spec § 4.11).
   - Apps own users and roles; Authelia proves identity and gates which app a person opens (one group per app, `default_policy:
     deny`, `two_factor`). Linking is explicit ("Link SSO" from a signed-in local account, or an invite redeemed by SSO), keyed on
     `(issuer, subject)`; unlinked logins and MCP tokens are refused; no email matching, no group-to-role mapping, no just-in-time
     provisioning (no app implements it; amended 2026-11-24). webhooks-mcp has no accounts: it authorizes by issuer,
-    audience and the `webhooks-mcp` scope, which only that group's clients and the automation client get. xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
+    audience and the `webhooks-mcp` scope, which only that group's client gets (no Claude Code or client-credentials
+    clients: the access logs show none in use, 2026-11-27). xstockstrat keeps a local password for every user (no SSO-only accounts), which keeps
     DigitalOcean supported. Env-seeded admins become a "create if empty" CLI bootstrap plus a one-time import.
   - Rate limits are path-scoped, not exempted by address (the home WAN IP is dynamic). Regulation `modes: [user]`, 5 min ban.
   - lldap owns people and passwords (owner, 2026-11-23): rootless image, LDAP on the compose network only, admin UI tailnet-only
     at `lldap.private.<domain>`, where admins add, change and offboard people; SOPS holds no people. Being the passwords' only
     writer is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from SOPS). The
     cost, accepted: no git audit trail for people, and no rebuild of people without a backup. The repo declares only the group
-    names Authelia's rules use and an `sso_sub` attribute; a deploy ensures they exist and never touches people or
+    names Authelia's rules use and an `sso-sub` attribute; a deploy ensures they exist and never touches people or
     memberships. Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the
     filter also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
   - Reset links last 1 h, to absorb Resend's rate limiting. Emails come from `auth@<domain>` (commsgun app `authelia`, 5 a
@@ -71,7 +73,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     support plaintext SMTP), on a network shared only with Authelia, so neither reaches the other's remaining ports.
     `require_second_factor` makes another device need an existing one; recovery after losing every device is an
     admin-present re-enrolment.
-  - Each person's `sub` lives in two places that restore each other: Authelia's storage and the `sso_sub` attribute on their
+  - Each person's `sub` lives in two places that restore each other: Authelia's storage and the `sso-sub` attribute on their
     lldap user. Before Authelia serves, a deploy copies a first-login `sub` into lldap, re-applies lldap's after an Authelia
     database loss, and fails on a mismatch, so once copied, losing either database never breaks links; usernames are never reused.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens

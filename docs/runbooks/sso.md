@@ -16,7 +16,7 @@ xstockstrat deployments never use SSO (`AUTH_MODE=local`).
 |---|---|---|---|
 | Person (username, display name, email, groups) | lldap only (never SOPS or this repo) | platform admin, in lldap's UI | One account per person. Nobody edits their own email. Every person is in `sso_people`. |
 | Password | lldap only (never SOPS) | the person | Set and reset with **Forgot password**; the link lasts 1 h. |
-| `sub` (UUID) | Authelia's SQLite and the person's `sso_sub` attribute in lldap | the deploy | Minted at first login; each deploy copies it to lldap, and restores either copy from the other, so links survive losing one database. |
+| `sub` (UUID) | Authelia's SQLite and the person's `sso-sub` attribute in lldap | the deploy | Minted at first login; each deploy copies it to lldap, and restores either copy from the other, so links survive losing one database. |
 | Second factor (passkey / TOTP) | Authelia SQLite | the person | Any TOTP app (e.g. Authy) works. Another device needs an existing one; losing every device needs an admin. |
 | App access | the person's groups | platform admin | One group per app; a person holds any number. |
 | App account, role, link to the `sub` | each app's database | each app's admin | Never in Authelia. xstockstrat roles: `manage-users.py update-roles`. |
@@ -24,7 +24,7 @@ xstockstrat deployments never use SSO (`AUTH_MODE=local`).
 | Group | Opens |
 |---|---|
 | `sso_people` | the portal itself (everyone; removing it is how a person is disabled) |
-| `xstockstrat` | xstockstrat (prod) web + MCP (Claude.ai and Claude Code) |
+| `xstockstrat` | xstockstrat (prod) web + MCP (the Claude.ai connector) |
 | `xstockstrat-staging` | xstockstrat-staging web + MCP |
 | `webhooks-mcp` | webhooks-mcp `/mcp` (only this group's clients get the `webhooks-mcp` scope the app checks) |
 | `commsgun` | commsgun dashboard |
@@ -65,12 +65,12 @@ device login never uses SSO.
 | Change | Steps | Takes effect |
 |---|---|---|
 | Grant an app | add the group in lldap's UI; the person links in that app (§ 5) | after linking |
-| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp: not ended** (refresh survives a group removal, spike S4; removing the person from `sso_people` should, per spike S24; owner call in SSO spec § 12) |
+| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp:** a group removal does not end it (refresh survives it, spike S4); remove `david_claude` from `sso_people` instead: access ends within 5 min (SSO spec § 4.11) |
 | Reset a password | the person uses **Forgot password** | at once; login still needs the second factor |
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
 | Change email | edit it in lldap's UI | at once for Authelia's emails; xstockstrat keeps its own copy, commsgun and happybabytracker store none; nothing syncs it |
-| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); in every app disable them (xstockstrat, in each environment: deactivate them on `/config-ui/users`, then `manage-users.py unlink-sso <email>`; commsgun: `docker compose run --rm -T commsgun-admin admin disable <username>`; happybabytracker: the admin disables or unlinks the parent, which also deletes their push subscriptions and ntfy topic: until then medication reminders keep reaching their devices; if the person is happybabytracker's admin, `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>` and `admin reset-password <username>`, since the admin is never deleted; webhooks-mcp: nothing beyond the group); delete their Authelia identifier and clear their `sso_sub` in lldap (or a later deploy re-applies it) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise (webhooks-mcp has none: an issued access token lasts ≤ 1 h) |
+| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); in every app disable them (xstockstrat, in each environment: deactivate them on `/config-ui/users`, then `manage-users.py unlink-sso <email>`; commsgun: `docker compose run --rm -T commsgun-admin admin disable <username>`; happybabytracker: the admin disables or unlinks the parent, which also deletes their push subscriptions and ntfy topic: until then medication reminders keep reaching their devices; if the person is happybabytracker's admin, `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>` and `admin reset-password <username>`, since the admin is never deleted; webhooks-mcp: nothing beyond the group); delete their Authelia identifier and clear their `sso-sub` in lldap (or a later deploy re-applies it) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise (webhooks-mcp has none: access ends within 5 min, SSO spec § 4.11) |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | web: at the next access-JWT refresh, up to `jwt.access_ttl_seconds` (default 900 s); MCP: within ~60 s |
 
 ## 5. Linking app accounts
@@ -94,21 +94,22 @@ reconnect each one afterwards (§ 6).
 
 Gates before the first `both` (xstockstrat 345 design § 6); each is a hard stop:
 - the login zones cover `POST /accounts/api/sso/confirm` (SSO spec § 4.3), pinned in `caddy-routing-test.sh`;
-- spike S17 shows a fresh `auth_time` on `prompt=login` + `max_age=0`;
+- spike S17 shows a fresh `auth_time` on `prompt=login` + `max_age=1`;
 - the web client is registered with `openid profile email` and the claims policy (SSO spec § 4.6);
 - the seeded admin row has the owner's password (step 1).
 
 1. Before the first SSO login, the seeded admin row (`admin@localhost`, `services/xstockstrat-identity/migrations/002_seed_admin.up.sql`)
    gets the owner's password with `manage-users.py reset-password` if it is not known.
 2. In that environment's config set `ui/oidc.issuer`, `ui/oidc.client_id`, `ui/oidc.client_secret` (copied from the edge's
-   SOPS), the four `ui/oidc.mcp_client_id*` keys and `agent/oidc.issuer` (empty in `oidc`, the agent answers 503), then
+   SOPS), `ui/oidc.mcp_client_id` and `ui/oidc.mcp_client_id_readonly` (the Claude.ai clients), and `agent/oidc.issuer` (empty in `oidc`, the agent answers 503), then
    `manage-users.py set-auth-mode both --environment <production|staging> --reason …` (345 FR-17). xstockstrat's own
    runbook, `docs/runbooks/authelia-sso-cutover.md` (added by 345), has the exact steps. From here until step 4, MCP
    connectors use the built-in OAuth server.
 3. Sign in with the password, **Link SSO**, sign out, sign in with SSO. Stop Authelia briefly: the password login still works.
 4. `set-auth-mode oidc`. Until then MCP stays on xstockstrat's built-in OAuth server (in `local` and `both`).
-5. Connect the Claude.ai and Claude Code connectors to Authelia with the pre-registered client IDs (xstockstrat
-   `docs/runbooks/mcp-tools.md`, 345 FR-13); they sign in as the same person.
+5. Connect the Claude.ai connector to Authelia with the pre-registered client IDs (xstockstrat
+   `docs/runbooks/mcp-tools.md`, 345 FR-13); it signs in as the same person. Leave the two
+   `ui/oidc.mcp_client_id_claude_code*` keys empty: the edge registers no Claude Code client (SSO spec § 4.6).
 
 Rollback at any point: `manage-users.py set-auth-mode local --environment … --reason …`, run over the tailnet without
 a login. The built-in server registers clients dynamically: clear each
@@ -119,9 +120,8 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 1. Deploy with `AUTH_MODE=static+oauth`, `OAUTH_ISSUER=https://auth.public.<domain>` (no trailing slash) and
    `OAUTH_RESOURCE=https://webhooks-mcp.public.<domain>/mcp` (path exactly `/mcp`); the three are set and removed
    together (webhooks-mcp contract C4). Both the static key and Authelia tokens work.
-2. Move every `MCP_AUTH_KEY` consumer: the Claude.ai and Claude Code connectors sign in as `david_claude`; the headless
-   consumer (`TODO(provide)`: which) uses `webhooks-mcp-automation`, whose plaintext secret lives in the edge's SOPS
-   (SSO spec § 4.7) and is copied to that consumer by hand.
+2. Move every `MCP_AUTH_KEY` consumer: the Claude.ai connector signs in as `david_claude` (the only consumer in the
+   access logs; manual `curl` tests use the static key only in this window).
 3. Set `AUTH_MODE=oauth` and retire `MCP_AUTH_KEY`. Rollback: back to `static+oauth` (or `static`), the key still in SOPS
    until this step is proven.
 
@@ -140,7 +140,7 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 
 | Situation | Effect | Action |
 |---|---|---|
-| Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires | Gatus alerts via ntfy; fix and restart. Break-glass: switch the app to `both` and use its local login. A happybabytracker parent who joined by SSO has no password: the admin sends a reset link, redeemable in `both`. For xstockstrat that ends MCP access through Authelia at once: its MCP moves to the built-in server (§ 6 rollback). |
+| Authelia down | no new SSO logins; open app sessions keep working; MCP calls work until their access token expires (webhooks-mcp: 5 min, since refresh needs Authelia); after 3600 s every MCP call fails (SSO spec § 3 signing keys) | Gatus alerts via ntfy; fix and restart. Break-glass: switch the app to `both` and use its local login. A happybabytracker parent who joined by SSO has no password: the admin presses **Reset link**, which for a parent without one issues an invite link (72 h); with the app in `both` the parent opens it, sets a password and signs in with it. For xstockstrat that ends MCP access through Authelia at once: its MCP moves to the built-in server (§ 6 rollback). |
 | Authelia restarted | portal sessions end (they are in memory); app sessions and refresh tokens survive | none |
 | Authelia SQLite lost | second factors and refresh tokens gone; `sub`s re-applied from lldap before it serves | Restore from the edge backup (`docs/runbooks/recovery.md`) **before anyone logs in**. Without one: redeploy and re-enrol everyone with an admin present; app links survive. |
 | lldap down | no logins and no resets | Gatus alerts; fix and restart. Break-glass as for Authelia down. |

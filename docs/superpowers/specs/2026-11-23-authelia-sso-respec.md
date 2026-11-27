@@ -24,17 +24,17 @@ full record. Open: § 12.
 | 13 | Lifetimes: access token 1 h; MCP refresh 30 days, rotating; **password-reset link 1 h** (absorbs Resend's rate limiting); explicit portal session times (§ 4.5) |
 | 14 | **Self-service password reset** by email for everyone; lldap is the only writer of passwords; SOPS never holds one (§ 4.10) |
 | 15 | **Second factors:** `require_second_factor: true`, so another device needs an existing one. Recovery after losing every device is an **admin-present re-enrolment**; after losing Authelia's database, restore from backup first (§ 8) |
-| 16 | webhooks-mcp authorizes by an app-side **`(iss, sub)` allowlist** plus scope; a **client-credentials** client for headless use. *Amended 2026-11-24 (owner): **scope only**: issuer, audience and the `webhooks-mcp` scope, which Authelia grants only to clients gated on group `webhooks-mcp` and to the automation client; no allowlist* |
+| 16 | webhooks-mcp authorizes by an app-side **`(iss, sub)` allowlist** plus scope; a **client-credentials** client for headless use. *Amended 2026-11-24 (owner): **scope only**: issuer, audience and the `webhooks-mcp` scope, which Authelia grants only to clients gated on group `webhooks-mcp`; no allowlist. Amended 2026-11-27 (owner): no client-credentials client: the access logs show no headless caller (§ 4.6)* |
 | 17 | Authelia's, lldap's and commsgun's databases are in the **edge backup**; a deploy runs the backup before an Authelia or lldap digest change |
 | 18 | Local logins, when switched on, are **public behind Caddy's login limits** (the pattern xstockstrat already uses); a tailnet-only rule cannot work on a `*.public` name (F9) |
-| 19 | Each person's **`sub` is pinned** in two places that restore each other: Authelia's storage and an `sso_sub` attribute on their lldap user; reconciled before Authelia serves; a mismatch fails the deploy (§ 4.7) |
-| 20 | Config delivery: spike compose `configs:` content (C), fall back to a mounted directory + hash-compare restart (A) (§ 4.8) |
-| 21 | Claude.ai **and** Claude Code clients per environment; both Claude.ai callback hosts; `requested_audience_mode: implicit` |
+| 19 | Each person's **`sub` is pinned** in two places that restore each other: Authelia's storage and an `sso-sub` attribute on their lldap user; reconciled before Authelia serves; a mismatch fails the deploy (§ 4.7) |
+| 20 | Config delivery: spike compose `configs:` content (C), fall back to a mounted directory + hash-compare restart (A) (§ 4.8). *Settled 2026-11-27 by S12: **A** (Compose 5.5.1 does not recreate on a `configs.content` change)* |
+| 21 | Claude.ai **and** Claude Code clients per environment; both Claude.ai callback hosts; `requested_audience_mode: implicit`. *Amended 2026-11-27 (owner): Claude.ai clients only; the edge access logs (30 days) show no local Claude Code MCP client. Adding one later is a new Authelia client, no app code* |
 | 22 | People: § 7. Login is gated on lldap group **`sso_people`**; offboarding removes the person from it (lldap has no disable flag) |
 | 23 | Notifier: an **SMTP submission listener inside commsgun-api, STARTTLS** with an edge-local CA, on a network shared only with Authelia; file notifier until it ships (§ 9) |
 | 24 | One **browser profile per account** for people with several (`david`, `david_admin`, `david_claude`) |
 | 25 | lldap admin UI at **`lldap.private.<domain>`** (tailnet-only) |
-| 26 | **lldap owns people** (owner, 2026-11-23): admins add, change and offboard people in its UI; SOPS holds no people. The repo declares only the group names and the `sso_sub` attribute, which a deploy ensures exist |
+| 26 | **lldap owns people** (owner, 2026-11-23): admins add, change and offboard people in its UI; SOPS holds no people. The repo declares only the group names and the `sso-sub` attribute, which a deploy ensures exist |
 
 ## 2. Findings that drove the changes
 
@@ -70,8 +70,22 @@ full record. Open: § 12.
 - **Relying party:** the UI server does the code flow (PKCE; `state` and `nonce` bound to the browser session; an OIDC
   transaction cookie `SameSite=Lax`), validates the ID token, then calls an internal API route (e.g. `POST /v1/session/oidc
   {iss, sub, email, name}`); the API alone resolves the identity and issues the session.
+- **Callback state (owner, 2026-11-27; every app, current and future):** the callback is a cross-site top-level navigation,
+  so it relies only on the transaction cookie (`SameSite=Lax`, encrypted and integrity-protected, path-scoped, ≤ 10 min,
+  bound to `state`). Whatever the callback must show or bind to (purpose, `next`, the display username, the hash of the
+  session it binds to, the flow's start time) is sealed in that cookie, which stays well under 4 KB and holds no other
+  secret. Authorization happens only at a same-origin POST (the confirmation), which re-checks the live session against the
+  bound hash; the sealed cookie alone never authorizes. Mandatory where the session cookie is `SameSite=Strict`
+  (commsgun, happybabytracker); xstockstrat's `Lax` session and session-gated confirm POST already comply.
+- **Signing keys (owner, 2026-11-27; no exceptions):** a token or ID token is accepted only on a key from an issuer key
+  set fetched within the last **3600 s**; past that, a failed refresh refuses every token (resource servers 503, relying
+  parties fail the SSO attempt). No stale-key grace window anywhere. `openid-client` relying parties call
+  `enableNonRepudiationChecks` so ID-token signatures are verified (its cache refetches at 300 s and fails closed).
 - **Linking:** "Link SSO" only for a signed-in local user, after local re-authentication, with `prompt=login` (S17) and a
-  "you are linking <IdP user> to <account>" confirmation. happybabytracker invites are redeemable by SSO in `oidc`/`both`
+  "you are linking <IdP user> to <account>" confirmation. Every link and every SSO invite redemption sends `prompt=login`
+  and `max_age=1` (not `0`: Authelia v4.39.28 then refuses consent even after re-authentication, spike S17; owner,
+  2026-11-27), and the relying party refuses unless the ID token's `auth_time` is at least the flow's start time
+  minus a 30 s skew (owner, 2026-11-27); a missing `auth_time` is refused. happybabytracker invites are redeemable by SSO in `oidc`/`both`
   and by password in `local`/`both`; its reset links work only in `local`/`both` (owner, 2026-11-24). Unlinked logins:
   `not linked`.
 - **Bootstrap and break-glass:** `<app> admin create <username>` (if no admin exists) and `<app> admin reset-password
@@ -84,7 +98,8 @@ full record. Open: § 12.
 - **Upgrade safety:** a new image keeps today's behaviour by default (`AUTH_MODE=local`, the env admin still accepted) until
   the edge sets the new variables; the import is idempotent; migrations are forward-only, so a digest is never reverted past one.
 - **Conformance:** one shared list of OIDC cases (bad `state`, wrong `iss`/`aud`, expired token, unlinked `sub`, replayed
-  code, link while another IdP session is live) run by commsgun and happybabytracker.
+  code, link while another IdP session is live, a missing or stale `auth_time` on a link or SSO invite, an ID token on a
+  key set older than 3600 s with the refresh failing) run by commsgun and happybabytracker.
 - **Threat-model pass:** before an app goes public, a checklist section in its own spec (exposed routes, auth on each,
   rate limits, secrets in URLs and logs, session lifetime, CSRF), reviewed by the owner.
 
@@ -94,7 +109,7 @@ full record. Open: § 12.
 - `authelia_public_hostname: "auth.{{ public_zone }}"`; a dedicated `@authelia host` handle in `*.{{ public_zone }}` before
   the `edge_sites` loop; `reverse_proxy 127.0.0.1:{{ authelia_port }}`; no `trusted_proxies` (EDGE-02; S7).
 - Compose: `<<: *hardening`, `127.0.0.1:{{ authelia_port }}:9091`, named volume `authelia-data`, uid 10001, `read_only`,
-  `mem_limit` from S8 (EDGE-05). Digest in `versions.yml` + `docs/versions.md` row (Rule 4, EDGE-01). Its networks keep
+  `mem_limit` 128m (§ 6, S8; EDGE-05). Digest in `versions.yml` + `docs/versions.md` row (Rule 4, EDGE-01). Its networks keep
   outbound access for the startup NTP check (or `ntp.address` is set deliberately).
 - Password reset on; `identity_validation.reset_password.jwt_lifespan: 1h`;
   `identity_validation.elevated_session.require_second_factor: true`.
@@ -105,6 +120,9 @@ full record. Open: § 12.
 - **VMs** (xstockstrat UI and agent): `auth.public.<domain>` over the home WAN; the VMs already hold `tag:edge:443`.
 - **Edge containers** (commsgun-ui, happybabytracker-ui, webhooks-mcp): `extra_hosts: ["auth.public.<domain>:host-gateway"]`,
   reaching Caddy (host networking) with the right name, certificate and issuer (S18).
+- Every back-channel request carries `Host: auth.public.<domain>`, and Caddy passes `Host` through unchanged: v4.39.28
+  serves discovery only for its configured portal URL and answers `400` for any other host (S10), so an IP address or an
+  alias cannot stand in for the name.
 
 ### 4.3 Caddy
 - Zones (EDGE-12 prefixes): `authelia_login` (`POST /api/firstfactor`, `/api/secondfactor/*`, `/api/reset-password/*`; per
@@ -139,20 +157,25 @@ Every MCP client: `access_token_signed_response_alg: RS256`, an explicit `audien
 | `xstockstrat[-staging]-web` | confidential, `client_secret_basic` + PKCE | `xstockstrat[-staging]` | `openid profile email` | `${APP_URL}/api/auth/sso/callback` | — |
 | `xstockstrat[-staging]-mcp-claude` | public PKCE | same | `xstockstrat.*`, `offline_access` | `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback` | `${APP_URL}/agent` |
 | `xstockstrat[-staging]-mcp-claude-ro` | public PKCE | same | `xstockstrat.read`, `offline_access` | same | same |
-| `xstockstrat[-staging]-mcp-claude-code[-ro]` | public PKCE | same | as above | loopback (S9) | same |
-| `webhooks-mcp-claude`, `webhooks-mcp-claude-code` | public PKCE | `webhooks-mcp` | `webhooks-mcp`, `offline_access` | Claude callbacks / loopback | `https://webhooks-mcp.public.<domain>/mcp` |
-| `webhooks-mcp-automation` | confidential, `client_credentials` | — | `webhooks-mcp` | — | same |
-| `commsgun` | confidential | `commsgun` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
-| `happybabytracker` | confidential | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
+| `webhooks-mcp-claude` | public PKCE, access tokens 5 min (§ 4.11) | `webhooks-mcp` | `webhooks-mcp`, `offline_access` | Claude callbacks | `https://webhooks-mcp.public.<domain>/mcp` |
+| `commsgun` | confidential, `client_secret_basic` + PKCE | `commsgun` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
+| `happybabytracker` | confidential, `client_secret_basic` + PKCE (owner, 2026-11-27) | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
+
+No Claude Code (loopback) or client-credentials client (owner, 2026-11-27): 30 days of edge access logs show only
+Claude.ai's connector (`Claude-User`, Anthropic's egress) and Gatus on `/agent` and `/mcp`. xstockstrat's
+`ui/oidc.mcp_client_id_claude_code*` keys stay empty, which hides those lines on its card (345 FR-11).
 
 The three web clients (xstockstrat, commsgun, happybabytracker) share a `claims_policy` whose `id_token` list holds `email`
 and `preferred_username`: 345's Link confirmation and commsgun's read them from the ID token. 345 also needs `auth_time`
-in it (D-111): S17 records whether Authelia always includes it or the policy must list it. Scopes amended 2026-11-24 (owner):
+in it (D-111): S17 showed Authelia includes it without the policy listing it (the spike's policy listed only `email`
+and `preferred_username`). Scopes amended 2026-11-24 (owner):
 the xstockstrat web client gains `profile`.
 
 ### 4.7 Identity, secrets and data
-- **Pinned `sub`:** each lldap user carries an `sso_sub` attribute. Before Authelia serves, a `compose run --rm` step runs
-  the storage migration, then reconciles each member of `sso_people`: Authelia has an identifier and lldap none (first login
+- **Pinned `sub`:** each lldap user carries an `sso-sub` attribute (lldap v0.6.3 accepts only `a-z`, `A-Z`, `0-9` and `-`
+  in attribute names, so not `sso_sub`: P0 spike S22, 2026-11-27). Before Authelia serves, a `compose run --rm` step runs
+  the storage migration, then reconciles each member of `sso_people` from `authelia storage user identifiers export`
+  (read first: `identifiers add` exits 1 on any existing row for that user, even an identical one, S19): Authelia has an identifier and lldap none (first login
   minted it) → copy it to lldap; lldap has one and Authelia none (Authelia's database lost) → `authelia storage user
   identifiers add`; both and different → **fail the deploy** (S19). lldap must be up first (`depends_on`). Offboarding
   deletes the identifier and clears the attribute (otherwise a later deploy would re-apply it); usernames are never reused.
@@ -161,8 +184,7 @@ the xstockstrat web client gains `profile`.
   secret, OIDC JWKS RSA key, client secrets **and their pbkdf2 hashes, generated once** (as `ntfy_alerts_password_bcrypt`,
   so the rendered config is stable), lldap JWT secret, `key_seed`, lldap admin password, Authelia's bind password, the SMTP
   listener's credential, CA, certificate and key (mounted read-only for commsgun's `SMTP_TLS_CERT_FILE` /
-  `SMTP_TLS_KEY_FILE`), and happybabytracker's `SESSION_SEAL_KEY` (UI, ≥ 32 characters). The plaintext secret of
-  `webhooks-mcp-automation` lives here too and is handed to its headless consumer by a runbook step (`sso.md` § 6b). The edge's SOPS is the source of truth for client secrets; xstockstrat's are
+  `SMTP_TLS_KEY_FILE`), and happybabytracker's `SESSION_SEAL_KEY` (UI, ≥ 32 characters). The edge's SOPS is the source of truth for client secrets; xstockstrat's are
   copied into its config service at cutover (runbook step).
 - **Never rotate:** lldap's `key_seed` (stored passwords depend on it). lldap's admin password applies only at first start;
   rotating it is a UI or CLI step, documented when the key lands in `secrets/README.md`.
@@ -173,9 +195,10 @@ the xstockstrat web client gains `profile`.
   changing the Authelia or lldap digest (both migrate on start); rollback = restore (`docs/versions.md`).
 
 ### 4.8 Config delivery
-C if S12 shows compose 5.5.1 recreating on a `configs.content` change, else A (directory mount + an unconditional
-hash-compare restart task, never a handler). No users file exists (lldap holds people); `compose.yml` stays free of secrets;
-Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the rendered config with the pinned image (S20).
+**A** (S12, 2026-11-27: Compose 5.5.1 kept a running container on the old `configs.content`): a directory mount plus an
+unconditional hash-compare restart task, never a handler. No users file exists (lldap holds people); `compose.yml` stays free of secrets;
+Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the rendered config with the pinned image (S20): `validate-config` exits 0 but warns about every custom
+scope (`xstockstrat.*`, `webhooks-mcp`), so CI passes on exit 0 and does not fail on warnings.
 
 ### 4.9 Monitoring
 - **P1:** `authelia-public` (`/api/health`) and `authelia-discovery` (exact `issuer`, non-empty JWKS) through 1.1.1.1;
@@ -185,7 +208,7 @@ Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the r
 
 ### 4.10 lldap (user store)
 - Compose service `lldap` from a pinned **`*-rootless`** image with `user: "10001:10001"`, `<<: *hardening`, named volume
-  `lldap-data` (SQLite), `read_only`, `mem_limit` from S23. LDAP (container port 3890) on the `authelia` network only.
+  `lldap-data` (SQLite), `read_only`, `mem_limit` 128m (§ 6, S23). LDAP (container port 3890) on the `authelia` network only.
 - **Admin UI at `lldap.private.<domain>`** (owner, 2026-11-23): `lldap_ui_private_hostname`, container port 17170 published
   as `127.0.0.1:{{ lldap_ui_port }}` (EDGE-05), wired in the four EDGE-07 places (hostname var, a `host` matcher under
   `*.{{ private_zone }}` after `import deny_staging_vm`, the split-horizon `_names`, the Gatus probe). The deploy steps use
@@ -194,19 +217,35 @@ Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the r
 - Authelia binds as a service account in `lldap_password_manager` (S21).
 - **lldap owns people** (decision 26): an admin creates each person in the UI (username, display name, email, groups, always
   `sso_people`) and offboards them by removing `sso_people`. A deploy only ensures that the group names Authelia's access
-  rules reference and the `sso_sub` attribute exist; it never changes a person or a membership (S22). A new person sets a
+  rules reference and the `sso-sub` attribute exist; it never changes a person or a membership (S22). A new person sets a
   password with "Forgot password". No audit trail beyond lldap's own database, and no rebuild of people without a backup:
   both accepted with decision 26.
 - Accepted residual: a brand-new account's first password and first second factor both come from emailed codes; an admin
   can enrol with the person to close it.
 
+### 4.11 Revocation of MCP access (owner, 2026-11-27: C, after S27)
+Access tokens are JWTs that webhooks-mcp checks offline until they expire, and a refresh survives a group removal (S4).
+Decided: **C**. The `webhooks-mcp-claude` client's access tokens live **5 min** (an Authelia custom lifespan for that
+client only); revoking webhooks-mcp means removing `david_claude` from `sso_people`, which stops its refresh (S24), so
+access ends within 5 min. `david_claude` holds only the `webhooks-mcp` group, so that removal revokes nothing else.
+Removing only the `webhooks-mcp` group does not end access and is not the procedure.
+
+Rejected, A (S27, 2026-11-27): Authelia's bearer check (`/api/authz/forward-auth`) refuses a removed person at once, but
+only for opaque `authelia_at_` access tokens; it never accepts the JWT access tokens webhooks-mcp verifies. A would have
+meant redesigning webhooks-mcp to introspect opaque tokens at Authelia, ~185 ms and an lldap lookup on every MCP call,
+`/mcp` down whenever Authelia or lldap is, a decision 4 exception, and a Claude.ai connector that supports PAR,
+`form_post` and explicit consent (unverified). Introspection does not reflect group or `sso_people` removal either.
+
+xstockstrat's MCP is out of scope here: it accepts its built-in server's tokens in `local`/`both`, so an Authelia check
+cannot sit in front of it, and disabling the user in the app already refuses its tokens within ~60 s (345 @AC-14: the MCP resolve cache lives 60 s).
+
 ## 5. Per app
 
 | App | Edge | App repo |
 |---|---|---|
-| xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` and `both` (DigitalOcean, the linking window, break-glass and rollback); the password login routes and `/accounts/api/sso/confirm` sit behind the login zones (§ 4.3); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED`; unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude Code clients; D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
-| webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401; `AUTH_MODE`, `OAUTH_ISSUER` (no trailing slash) and `OAUTH_RESOURCE` (path exactly `/mcp`) set and removed together (C4) | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; issuer + audience + required `webhooks-mcp` scope, no allowlist (decision 16 as amended); C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`; the automation secret's home is `sso.md` § 6b |
-| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` (`smtp_submission: true`, `send_window_seconds: 3600`); fixed IPv4 subnets and addresses on `commsgun` and `authelia-smtp` (`TODO(provide)`); API env `ENQUEUE_ADDR`/`ADMIN_ADDR` (the `commsgun` address, 9200/9201), `SMTP_ADDR` (the `authelia-smtp` address, 9203), `SMTP_TLS_CERT_FILE`/`SMTP_TLS_KEY_FILE`, `AUTH_MODE`; UI env `OIDC_*` (never `OIDC_AUTO_PROVISION`); the CLI runs as a `commsgun-admin` service with `network_mode: none` (a plain `compose run` of the API would clash with its fixed addresses); login zones on `/login` and `/account` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by Authelia and by host-network processes on the droplet, never published (listeners bound per network, § 9; STARTTLS and the app key are the control), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
+| xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` and `both` (DigitalOcean, the linking window, break-glass and rollback); the password login routes and `/accounts/api/sso/confirm` sit behind the login zones (§ 4.3); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED`; unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude.ai clients only (Claude Code keys left empty); D-74 → path-scoped zones; D-96 without access-token `email`; config migration takes the next free number at execute (060 on main-dev today) |
+| webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401; `AUTH_MODE`, `OAUTH_ISSUER` (no trailing slash) and `OAUTH_RESOURCE` (path exactly `/mcp`) set and removed together (C4) | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; issuer + audience + required `webhooks-mcp` scope, no allowlist (decision 16 as amended); C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`: Claude.ai's connector is the only one (`sso.md` § 6b) |
+| commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` (`smtp_submission: true`, `send_window_seconds: 3600`); fixed IPv4 subnets (owner, 2026-11-27; outside Docker's default pools, free on the droplet): `commsgun` `172.16.200.0/28` (`ip_range` `172.16.200.0/29`, commsgun-api `172.16.200.10`) and `authelia-smtp` `172.16.200.16/28` (`ip_range` `172.16.200.16/29`, commsgun-api `172.16.200.26`); pinning the existing `commsgun` network's subnet recreates it, a short planned commsgun outage at P5 (Compose 5.5.1 recreates the network in place non-interactively, S26b: commsgun-api and commsgun-ui are stopped and recreated, bounded by the API's 30 s `stop_grace_period`); API env `ENQUEUE_ADDR`/`ADMIN_ADDR` (the `commsgun` address, 9200/9201), `SMTP_ADDR` (the `authelia-smtp` address, 9203), `SMTP_TLS_CERT_FILE`/`SMTP_TLS_KEY_FILE`, `AUTH_MODE`; UI env `OIDC_*` (never `OIDC_AUTO_PROVISION`); the CLI runs as a `commsgun-admin` service with `network_mode: none` (a plain `compose run` of the API would clash with its fixed addresses); login zones on `/login` and `/account` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by Authelia and by host-network processes on the droplet, never published (listeners bound per network, § 9; STARTTLS and the app key are the control), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
 | happybabytracker | `happybaby.public.<domain>`; EDGE-07 undone, `ORIGIN`/`PUBLIC_ORIGIN` follow; token paths and the callback query redacted; `extra_hosts`; API env `AUTH_MODE`; UI env `OIDC_*` and `SESSION_SEAL_KEY` (never `OIDC_AUTO_PROVISION`); login zones on its six password routes (§ 4.3) | § 3 contract; admin principal table + identities; invites redeemable by SSO (password redemption refused in `oidc`); non-goal (`:54`) and anti-goal (`:69`) amended; threat-model pass before P6 |
 
 ## 6. Memory budget
@@ -214,11 +253,15 @@ Re-measure on the droplet before P1 (`free -m`, `docker stats --no-stream`): at 
 and lldap's limits added (declared limits are 1024m today on 2 GB). With lldap, password checks are LDAP binds: S8 and S23
 measure both services under N parallel logins.
 
+Measured 2026-11-27 (P0; `docker stats` snapshots, not true peaks): the droplet used 743 MiB with 1221 MiB available;
+Authelia 60 MiB idle and 68 MiB after 20 parallel logins; lldap 3 MiB idle and 54 MiB while hashing those logins.
+Limits `authelia` 128m and `lldap` 128m (about twice the observed peak; owner, 2026-11-27).
+
 ## 7. People
 
 | Username | Groups (all also in `sso_people`) | Links to |
 |---|---|---|
-| `david` | `xstockstrat`, `xstockstrat-staging`, `happybabytracker` | xstockstrat: the seeded admin row in each environment, by "Link SSO" after a password login; the Claude.ai and Claude Code connectors sign in as `david`. happybabytracker: his existing parent row |
+| `david` | `xstockstrat`, `xstockstrat-staging`, `happybabytracker` | xstockstrat: the seeded admin row in each environment, by "Link SSO" after a password login; the Claude.ai connector signs in as `david`. happybabytracker: his existing parent row |
 | `david_claude` | `webhooks-mcp` | nothing to link: the group grants the `webhooks-mcp` scope (decision 16 as amended) |
 | `david_admin` | `commsgun`, `happybabytracker` | commsgun's imported admin row and happybabytracker's admin principal, each by "Link SSO" from the local admin login |
 | `natalia` | `happybabytracker` | a new parent: the admin creates her and sends an invite she redeems by SSO |
@@ -234,14 +277,12 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 - **Lost every device:** the admin deletes the registrations (`authelia storage user totp delete`, `… webauthn delete`) and
   re-enrolment happens with the admin present (once no device is registered, the emailed code alone would suffice).
 - **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user
-  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp needs nothing beyond the group (an issued access token lasts
-  ≤ 1 h; refresh per S24); delete the Authelia identifier and clear
-  `sso_sub`. S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
-  webhooks-mcp has no app-side refusal (decision 16 as amended): S24 is its only stop, and removing just the
-  `webhooks-mcp` group does not end a connector's access (S4, below).
+  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp has no app account (decision 16 as amended), so its access ends
+  within 5 min of the `sso_people` removal (§ 4.11); delete the Authelia identifier and clear `sso-sub`.
+  S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
   happybabytracker's disable (and an admin unlink) also deletes the parent's push subscriptions and ntfy topic; until the
   admin does it, medication reminders keep reaching the person's devices (owner, 2026-11-24).
-- **Authelia DB lost:** restore from the edge backup before anyone logs in. Without a backup, the `sso_sub` attributes are
+- **Authelia DB lost:** restore from the edge backup before anyone logs in. Without a backup, the `sso-sub` attributes are
   re-applied before serving and links survive, but every account is briefly recoverable through its mailbox alone:
   re-enrol everyone with an admin present (an accepted, recorded residual).
 - **lldap DB lost:** restore from the edge backup; without one, the admin recreates each person by hand (same username),
@@ -263,30 +304,29 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 | Phase | Gated on | Pass condition |
 |---|---|---|
-| P0 spike | — | Every S-item except S1, S5, S7, S15 and S18 (moved to P1) recorded here with observed output, under the § 11 guardrails |
+| P0 spike | — | Every S-item except S1, S5, S7, S15 and S18 (moved to P1) recorded here with observed output, under the § 11 guardrails. **Done 2026-11-27** (§ 11 P0 record) |
 | P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; the P1 Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created in lldap's UI resets their password and logs in, and the next deploy copies their `sub` into lldap; a `sub` survives an Authelia DB wipe and redeploy (restored from lldap), and a mismatched one fails the deploy; S1, S5, S7, S15 and S18 recorded against the deployed portal |
-| P2 xstockstrat-staging | 345 amended + shipped; people created in lldap (P1); before `both`, 345's design § 6 gates: the § 4.3 confirm zone, S17 (fresh `auth_time`), the web client's scopes and claims policy (§ 4.6), the seed row's password | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: Claude.ai and Claude Code connect, list tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
+| P2 xstockstrat-staging | 345 amended + shipped; people created in lldap (P1); before `both`, 345's design § 6 gates: the § 4.3 confirm zone, S17 (fresh `auth_time`), the web client's scopes and claims policy (§ 4.6), the seed row's password | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: the Claude.ai connector connects, lists tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
 | P3 xstockstrat prod | P2 | Same checks on prod |
-| P4 webhooks-mcp | C1/C4 amended + shipped | In `static+oauth` both kinds of client work; then `oauth`: unauthenticated `POST /mcp` → 401 with `resource_metadata`; wrong audience → 401; a token without the `webhooks-mcp` scope → 403; the automation client works headless |
-| P5 commsgun | change shipped; threat-model pass; § 4.3 login zones deployed | S16 against the real listener; the P5 Gatus probes green; a reset email arrives through the SMTP listener over STARTTLS; SSO login completes; a person outside `commsgun` refused; in `both` with Authelia stopped the local login works; disabling a user ends their session; old private name 404 |
-| P6 happybabytracker | change shipped; threat-model pass; § 4.3 login zones deployed | the P6 Gatus probes green; `natalia` redeems an invite by SSO and lands on her kids; `david` links his parent row; `david_admin` reaches the admin area by SSO; in `both` with Authelia stopped the local admin login works; an outsider is refused |
+| P4 webhooks-mcp | C1/C4 amended + shipped | In `static+oauth` both kinds of client work; then `oauth`: unauthenticated `POST /mcp` → 401 with `resource_metadata`; wrong audience → 401; a token without the `webhooks-mcp` scope → 403; a person removed from `sso_people` is refused within 5 min (§ 4.11) |
+| P5 commsgun | change shipped; threat-model pass (commsgun § 13 accepted by the owner, 2026-11-27); § 4.3 login zones deployed | S16 against the real listener; the P5 Gatus probes green; a reset email arrives through the SMTP listener over STARTTLS; SSO login completes; a person outside `commsgun` refused; in `both` with Authelia stopped the local login works; disabling a user ends their session; old private name 404 |
+| P6 happybabytracker | change shipped; threat-model pass (happybabytracker § 18 accepted by the owner, 2026-11-27); § 4.3 login zones deployed | the P6 Gatus probes green; `natalia` redeems an invite by SSO and lands on her kids; `david` links his parent row; `david_admin` reaches the admin area by SSO; in `both` with Authelia stopped the local admin login works; an outsider is refused |
 
 ## 11. Spike items
 - **S1** `resource` parameter accepted. **S2** JWT access tokens with scopes (`scp` array on v4.39.28, 345 spike (b)) and `aud`. **S3** custom scopes. **S4** group re-check on
   refresh. Already observed on v4.39.28 (xstockstrat 345 spike (d), D-98): refresh still succeeds after removal from the
-  group; P0 re-checks it with lldap. Consequence for scope-only webhooks-mcp: § 12. **S5** pre-registered Claude.ai clients.
+  group; P0 re-checks it with lldap. Consequence for webhooks-mcp: § 4.11. **S5** pre-registered Claude.ai clients.
 - **S7** regulation keys on Caddy's single overwritten XFF entry. **S8** Authelia RSS idle and under N parallel logins.
-- **S9** Claude Code loopback redirect (any-port `127.0.0.1`, or a fixed port Claude Code can use).
 - **S10** issuer follows `Host`. **S12** compose recreates on `configs.content` change. **S15** back-channel request rate
   per VM over a day. **S16** (P5, against commsgun's real listener; P0 checks only Authelia's side against a stand-in)
   STARTTLS submission with the edge-local CA, `AUTH PLAIN`, header `From` matching envelope `MAIL FROM`, and a
   `Message-ID` from Authelia's notifier (commsgun spec 12.8).
-- **S17** `prompt=login` with `max_age=0` forces re-authentication, and the new ID token carries a fresh `auth_time`,
+- **S17** `prompt=login` with `max_age=1` forces re-authentication, and the new ID token carries a fresh `auth_time`,
   `email` and `preferred_username` (the openid web client, § 4.6). **S18** an edge container reaches Caddy via `host-gateway` and gets the
   public issuer. **S19** `storage user identifiers add` on an existing identifier (repeat-safe, mismatch detectable).
   **S20** the pinned image's config-validation command.
 - **S21** Authelia password reset against the pinned lldap rootless release. **S22** the deploy's lldap step (groups and the
-  `sso_sub` attribute) is idempotent and never touches people, memberships or passwords; the `sub` reconcile handles all
+  `sso-sub` attribute) is idempotent and never touches people, memberships or passwords; the `sub` reconcile handles all
   three cases. **S23** lldap RSS under N parallel binds. **S24** refresh fails once a person leaves `sso_people` or their
   group. **S25** regulation bans by normalised username (case and email variants share one counter).
 - **S26** a container on two compose networks with per-address listener binds: the `127.0.0.1` publish of one port still
@@ -294,7 +334,34 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
   in P0 with a generic two-network container. Fallback if the publish misses: drop it, and point Caddy's
   `reverse_proxy` and Gatus at the fixed `commsgun` address, as the SMTP probe already does.
 
-(S6, S11, S13 and S14 were retired with superseded designs.)
+- **S27** (§ 4.11) Authelia's bearer authz with a PAR + `form_post` + explicit-consent public client, for a JWT and an
+  opaque access token: allowed at first, refused right after a group or `sso_people` removal, allowed again after re-adding,
+  refused after revocation; introspection's `active` alongside. Its Claude.ai side (can the connector complete PAR,
+  `form_post` and explicit consent) was to run with S5 in P1; no longer needed, A was rejected (§ 4.11).
+- **S26b** pinning a subnet on an existing compose network with the pinned Compose, non-interactively: recreated in place,
+  or refused (then a new network name and a one-off removal of the old one).
+
+(S6, S9, S11, S13 and S14 were retired: S9 and the client-credentials check with the unused clients, 2026-11-27.)
+
+**P0 record (2026-11-27, edge droplet, Compose 5.5.1, Authelia 4.39.28, lldap v0.6.3 rootless, mailpit v1.33.1).**
+
+| Item | Observed | Consequence |
+|---|---|---|
+| S20 | `validate-config` exit 0, one warning: custom scope `xstockstrat.read` outside the standard scopes | § 4.8: CI passes on exit 0 with warnings |
+| S22 | groups created once, `changes: none` on the second run, people and memberships unchanged; `sso_sub` refused ("Valid characters: a-z, A-Z, 0-9, and dash") | the attribute is `sso-sub` (§ 4.7) |
+| S10 | `auth.spike.test`: issuer and JWKS on the same origin, no `end_session_endpoint`; `auth2.spike.test` (same cookie domain and certificate): `400 Bad Request` | one portal name (decision 3); `Host` passed through (§ 4.2) |
+| S12 | container ID and start time unchanged after a `configs.content` edit; the container still saw `probe-v1` | decision 20 and § 4.8: A |
+| S26 | publish reaches the net_a-bound listener; host reaches net_b's address; a net_b-only peer reaches net_b's listener, is refused on net_a's port at net_b's address, cannot reach net_a | § 9 as designed; no fallback |
+| S26b | unpinned network got `172.22.0.0/16`; pinning `172.31.252.0/28` and `up -d </dev/null` recreated it in place, exit 0, container recreated | P5 recreates `commsgun` in place (§ 5) |
+| S21 + S16 (Authelia side) | reset mail from `auth@` over STARTTLS with the spike CA; new password set through lldap; login 200 | full S16 in P5 |
+| S2 / S3 | access token `RS256`, `typ` `at+jwt`, `kid`; `scp` array; `aud` from `requested_audience_mode: implicit`; 3600 s; refresh token; `iss` in the authorization response; custom scope granted; `offline_access` forces the consent page | webhooks-mcp reads `scp`; S5 expects a consent step |
+| S17 | ID token has `auth_time`, `email`, `preferred_username`; `prompt=login` → `require_login: true`, no code without re-authentication; after `/api/firstfactor/reauthenticate`: `max_age=0` still refused, `max_age=1` and `prompt=login` alone issue a code with a fresh `auth_time` | § 3: links send `max_age=1` |
+| S4 / S24 | refresh 200 after leaving the app group; 500 (`The error is unrecognizable`) after leaving `sso_people` | § 4.11 C holds; a removed connector sees a server error, not `invalid_grant` |
+| S25 | `Alice`/`ALICE`/`alice` share one counter; ban listed as `alice` for 5 min; `bans user revoke` works | `sso.md` § 4 unban as written |
+| S27 | JWT access token: authz 401 always; opaque: 200, 403 at once after the group removal, 401 at once after `sso_people`, 401 after revocation, ~185 ms per check; introspection `active` stays true until revocation | § 4.11: A rejected, C |
+| S19 | first add exit 0; the same pair again: exit 1 (`UNIQUE … identifier`); another UUID for the same user: exit 1 (`UNIQUE … username`), nothing overwritten; export lists every pinned `sub` | § 4.7: read the export first |
+| S8 / S23 | Authelia 60 → 68 MiB, lldap 3 → 54 MiB under 20 parallel logins (6.2 s, all 200) | § 6: 128m each (owner) |
+| Guardrails | `guard`: no production restart (before and after teardown); `down -v`: 0 containers, 0 volumes left; available memory 1221 → 1200 MiB | — |
 
 **Where the spike runs (owner, 2026-11-23): the edge droplet itself.** It is production, so:
 - a separate compose project (`authelia-spike`) with its own networks and volumes, ports bound to `127.0.0.1` only, test
@@ -308,18 +375,13 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 ## 12. Open
 
-- `TODO(provide)`: the fixed IPv4 subnets of `commsgun` and `authelia-smtp`, and commsgun-api's address on each (§ 5).
-- `TODO(provide)`: the headless consumer of `webhooks-mcp-automation` (`sso.md` § 6b).
-- **Owner call before P4:** with scope-only webhooks-mcp and S4 as observed, removing only the `webhooks-mcp` group never
-  ends a connector's access (its 30-day refresh token rotates). Accept that (revoking webhooks-mcp alone means offboarding
-  the person, S24), or change the webhooks-mcp clients' refresh lifetime or `offline_access`.
 - The admin creates the four people in lldap's UI during P1.
 
 ## 13. Handoff: work per repo
 
 | Repo | Work | Must honour |
 |---|---|---|
-| homelab-edge | P0 spike; P1 (§ 4, § 6); per-app edge wiring (§ 5); `sso.md`, `recovery.md`, `alerts.md`, `onboard-service.md`, `secrets/README.md`, `versions.md`; `commsgun.md` and `happybabytracker.md` change **before the bump PR that brings each app's first SSO-capable image is merged**: that image imports the env admin on first start, so SOPS rotation of the admin password stops working and moves to `admin reset-password`, and commsgun's session-secret rotation (`commsgun.md`) no longer signs everyone out | Rules 1–8, EDGE-01…14 |
+| homelab-edge | P0 spike; P1 (§ 4, § 6); per-app edge wiring (§ 5); `sso.md`, `recovery.md`, `alerts.md`, `onboard-service.md`, `secrets/README.md`, `versions.md`; `commsgun.md` and `happybabytracker.md` change **before the bump PR that brings each app's first SSO-capable image is merged**: that image imports the env admin on first start, so SOPS rotation of the admin password stops working and moves to `admin reset-password`, commsgun's session-secret rotation (`commsgun.md`) no longer signs everyone out, and rotating happybabytracker's `INTERNAL_API_TOKEN` no longer ends admin sessions (`happybabytracker.md` § 4 step 3; the admin fingerprint is gone) | Rules 1–8, EDGE-01…14 |
 | xstockstrat | Amend 345 per § 5, re-run `/sdd-review`, then `/sdd-execute` | 345 `design.md`, `debate.md` (D-6, D-73, D-74, D-96, D-97), `merge-order.md` |
 | webhooks-mcp | § 5 row; spec § 6 amendment | `docs/contracts.md` C1, C4, C8; WM-08 |
 | commsgun | § 3 contract, § 5 row (incl. the SMTP listener) | K1–K7, U1–U4, CG-01…09 |
