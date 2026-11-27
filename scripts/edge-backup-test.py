@@ -276,6 +276,15 @@ class Snapshot(unittest.TestCase):
         self.appdata = self.base / "appdata"  # the stand-in app's own /data, as a container mount gives it
         self.appdata.mkdir(mode=0o755)
         self.app([sys.executable, "-I", "-c", CREATE])
+        # A second database whose file name differs from its dir, so one run calls snapshot_as_app twice.
+        self.auth = self.volumes / f"edge_{DATABASES[1][0]}/_data"
+        self.auth.mkdir(parents=True)
+        os.chmod(self.auth.parent, 0o701)
+        subprocess.run(["sqlite3", str(self.auth / DATABASES[1][1]), "CREATE TABLE s (k TEXT); INSERT INTO s VALUES ('a');"],
+                       check=True)
+        for f in (self.auth, self.auth / DATABASES[1][1]):
+            os.chown(f, APP_UID, APP_UID)
+        os.chmod(self.auth, 0o700)
         self.tmp = self.base / "tmp"
         self.out = self.base / "out"
         self.tmp.mkdir(mode=0o711)
@@ -298,8 +307,8 @@ class Snapshot(unittest.TestCase):
                 str(self.data), str(self.appdata)] + cmd
         return subprocess.Popen(argv, **kw) if popen else subprocess.run(argv, check=True, **kw)
 
-    def owners(self):
-        return {p.name: (p.stat().st_uid, p.stat().st_gid) for p in self.data.iterdir()}
+    def owners(self, data=None):
+        return {p.name: (p.stat().st_uid, p.stat().st_gid) for p in (data or self.data).iterdir()}
 
     def run_snapshot(self):
         a, b = snapshot_sections()
@@ -307,8 +316,9 @@ class Snapshot(unittest.TestCase):
         script = "\n".join([
             "#!/usr/bin/env bash", "set -euo pipefail", "umask 077", f"vol_root={self.volumes}", a,
             f'stat -c "%u %g %a" "$snap" > {self.out}/snapdir', f'echo "$mnt" > {self.out}/mnt', b,
-            "snapshot_as_app " + " ".join(DATABASES[0]),
-            f'cp -p "$work/happybabytracker/happybabytracker.db" {self.out}/', ""])
+            "snapshot_as_app " + " ".join(DATABASES[0]), "snapshot_as_app " + " ".join(DATABASES[1]),
+            f'cp -p "$work/happybabytracker/happybabytracker.db" {self.out}/',
+            f'cp -p "$work/{DATABASES[1][2]}/{DATABASES[1][1]}" {self.out}/', ""])
         (self.base / "snapshot.sh").write_text(script)
         r = subprocess.run(["bash", str(self.base / "snapshot.sh")], capture_output=True, text=True,
                            env={**os.environ, "TMPDIR": str(self.tmp), "PATH": self.path})
@@ -321,9 +331,14 @@ class Snapshot(unittest.TestCase):
         cap = self.caplog.read_text().splitlines()
         self.caplog.write_text("")
         print(f"sqlite3 .backup ran as: {cap}")
-        self.assertEqual(cap, [f"uid={APP_UID} CapEff=0000000000000000"])
+        self.assertEqual(cap, [f"uid={APP_UID} CapEff=0000000000000000"] * 2)
         self.assertEqual((self.out / "snapdir").read_text().split(), [str(APP_UID), str(APP_UID), "700"])
         self.assertEqual(list(self.tmp.iterdir()), [], "both temp dirs are removed on exit")
+        auth = self.out / DATABASES[1][1]
+        ok = subprocess.run(["sqlite3", str(auth), "PRAGMA integrity_check;"], capture_output=True, text=True, check=True)
+        self.assertEqual(ok.stdout.strip(), "ok")
+        auth.unlink()
+        self.assertEqual(self.owners(self.auth), {DATABASES[1][1]: (APP_UID, APP_UID)})
         copy = self.out / "happybabytracker.db"
         ok = subprocess.run(["sqlite3", str(copy), "PRAGMA integrity_check;"], capture_output=True, text=True, check=True)
         self.assertEqual(ok.stdout.strip(), "ok")
