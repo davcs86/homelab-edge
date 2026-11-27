@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runs the pinned Authelia image against the rendered configuration (S20, B1) and the generated client hashes (S6), and
-starts the rendered authelia and lldap services hardened on fresh volumes (Review Focus 1).
+starts the rendered authelia and lldap services hardened on fresh volumes (Review Focus 1), in the deploy's order: lldap,
+`sso_sync.py ensure`, `sso_sync.py reconcile`, then Authelia; then runs the sync against the live pair (Task 6 Step 4).
 SSO_STACK_TEST_REQUIRE_DOCKER=1 turns a skip for want of Docker into a failure."""
 import base64
 import importlib.util
@@ -13,7 +14,9 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 import yaml
@@ -21,6 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import init_secrets  # noqa: E402
+import sso_sync  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("authelia_config_test", ROOT / "scripts/authelia-config-test.py")
 cfg = importlib.util.module_from_spec(_spec)
@@ -99,10 +103,13 @@ SERVICES = ("lldap", "authelia")
 HEALTH_URLS = {"authelia": f"http://127.0.0.1:{cfg.V['authelia_port']}/api/health",
                "lldap": f"http://127.0.0.1:{cfg.V['lldap_ui_port']}/health"}
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+LLDAP_URL = f"http://127.0.0.1:{cfg.V['lldap_ui_port']}"
 
 
 def stack_test_secrets():
     s = {k: secrets.token_urlsafe(48) for k in cfg.PLAIN_KEYS}
+    for k in ("lldap_admin_password", "authelia_ldap_bind_password"):  # S6: the --opt=value form is what makes these work
+        s[k] = "-" + s[k][1:]
     s["authelia_oidc_jwks_key"] = init_secrets.rsa_private_key_pem()
     return s | init_secrets.oidc_client_pairs()
 
@@ -135,11 +142,14 @@ class HardenedStart(unittest.TestCase):
             data = cls.docker("volume", "inspect", "--format", "{{.Mountpoint}}", f"{PROJECT}_{name}-data").stdout.strip()
             subprocess.run(["sudo", "-n", "chown", "10001:10001", data], check=True)
             subprocess.run(["sudo", "-n", "chmod", "0700", data], check=True)
+        cls.secrets = s
         start = time.monotonic()
-        # Authelia's startup check binds as its account and exits on failure: lldap and that account come first (Task 6).
+        # Authelia's startup check binds as its account and exits on failure: lldap, ensure and reconcile come first.
+        cls.ensure_first = cls.reconcile_first = None
         up = cls.compose("up", "-d", "--wait", "--wait-timeout", "120", "lldap", check=False)
         if up.returncode == 0:
-            cls.create_bind_user(s)
+            cls.ensure_first = cls.sync("ensure")
+            cls.reconcile_first = cls.sync("reconcile")
             up = cls.compose("up", "-d", "--wait", "--wait-timeout", "120", check=False)
         cls.up_seconds = time.monotonic() - start
         cls.up = up
@@ -148,22 +158,20 @@ class HardenedStart(unittest.TestCase):
                   file=sys.stderr)
 
     @classmethod
-    def create_bind_user(cls, s):
-        base = HEALTH_URLS["lldap"].rsplit("/", 1)[0]
-        login = urllib.request.Request(f"{base}/auth/simple/login", method="POST", headers={"Content-Type": "application/json"},
-                                       data=json.dumps({"username": "admin", "password": s["lldap_admin_password"]}).encode())
-        with NO_PROXY.open(login, timeout=10) as r:
-            token = json.load(r)["token"]
-        user = {"id": cfg.V["authelia_ldap_bind_user"], "email": cfg.V["authelia_ldap_bind_email"]}
-        query = {"query": "mutation($user: CreateUserInput!) { createUser(user: $user) { id } }", "variables": {"user": user}}
-        gql = urllib.request.Request(f"{base}/api/graphql", method="POST", data=json.dumps(query).encode(),
-                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-        with NO_PROXY.open(gql, timeout=10) as r:
-            body = json.load(r)
-        assert "errors" not in body, body
-        cls.compose("exec", "-T", "lldap", "/app/lldap_set_password", "--base-url", "http://localhost:17170",
-                    "--admin-username", "admin", f"--admin-password={s['lldap_admin_password']}",
-                    "--username", user["id"], f"--password={s['authelia_ldap_bind_password']}")
+    def sync(cls, cmd):
+        """The deploy's call: the real script, its secrets in the environment only."""
+        args = [sys.executable, str(ROOT / "scripts/sso_sync.py"), cmd, "--lldap-url", LLDAP_URL,
+                "--compose", str(cls.dir / "compose.yml")]
+        if cmd == "ensure":
+            args += ["--groups", *cfg.V["sso_groups"], "--bind-user", cfg.V["authelia_ldap_bind_user"],
+                     "--bind-email", cfg.V["authelia_ldap_bind_email"]]
+        env = {**os.environ, "LLDAP_ADMIN_PASSWORD": cls.secrets["lldap_admin_password"],
+               "LLDAP_BIND_PASSWORD": cls.secrets["authelia_ldap_bind_password"]}
+        return subprocess.run(args, capture_output=True, text=True, env=env, timeout=600)
+
+    @classmethod
+    def lldap(cls):
+        return sso_sync.Lldap(LLDAP_URL, cls.secrets["lldap_admin_password"])
 
     @classmethod
     def tearDownClass(cls):
@@ -217,6 +225,116 @@ class HardenedStart(unittest.TestCase):
         print(f"healthy after restart: {self.wait_healthy():.0f}s", file=sys.stderr)
         for name in SERVICES:
             self.assertEqual(self.get(HEALTH_URLS[name]), 200, name)
+
+
+    def assertSummary(self, r, want, rc=0):
+        self.assertEqual(r.returncode, rc, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout), want)
+        for text in (r.stdout, r.stderr):  # N10: usernames and counts only
+            self.assertNotRegex(text, r"[0-9a-f]{8}-[0-9a-f]{4}-")
+            self.assertNotIn("@", text)
+            for v in self.secrets.values():
+                self.assertNotIn(v, text)
+
+    def people_state(self):
+        bind = cfg.V["authelia_ldap_bind_user"]
+        st = self.lldap().state()
+        users = [u for u in st["users"] if u["id"] != bind]
+        bind_groups = [u["groups"] for u in st["users"] if u["id"] == bind]
+        return st["groups"], users, bind_groups, st["schema"]
+
+    def add_person(self, uid, groups):
+        ld = self.lldap()
+        ld.gql("mutation($u: CreateUserInput!) { createUser(user: $u) { id } }", {"u": {"id": uid, "email": f"{uid}@example.test"}})
+        ids = {g["displayName"]: g["id"] for g in ld.state()["groups"]}
+        for g in groups:
+            ld.gql("mutation($u: String!, $g: Int!) { addUserToGroup(userId: $u, groupId: $g) { ok } }", {"u": uid, "g": ids[g]})
+        password = "-" + secrets.token_urlsafe(24)
+        self.set_password(uid, password)
+        return password
+
+    def set_password(self, uid, password):
+        self.compose("exec", "-T", "lldap", "/app/lldap_set_password", "--base-url", "http://localhost:17170", "--admin-username",
+                     "admin", f"--admin-password={self.secrets['lldap_admin_password']}", "--username", uid, f"--password={password}")
+
+    def sub_in_lldap(self, uid):
+        u = next(u for u in self.lldap().state()["users"] if u["id"] == uid)
+        return next((a["value"][0] for a in u["attributes"] if a["name"] == sso_sync.SUB_ATTRIBUTE), None)
+
+    def set_sub_in_lldap(self, uid, sub):
+        self.lldap().gql("mutation($u: UpdateUserInput!) { updateUser(user: $u) { ok } }",
+                         {"u": {"id": uid, "insertAttributes": [{"name": sso_sync.SUB_ATTRIBUTE, "value": [sub]}]}})
+
+    def export(self):
+        return sso_sync.authelia_export(str(self.dir / "compose.yml"))
+
+    def first_factor(self, username, password):
+        req = urllib.request.Request(f"http://127.0.0.1:{cfg.V['authelia_port']}/api/firstfactor", method="POST",
+                                     data=json.dumps({"username": username, "password": password, "keepMeLoggedIn": False}).encode(),
+                                     headers={"Content-Type": "application/json", "Host": cfg.AUTH, "X-Forwarded-Proto": "https"})
+        try:
+            with NO_PROXY.open(req, timeout=10) as r:
+                return r.status, json.load(r).get("status")
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e).get("status")
+
+    def wipe_authelia_data(self):
+        self.compose("down")
+        self.docker("volume", "rm", f"{PROJECT}_authelia-data")
+        self.compose("create", "--no-recreate", "lldap", "authelia")
+        data = self.docker("volume", "inspect", "--format", "{{.Mountpoint}}", f"{PROJECT}_authelia-data").stdout.strip()
+        subprocess.run(["sudo", "-n", "chown", "10001:10001", data], check=True)
+        subprocess.run(["sudo", "-n", "chmod", "0700", data], check=True)
+        self.compose("up", "-d", "--wait", "--wait-timeout", "120", "lldap")
+
+    def test_the_sync_ensures_lldap_and_reconciles_each_sub_on_the_live_pair(self):
+        self.assertEqual(self.up.returncode, 0, self.up.stdout + self.up.stderr)
+        self.assertSummary(self.ensure_first, {"created_groups": cfg.V["sso_groups"], "created_attribute": True,
+                                               "created_bind_user": True})
+        self.assertSummary(self.reconcile_first, {"copied_to_lldap": [], "added_to_authelia": [], "mismatched": [], "unchanged": 0})
+        person_pw = self.add_person("t6person", ["sso_people"])
+        outsider_pw = self.add_person("t6outsider", ["commsgun"])
+
+        before = self.people_state()  # S22: a second ensure changes no person, membership, group or attribute
+        self.assertSummary(self.sync("ensure"), {"created_groups": [], "created_attribute": False, "created_bind_user": False})
+        self.assertEqual(self.people_state(), before)
+        print("\nensure twice: second run changed nothing", file=sys.stderr)
+
+        refused = {u: self.first_factor(u, pw) for u, pw in (
+            ("t6outsider", outsider_pw), ("admin", self.secrets["lldap_admin_password"]),
+            (cfg.V["authelia_ldap_bind_user"], self.secrets["authelia_ldap_bind_password"]))}
+        accepted = self.first_factor("t6person", person_pw)  # the control: the same call succeeds for sso_people
+        print(f"firstfactor: refused {refused}, sso_people member {accepted}", file=sys.stderr)
+        self.assertEqual(accepted, (200, "OK"))
+        for u, (code, status) in refused.items():
+            self.assertEqual((code, status), (401, "KO"), u)
+
+        # Case 1: a first login minted the sub in Authelia; lldap has none -> copied.
+        sub = str(uuid.uuid4())
+        add = self.compose("run", "--rm", "--no-deps", "-T", "authelia", "authelia", "storage", "user", "identifiers", "add",
+                           "t6person", "--identifier", sub, "--service", "openid", "--config", "/config/configuration.yml",
+                           check=False)
+        self.assertEqual(add.returncode, 0, "identifiers add failed")
+        self.assertSummary(self.sync("reconcile"), {"copied_to_lldap": ["t6person"], "added_to_authelia": [], "mismatched": [],
+                                                    "unchanged": 0})
+        self.assertEqual(self.sub_in_lldap("t6person"), sub)
+        print("reconcile case 1: copied to lldap, read back equal", file=sys.stderr)
+
+        # Case 2: Authelia's database lost -> added back from lldap, the same sub.
+        self.wipe_authelia_data()
+        self.assertSummary(self.sync("reconcile"), {"copied_to_lldap": [], "added_to_authelia": ["t6person"], "mismatched": [],
+                                                    "unchanged": 0})
+        self.assertEqual(self.export(), {"t6person": sub})
+        self.compose("up", "-d", "--wait", "--wait-timeout", "120")
+        print("reconcile case 2: added back to Authelia, export shows the same sub", file=sys.stderr)
+
+        # Case 3: both present and different -> exit 2, neither store changes.
+        other = str(uuid.uuid4())
+        self.set_sub_in_lldap("t6person", other)
+        self.assertSummary(self.sync("reconcile"), {"copied_to_lldap": [], "added_to_authelia": [], "mismatched": ["t6person"],
+                                                    "unchanged": 0}, rc=2)
+        self.assertEqual((self.export(), self.sub_in_lldap("t6person")), ({"t6person": sub}, other))
+        print("reconcile case 3: mismatch refused with exit 2, both stores unchanged", file=sys.stderr)
 
 
 if __name__ == "__main__":

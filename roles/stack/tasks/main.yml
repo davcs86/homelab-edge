@@ -415,6 +415,30 @@
     state: absent
 
 # ---------- Compose ----------
+- name: Images of the existing SSO containers
+  ansible.builtin.shell: |
+    set -o pipefail
+    for s in authelia lldap; do
+      id=$(docker compose -f {{ edge_root }}/compose.yml ps -aq "$s")
+      [ -z "$id" ] || echo "$s $(docker inspect --format '{{ '{{' }}.Config.Image{{ '}}' }}' "$id")"
+    done
+  args:
+    executable: /bin/bash
+  register: _sso_images
+  changed_when: false
+
+# Both migrate their databases on start, and rollback is a restore.
+- name: Back up, then stop Authelia, before an Authelia or lldap digest change
+  when: _sso_images.stdout_lines | reject('in', ['authelia ' ~ authelia_image, 'lldap ' ~ lldap_image]) | list | length > 0
+  block:
+    - name: Back up before the digest change  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl start edge-backup.service
+      changed_when: true
+
+    - name: Stop Authelia before the digest change
+      ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml stop authelia
+      changed_when: true
+
 # A fresh named volume is root-owned; Authelia and lldap run as uid 10001 on a read-only root.
 - name: Create the SSO containers and their volumes
   ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml create --no-recreate lldap authelia
@@ -429,6 +453,65 @@
     mode: "0700"
   loop: [authelia-data, lldap-data]
 
+- name: PyYAML for the SSO sync (Ubuntu archive)
+  ansible.builtin.apt:
+    name: python3-yaml
+    state: present
+
+# Authelia exits at start until its bind account exists.
+- name: Start lldap first
+  ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml up -d --wait lldap
+  changed_when: true
+
+# On a failing task no_log hides everything, so the script never fails here: the summary prints, then the play stops.
+- name: Ensure lldap's SSO groups, its sso-sub attribute and Authelia's bind account
+  ansible.builtin.script:
+    cmd: >-
+      {{ playbook_dir }}/../scripts/sso_sync.py ensure --lldap-url http://127.0.0.1:{{ lldap_ui_port }}
+      --compose {{ edge_root }}/compose.yml --groups {{ sso_groups | join(' ') }}
+      --bind-user {{ authelia_ldap_bind_user }} --bind-email {{ authelia_ldap_bind_email }}
+    executable: python3
+  environment:
+    LLDAP_ADMIN_PASSWORD: "{{ edge_secrets.lldap_admin_password }}"
+    LLDAP_BIND_PASSWORD: "{{ edge_secrets.authelia_ldap_bind_password }}"
+  register: _sso_ensure
+  changed_when: true
+  failed_when: false
+  no_log: true
+
+- name: Lldap ensure summary
+  ansible.builtin.debug:
+    msg: "{{ _sso_ensure.stdout_lines | default([]) + _sso_ensure.stderr_lines | default([]) }}"
+
+- name: Stop on a failed lldap ensure
+  ansible.builtin.fail:
+    msg: "sso_sync.py ensure exited {{ _sso_ensure.rc | default('without running') }}: see the summary above"
+  when: _sso_ensure.rc | default(1) != 0
+
+- name: Reconcile each sub between Authelia and lldap
+  ansible.builtin.script:
+    cmd: >-
+      {{ playbook_dir }}/../scripts/sso_sync.py reconcile --lldap-url http://127.0.0.1:{{ lldap_ui_port }}
+      --compose {{ edge_root }}/compose.yml
+    executable: python3
+  environment:
+    LLDAP_ADMIN_PASSWORD: "{{ edge_secrets.lldap_admin_password }}"
+  register: _sso_reconcile
+  changed_when: >-
+    _sso_reconcile.rc | default(1) == 0 and
+    ((_sso_reconcile.stdout | from_json).copied_to_lldap + (_sso_reconcile.stdout | from_json).added_to_authelia) | length > 0
+  failed_when: false
+  no_log: true
+
+- name: Sub reconcile summary
+  ansible.builtin.debug:
+    msg: "{{ _sso_reconcile.stdout_lines | default([]) + _sso_reconcile.stderr_lines | default([]) }}"
+
+- name: Stop on a failed sub reconcile
+  ansible.builtin.fail:
+    msg: "sso_sync.py reconcile exited {{ _sso_reconcile.rc | default('without running') }}: see the summary above"
+  when: _sso_reconcile.rc | default(1) != 0
+
 - name: Start the stack
   community.docker.docker_compose_v2:
     project_src: "{{ edge_root }}"
@@ -440,6 +523,38 @@
 
 - name: Flush handlers so config changes apply before verification
   ansible.builtin.meta: flush_handlers
+
+# Authelia reads a bind-mounted file, which compose does not track; a failed play must not strand the change.
+- name: Authelia configuration, on disk and as applied
+  ansible.builtin.shell: |
+    set -o pipefail
+    sha256sum {{ edge_root }}/authelia/config/configuration.yml | cut -d' ' -f1
+    cat {{ edge_root }}/authelia/config.applied.sha256 2>/dev/null || echo none
+  args:
+    executable: /bin/bash
+  register: _authelia_config_hash
+  changed_when: false
+
+- name: Restart Authelia on a configuration change
+  when: _authelia_config_hash.stdout_lines[0] != _authelia_config_hash.stdout_lines[1]
+  block:
+    - name: Restart Authelia
+      ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml restart authelia
+      changed_when: true
+
+    - name: Authelia answers after the restart  # noqa: command-instead-of-module
+      ansible.builtin.command: curl -fsS --max-time 5 http://127.0.0.1:{{ authelia_port }}/api/health
+      register: _authelia_health
+      until: _authelia_health.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Record the applied Authelia configuration
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/authelia/config.applied.sha256"
+        content: "{{ _authelia_config_hash.stdout_lines[0] }}\n"
+        mode: "0644"
 
 - name: Does the running Caddy read the Caddyfile on disk?
   ansible.builtin.shell: |
@@ -563,6 +678,20 @@
       ansible.builtin.fail:
         msg: "{{ (_certs.stdout_lines | default(_cert_probe.stdout_lines | default(['certificate check did not run'])))
                  + _egress.stdout_lines + _caddy_acme_log.stdout_lines }}"
+
+- name: The portal answers on its public name  # noqa: command-instead-of-module
+  ansible.builtin.command: >-
+    curl -fsS --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors
+    --resolve {{ authelia_public_hostname }}:443:127.0.0.1 https://{{ authelia_public_hostname }}/api/health
+  changed_when: false
+
+- name: The portal's discovery names its public issuer exactly  # noqa: command-instead-of-module
+  ansible.builtin.command: >-
+    curl -fsS --max-time 10 --retry 6 --retry-delay 5 --retry-all-errors
+    --resolve {{ authelia_public_hostname }}:443:127.0.0.1 https://{{ authelia_public_hostname }}/.well-known/openid-configuration
+  register: _authelia_discovery
+  changed_when: false
+  failed_when: _authelia_discovery.rc != 0 or (_authelia_discovery.stdout | from_json).issuer != 'https://' ~ authelia_public_hostname
 
 - name: Show health
   ansible.builtin.debug:

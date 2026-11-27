@@ -57,6 +57,7 @@ V = load_vars()
 ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
 ENV.filters["b64encode"] = lambda s: base64.b64encode(s.encode()).decode()
 ENV.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None  # Ansible's `match` test
+ENV.filters["from_json"] = json.loads
 CLIENT_KEYS = [c["key"] for c in V["authelia_oidc_clients"] if "key" in c]
 
 
@@ -472,6 +473,143 @@ class StackEnvFiles(unittest.TestCase):
             self.assertEqual(cfg["networks"]["authelia"].get("internal", False), False)
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+def flat(tasks):
+    """Every task in play order, blocks expanded."""
+    for t in tasks:
+        yield t
+        yield from flat(t.get("block", []))
+
+
+FLAT = list(flat(TASKS))
+ORDER = [t.get("name") for t in FLAT]
+YAML_TASK, IMAGES_TASK = "PyYAML for the SSO sync (Ubuntu archive)", "Images of the existing SSO containers"
+DIGEST_BLOCK = "Back up, then stop Authelia, before an Authelia or lldap digest change"
+BACKUP_TASK, STOP_TASK = "Back up before the digest change", "Stop Authelia before the digest change"
+LLDAP_UP_TASK = "Start lldap first"
+SYNC = {"ensure": ("Ensure lldap's SSO groups, its sso-sub attribute and Authelia's bind account", "Lldap ensure summary",
+                   "Stop on a failed lldap ensure", "_sso_ensure"),
+        "reconcile": ("Reconcile each sub between Authelia and lldap", "Sub reconcile summary", "Stop on a failed sub reconcile",
+                      "_sso_reconcile")}
+HASH_TASK, RESTART_BLOCK = "Authelia configuration, on disk and as applied", "Restart Authelia on a configuration change"
+START, FLUSH = "Start the stack", "Flush handlers so config changes apply before verification"
+COMPOSE_CMD = "docker compose -f {{ edge_root }}/compose.yml "
+
+
+def before(a, b):
+    return ORDER.index(a) < ORDER.index(b)
+
+
+def when_holds(task, **facts):
+    return all(ENV.compile_expression(w)(**V, **facts) for w in ([task["when"]] if isinstance(task["when"], str) else task["when"]))
+
+
+class DeployOrder(unittest.TestCase):
+    def test_python3_yaml_is_installed_before_the_sync(self):
+        apt = find_task(TASKS, YAML_TASK)["ansible.builtin.apt"]
+        self.assertEqual(apt, {"name": "python3-yaml", "state": "present"})  # the Ubuntu archive, as age (N4)
+        self.assertTrue(before(YAML_TASK, SYNC["ensure"][0]))
+        rows = [r for r in (ROOT / "docs/versions.md").read_text().splitlines() if r.startswith("| python3-yaml (on edge)")]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("Ubuntu archive", rows[0])
+
+    def test_a_digest_change_backs_up_then_stops_authelia_before_the_sync(self):
+        images = find_task(TASKS, IMAGES_TASK)
+        script = images["ansible.builtin.shell"]
+        self.assertIn("ps -aq", script)
+        self.assertIn(".Config.Image", script)
+        self.assertEqual((images["register"], images["changed_when"]), ("_sso_images", False))
+        block = find_task(TASKS, DIGEST_BLOCK)
+        self.assertEqual([t["name"] for t in block["block"]], [BACKUP_TASK, STOP_TASK])
+        self.assertEqual(find_task(TASKS, BACKUP_TASK)["ansible.builtin.command"], "systemctl start edge-backup.service")
+        stop = find_task(TASKS, STOP_TASK)
+        self.assertEqual(stop["ansible.builtin.command"], COMPOSE_CMD + "stop authelia")
+        for t in (find_task(TASKS, BACKUP_TASK), stop):
+            self.assertIs(t["changed_when"], True)  # EDGE-03
+        for later in (LLDAP_UP_TASK, SYNC["ensure"][0], SYNC["reconcile"][0], START):
+            self.assertTrue(before(IMAGES_TASK, DIGEST_BLOCK) and before(STOP_TASK, later), later)
+        a, ld = "authelia " + V["authelia_image"], "lldap " + V["lldap_image"]
+        old_a, old_l = a.replace("@sha256:bd", "@sha256:00"), ld.replace("@sha256:ba", "@sha256:00")
+        cases = {(): False, (a, ld): False, (a,): False, (ld,): False,  # fresh volume, or neither digest changed (Q7)
+                 (old_a, ld): True, (a, old_l): True, (old_l,): True, (old_a,): True}
+        for lines, runs in cases.items():
+            self.assertIs(when_holds(block, _sso_images={"stdout_lines": list(lines)}), runs, lines)
+
+    def test_lldap_is_up_and_synced_before_the_stack_starts(self):
+        up = find_task(TASKS, LLDAP_UP_TASK)
+        self.assertEqual(up["ansible.builtin.command"], COMPOSE_CMD + "up -d --wait lldap")
+        self.assertIs(up["changed_when"], True)  # N9
+        self.assertTrue(before(OWNER_TASK, LLDAP_UP_TASK))
+        steps = [LLDAP_UP_TASK]
+        for cmd, (run, summary, stop, reg) in SYNC.items():
+            steps += [run, summary, stop]
+            t = find_task(TASKS, run)
+            self.assertEqual(t["ansible.builtin.script"]["executable"], "python3")
+            argv = ENV.from_string(t["ansible.builtin.script"]["cmd"]).render(**V, playbook_dir="PB").split()
+            self.assertEqual(argv[:2], ["PB/../scripts/sso_sync.py", cmd])
+            self.assertIn("{{ lldap_ui_port }}", t["ansible.builtin.script"]["cmd"])
+            opts = {"--lldap-url": ["http://127.0.0.1:17170"], "--compose": [V["edge_root"] + "/compose.yml"]}
+            want = {"LLDAP_ADMIN_PASSWORD": "{{ edge_secrets.lldap_admin_password }}"}
+            if cmd == "ensure":
+                want["LLDAP_BIND_PASSWORD"] = "{{ edge_secrets.authelia_ldap_bind_password }}"
+                opts |= {"--groups": V["sso_groups"], "--bind-user": [V["authelia_ldap_bind_user"]],
+                         "--bind-email": [V["authelia_ldap_bind_email"]]}
+            got, key = {}, None
+            for a in argv[2:]:
+                key = a if a.startswith("--") else key
+                got.setdefault(key, []) if a.startswith("--") else got[key].append(a)
+            self.assertEqual(got, opts)
+            self.assertEqual(t["environment"], want)  # EDGE-08 literal reads
+            self.assertEqual((t["no_log"], t["failed_when"], t["register"]), (True, False, reg))
+            # no_log censors a failing task completely (ansible-core 2.21.x): print the summary, then fail.
+            dbg = find_task(TASKS, summary)
+            self.assertIn(f"{reg}.stdout_lines", dbg["ansible.builtin.debug"]["msg"])
+            self.assertNotIn("no_log", dbg)
+            fail = find_task(TASKS, stop)
+            self.assertIn("ansible.builtin.fail", fail)
+            self.assertEqual(fail["when"], f"{reg}.rc | default(1) != 0")
+            self.assertNotIn("edge_secrets", yaml.safe_dump([dbg, fail]))
+        steps.append(START)
+        self.assertEqual([n for n in ORDER if n in steps], steps)
+        self.assertEqual(ORDER.index(START) - ORDER.index(LLDAP_UP_TASK), len(steps) - 1)
+
+    def test_the_config_restart_is_an_unconditional_hash_compare(self):
+        self.assertTrue(before(START, FLUSH) and before(FLUSH, HASH_TASK))
+        h = find_task(TASKS, HASH_TASK)
+        self.assertNotIn("when", h)
+        self.assertIn("sha256sum {{ edge_root }}/authelia/config/configuration.yml", h["ansible.builtin.shell"])
+        self.assertIn("{{ edge_root }}/authelia/config.applied.sha256", h["ansible.builtin.shell"])
+        block = find_task(TASKS, RESTART_BLOCK)
+        self.assertTrue(before(HASH_TASK, RESTART_BLOCK))
+        self.assertIs(when_holds(block, _authelia_config_hash={"stdout_lines": ["a" * 64, "none"]}), True)
+        self.assertIs(when_holds(block, _authelia_config_hash={"stdout_lines": ["a" * 64, "b" * 64]}), True)
+        self.assertIs(when_holds(block, _authelia_config_hash={"stdout_lines": ["a" * 64, "a" * 64]}), False)
+        restart, wait, record = block["block"]
+        self.assertEqual(restart["ansible.builtin.command"], COMPOSE_CMD + "restart authelia")
+        self.assertIs(restart["changed_when"], True)  # EDGE-03
+        self.assertEqual(wait["ansible.builtin.command"], "curl -fsS --max-time 5 http://127.0.0.1:{{ authelia_port }}/api/health")
+        self.assertEqual(wait["until"], f"{wait['register']}.rc == 0")  # S3
+        self.assertGreaterEqual(wait["retries"] * wait["delay"], 60)
+        self.assertEqual(record["ansible.builtin.copy"]["dest"], "{{ edge_root }}/authelia/config.applied.sha256")
+        self.assertIn("_authelia_config_hash.stdout_lines[0]", record["ansible.builtin.copy"]["content"])
+        self.assertNotIn("notify", find_task(TASKS, CONFIG_TASK))  # § 4.8: never a handler
+
+    def test_the_deploy_checks_the_portal_on_its_public_name(self):
+        resolve = "--resolve {{ authelia_public_hostname }}:443:127.0.0.1 https://{{ authelia_public_hostname }}"
+        health = find_task(TASKS, "The portal answers on its public name")["ansible.builtin.command"]
+        self.assertIn("curl -fsS", health)
+        self.assertIn(resolve + "/api/health", health)
+        disc = find_task(TASKS, "The portal's discovery names its public issuer exactly")
+        self.assertIn("curl -fsS", disc["ansible.builtin.command"])
+        self.assertIn(resolve + "/.well-known/openid-configuration", disc["ansible.builtin.command"])
+        fw = ENV.compile_expression(disc["failed_when"])
+        exact = json.dumps({"issuer": f"https://{AUTH}"})
+        self.assertFalse(fw(**V, _authelia_discovery={"rc": 0, "stdout": exact}))
+        for bad in (f"https://{AUTH}/", f"http://{AUTH}", f"https://{AUTH.upper()}", "https://auth.example"):
+            self.assertTrue(fw(**V, _authelia_discovery={"rc": 0, "stdout": json.dumps({"issuer": bad})}), bad)
+        self.assertTrue(fw(**V, _authelia_discovery={"rc": 22, "stdout": ""}))
+        self.assertTrue(before(START, "The portal answers on its public name"))
 
 
 if __name__ == "__main__":
