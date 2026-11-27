@@ -7,8 +7,8 @@ Archives (`edge-<UTC>.tar.age`) are on the backup host and in `/var/backups/edge
 On the edge: `docker compose -f /opt/edge/compose.yml stop headscale`, copy `db.sqlite` and both keys into
 `/var/lib/docker/volumes/edge_headscale-data/_data/`, start headscale. The noise key is what lets existing clients
 reconnect without re-registering. Each backup run (twice a day) already restores its archive into a network-less scratch
-headscale and compares nodes and noise key with production, and checks the archived happybabytracker database with
-`PRAGMA integrity_check`; a failure alerts via ntfy.
+headscale and compares nodes and noise key with production, and checks the archived happybabytracker, Authelia, lldap and
+commsgun databases with `PRAGMA integrity_check`; a failure alerts via ntfy.
 
 ## Restore happybabytracker
 
@@ -62,6 +62,40 @@ home, and from your workstation (delete what `tar -x` extracted there, `happybab
 rm -f ./happybabytracker.db
 ```
 
+## Restore Authelia, lldap or commsgun
+
+The same archive holds `authelia/db.sqlite3`, `lldap/users.db` and `commsgun/commsgun.db`. Decrypt it with the **offline**
+key, copy the one file you restore to `david_admin`'s home on the edge, set the three values from its row, and run the
+happybabytracker steps' shape:
+
+| Restore | `S` (services to stop) | `VOL` | `DB` |
+|---|---|---|---|
+| Authelia | `authelia` | `edge_authelia-data` | `db.sqlite3` |
+| lldap | `authelia lldap` (Authelia too, so it serves only after the reconcile) | `edge_lldap-data` | `users.db` |
+| commsgun | `commsgun-ui commsgun-api` | `edge_commsgun-data` | `commsgun.db` |
+
+```sh
+S='authelia lldap' VOL=edge_lldap-data DB=users.db   # the lldap row, for example
+sudo docker compose -f /opt/edge/compose.yml stop $S
+V=/var/lib/docker/volumes/$VOL/_data
+for f in "$DB" "$DB-wal" "$DB-shm"; do
+  if sudo test -e "$V/$f"; then sudo mv "$V/$f" "$V/$f.pre-restore"; fi
+done
+sudo cp "./$DB" "$V"/
+sudo chown 10001:10001 "$V/$DB"
+```
+
+- **Authelia or lldap:** do not `start` them; run **deploy** (`tailnet`). It starts lldap, runs the ensure and the `sub`
+  reconcile (an identifier the restored Authelia copy lacks comes back from lldap; a `sub` the restored lldap copy lacks
+  comes back from Authelia), and only then "Start the stack" starts Authelia, so it never serves before the reconcile. A
+  mismatch stops the deploy: `docs/runbooks/sso.md` § 9.5.
+- **commsgun:** `sudo docker compose -f /opt/edge/compose.yml start commsgun-api commsgun-ui`.
+
+The restored copy is as old as the archive: Authelia loses second factors enrolled and refresh tokens issued since then,
+lldap loses people and password changes, commsgun the messages queued. Undo and clean up the `*.pre-restore` files as in
+§ Restore happybabytracker, with these `V` and `DB` (for Authelia or lldap, deploy instead of `start`), and delete the
+decrypted file from the edge and your workstation: it holds credentials.
+
 ## Stack missing after a reboot
 
 **node-admin → `diagnose-boot`** (read-only) writes to the run's Summary: reboots, expected vs running services, each
@@ -83,6 +117,7 @@ the failed run's log: every task marked `changed` before the failure names the f
 | Headscale config | `... restart headscale` |
 | Gatus config or secrets | the re-run restarts Gatus itself when the env file changes; otherwise `... restart gatus` |
 | Caddy secrets / Caddyfile | `... restart caddy` / `... exec -T caddy caddy reload --config /etc/caddy/Caddyfile` (nothing in the re-run reloads it: the file is unchanged, and the inode check passes because the container already sees it) |
+| Authelia configuration | nothing: the re-run compares the file's hash with the last applied one and restarts Authelia itself (no handler) |
 
 A missing secret key is the most common cause: **init-secrets → `fill_missing`** (see `secrets/README.md`). Then run **verify**.
 

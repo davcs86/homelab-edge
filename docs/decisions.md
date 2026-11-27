@@ -13,7 +13,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   MagicDNS (`100.100.100.100`); the edge itself runs with `--accept-dns=false`.
 - **Login hardening is upstream's gap.** xstockstrat login has no lockout or MFA; the Caddy limits (5/min, 30/h per
   IP on `POST /api/auth/login`) are the only brute-force control until the app adds them.
-- **Access logs** drop OAuth `code`, `state`, `txn` and `agent_cb` query values; Caddy redacts credential headers.
+- **Access logs** of the `*.public` and `*.private` sites drop every query, `Referer` and `Location` (Known traps); `hs`'s
+  drops the OAuth `code`, `state`, `txn`, `agent_cb` and `code_verifier` values. Caddy redacts credential headers.
 - **Monitoring is Gatus**: public probes resolve through 1.1.1.1 (what the internet sees), home probes through
   MagicDNS; four dead-man heartbeats (Proxmox every 60 s, DB host every 5 min, the twice-daily edge backup + drill, pgBackRest backup) alert when silent.
   healthchecks.io is the dead-man for the edge itself, independent of ntfy and the tailnet.
@@ -34,7 +35,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   }
   respond @not_anthropic 403
   ```
-- **SSO is Authelia, not a custom identity provider (decided 2026-11-15, re-specced 2026-11-23, not deployed).** Admin reference:
+- **SSO is Authelia, not a custom identity provider (decided 2026-11-15, re-specced 2026-11-23; P1 edge infra implemented, not yet deployed).** Admin reference:
   `docs/runbooks/sso.md`; full design, findings and open items: `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`.
   - Why not custom: xstockstrat's own OAuth server (agent facade + identity) covers MCP OAuth only (no ID tokens, JWKS, key rotation
     or logout), and its MFA and lockout never got built (see "Login hardening is upstream's gap"). Why not Authentik, Keycloak or
@@ -79,8 +80,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     database loss, and fails on a mismatch, so once copied, losing either database never breaks links; usernames are never reused.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens
     (30 days for MCP clients, rotating) survive. Client-secret hashes are generated once in SOPS so the rendered config is
-    stable. Config reaches it through compose `configs:` content if that recreates the container on change (spike), else a
-    mounted directory with a hash-compare restart task, never a handler.
+    stable. Config reaches it through a mounted directory with an unconditional hash-compare restart task, never a handler
+    (option A, SSO spec § 4.8; Known traps, "SSO P1").
   - Authelia's, lldap's and commsgun's databases are in the twice-daily edge backup; the storage encryption key is in SOPS. A
     deploy runs the backup before an Authelia or lldap digest change, because both migrate their storage on start.
 
@@ -106,7 +107,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   policies), and on-demand TLS (a second issuance path that does not fit tailnet-only names). `*.private` resolves through headscale
   extra records plus a DNS route for the zone (`dns.nameservers.split`, upstream `1.1.1.1`); rejected: a public wildcard record
   pointing at the edge's tailnet address (publishes it, sends looked-up service names to public resolvers, fails behind
-  DNS-rebinding filters, goes stale on a rebuild). `hs` and `auth` stay outside the zones. Spec: `docs/superpowers/specs/2026-11-18-wildcard-portal-zones-design.md`.
+  DNS-rebinding filters, goes stale on a rebuild). `hs` stays outside the zones. Spec: `docs/superpowers/specs/2026-11-18-wildcard-portal-zones-design.md`.
 - **Each zone holds one kind of name.** `*.ts` machines, `*.private` tailnet-only services, `*.public` internet services. A
   service's name is served by the edge's Caddy whether it runs on the edge or on a home node (as xstockstrat does), so a
   home-to-home call by service name travels through the edge. The machine zone keeps the name `ts` (renaming it would change every node's name at once: pgBackRest certificates,
@@ -133,7 +134,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   - Admin port 9201 is never published. The two containers sit on their own compose network (`commsgun`), so no other stack
     container can reach 9201 or send the dashboard forged `X-Forwarded-*` headers; the admin API is also guarded by `commsgun_admin_api_token`.
   - The container is `read_only` and runs as uid 10001, so `/data` must be the named volume `commsgun-data`. A bind mount would be root-owned and
-    the container would exit at start. The store (SQLite) is not in the edge backup, by decision: queued messages expire within 24 hours.
+    the container would exit at start. The store (SQLite, `/data/commsgun.db`) is in the twice-daily edge backup (SSO spec decision 17); queued
+    messages still expire within 24 hours.
   - The two image pins (`commsgun_api_image`, `commsgun_ui_image`) move together: `bump-commsgun` proposes a pair only when both
     images carry the same revision label and refuses a mismatched or unlabelled pair. Caddy's body cap (`body_limits.commsgun_enqueue`,
     262144 bytes) must equal the API's own cap.
@@ -160,10 +162,10 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     identity with a grant on `tag:edge:443` reaches the login page, and the login is the only control. No policy or Caddy change, since grants are per
     port, not per name. The handle sits after `deny_staging_vm`, so the staging VM cannot reach it, and it sets no `header_up` or `trusted_proxies`
     (EDGE-02): the UI builds its origin and login limiter key from Caddy's `X-Forwarded-*` and answers 400 unless the origin equals its `ORIGIN`.
-  - The database is in the archive, unlike commsgun's queue (which is transient by decision): it holds the family's records. The timer runs at
+  - The database is in the archive: it holds the family's records. The timer runs at
     00:00 and 12:00 UTC; the Gatus heartbeat keeps its name `nightly-backup` (EDGE-10: pushers call that URL) with a 14 h interval. `edge-backup` fails the whole
-    run, headscale included, when `happybabytracker.db` is missing from the volume; the app creates it at its first start.
-    Timers in UTC (PST/PDT): the headscale and happybabytracker backup runs at 00:00 and 12:00 (plus 0 to 10 min of jitter), pgBackRest full and differential at 03:00 Los Angeles (11:00/10:00), and the reboot window at 02:00 Los Angeles (10:00/09:00). The old 04:00 Los Angeles reboot was 12:00 UTC in winter and met the second backup, and 03:00 would have met pgBackRest, so the owner chose 02:00.
+    run, headscale included, when `happybabytracker.db` (or any other archived database: "SSO P1" below) is missing from its volume; the app creates it at its first start.
+    Timers in UTC (PST/PDT): the edge backup runs at 00:00 and 12:00 (plus 0 to 10 min of jitter), pgBackRest full and differential at 03:00 Los Angeles (11:00/10:00), and the reboot window at 02:00 Los Angeles (10:00/09:00). The old 04:00 Los Angeles reboot was 12:00 UTC in winter and met the second backup, and 03:00 would have met pgBackRest, so the owner chose 02:00.
   - **The snapshot runs as the app's uid 10001, through a private bind mount.** The API opens its database as 10001 with `cap_drop: ALL`; a
     root-run `sqlite3 .backup` would leave a root-owned `-wal` or `-shm` in the app's data directory and could stop the API opening the database.
     Docker's data root is `0710 root:root` and `volumes/<name>` is `0701` by default (this repo changes neither), so no uid, gid and group list can
@@ -183,6 +185,44 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     as each works once and expires in 72 h or 1 h. Caddy's `redacted_requests` logger keeps the path too and writes to stderr, so the tokens also sit in the `caddy` container's Docker `local` log (10 MiB, 3 files). No log shipper exists on the edge; any future one must scrub `/invite/*` and `/reset/*`, since the app's
     rule is that those tokens never reach OTEL.
   - The two image pins move together: `bump-happybabytracker` proposes a pair only when both images carry the same revision label.
+- **SSO P1 (Authelia, lldap) runs hardened on the edge; these are the traps its shape hit.** Runbook: `docs/runbooks/sso.md` § 9.
+  - Authelia expands its `{{ env "…" }}` templates only when its env file sets `X_AUTHELIA_CONFIG_FILTERS='template'`: 4.39.28
+    reads no other name, and without it every template stays literal and `validate-config` fails. So `configuration.yml` holds
+    no secret, and the Jinja template escapes Authelia's braces.
+  - The image's `healthcheck.sh` passes before Authelia listens under `read_only` (it cannot write `/app/.healthcheck.env`), so
+    the config sets `server.disable_healthcheck: true` and compose probes `/api/health` with `wget`. No `tmpfs` was needed: both
+    images run `read_only` and write only under `/data`.
+  - A fresh named volume's `_data` is root-owned, and both run as uid 10001: the deploy runs `compose create --no-recreate lldap
+    authelia`, then sets each `_data` to `10001:10001` `0700`, before either starts.
+  - Authelia exits at start until its LDAP bind account exists, so the order "Start lldap first" → ensure → reconcile → "Start
+    the stack" is load-bearing; it also keeps Authelia from serving a fresh or restored database before each `sub` is back.
+  - Authelia's bind-mounted config deliberately has no handler. After "Start the stack" an unconditional task compares its
+    sha256 with `{{ edge_root }}/authelia/config.applied.sha256`, restarts Authelia on a difference and only then records the
+    new hash, so a failed play cannot strand a change (option A, SSO spec § 4.8: Compose 5.5.1 kept a running container on the
+    old `configs.content`). A departure from EDGE-04 on purpose: never "fix" it with a handler.
+  - The sync gets the lldap secrets as JSON on `stdin:`, not `environment:`: Ansible prepends `environment:` to the remote
+    command line for both `script` and `command` (seen on ansible-core 2.22.0 with `-vvv`), and under `become` that is sudo's
+    argv, which the journal logs. So the script is copied to `/usr/local/sbin/edge-sso-sync` and run with `command`. Each sync
+    task has `no_log: true` and `failed_when: false`, then a `debug` prints its summary (usernames and counts) and a `fail` stops
+    on `rc != 0`, since `no_log` censors a failing task completely (happybabytracker entry above). `lldap_set_password` still
+    takes both passwords as `--opt=value` (a value can start with `-`): briefly visible to root's `ps`, never logged.
+  - `ensure` refuses an `sso-sub` attribute that is not a single, hidden, not user-editable `STRING`: an editable one would let a
+    person set someone else's `sub` and inherit their links at the next restore. A non-v4 UUID in lldap, or one `sub` for two
+    usernames (Authelia keeps identifiers unique), fails the reconcile with nothing written (4.39.28 accepts only v4).
+    4.39.28 has no identifier delete, so offboarding leaves the identifier (owner, 2026-11-27).
+  - Pinned-CLI facts `sso_sync.py` relies on: the export's sector key is `sector_id`; `storage migrate up` exits 1 with "schema
+    already up to date"; an empty store's export exits 1 with "no data to export". MCP clients keep `response_types: [code]`:
+    without it, `offline_access` is deprecated in 4.39.28.
+  - Authelia's five `openid_connect_*` limiters are raised to 600/1m, the `authelia_backchannel` zone: their pinned default
+    (30/1m and up) would refuse two VMs behind one home WAN IP before Caddy does. The others keep the pinned defaults.
+  - `consent_mode: explicit` on every client (owner, 2026-11-27): every authorization shows the consent page.
+  - The whole `*.public` site logs to one `public_zone` logger that drops the query, `Referer` and `Location`, and its error
+    logger joins `redacted_requests`: per-host loggers match the exact lowercase name, so a mixed-case `Host` on the portal would
+    put a reset token in a plain log (owner, 2026-11-27). Cost, accepted: xstockstrat's and webhooks-mcp's access logs lose their
+    query strings (before, only OAuth values were dropped).
+  - `authelia-data`, `lldap-data` and `commsgun-data` join the backup in happybabytracker's uid-10001 shape, and `edge-backup`
+    fails the whole run when any of the four databases is missing. A deploy runs the backup, then stops Authelia, before an
+    Authelia or lldap digest change: both migrate their storage on start, and rollback is a restore.
 - **deSEC token subnet lock uses egress addresses, not the reserved IP.** DO sends outbound traffic from the
   droplet's own public IPv4 *and* IPv6 (desec.io has AAAA). Inbound to the reserved IP lands on the anchor address
   (10.48.0.x). A new droplet means a new token.
@@ -263,7 +303,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
   IPv4, while a name under `private.<domain>` returned the edge's tailnet address once the zone had a route. `tailscale dns query`
   bypasses the OS resolver and hides this; test with `getent hosts`.
 - **A per-host Caddy logger matches the exact lowercase name only.** The host matcher is case-insensitive, so `Commsgun.…` is
-  proxied but logged by the site's logger. The `*.private` site therefore redacts as a whole (logger `private_zone`).
+  proxied but logged by the site's logger. The `*.private` and `*.public` sites therefore redact as a whole (loggers `private_zone`, `public_zone`).
   Port 80 redirects still have this gap: they log the full URI on stderr.
 - **An app with a single origin serves one name at a time.** The commsgun dashboard answers 400 on every path except `/healthz`
   when the host is not `ORIGIN`; xstockstrat binds its OAuth resource to `APP_URL`. A second route proves routing and health only.

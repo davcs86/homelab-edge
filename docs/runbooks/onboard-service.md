@@ -92,7 +92,7 @@ in the rule until the next deploy.
 
 The Gatus endpoint named `xstockstrat-staging-ui-vm` is a probe label; it probes the node name, not the public name.
 
-## 5. SSO (only if people log in; design, not deployed)
+## 5. SSO (only if people log in)
 
 The design is `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`; § 3 there is the contract the app implements
 (`AUTH_MODE`, the `OIDC_*` names, users and roles in the app, explicit "Link SSO", a "create if empty" admin CLI).
@@ -100,12 +100,16 @@ The design is `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`; § 3 t
 1. **App side.** It speaks plain OIDC (or, for an MCP server, validates JWTs against JWKS with an audience) and defaults to
    `AUTH_MODE=local`, so its repo runs without Authelia; the homelab sets `oidc`. Third-party software that has no OIDC may
    use Caddy `forward_auth` instead; our own apps never do.
-2. **Authelia.** One client entry (confidential for a web app; public PKCE for MCP clients, with both Claude.ai callback
-   hosts, `access_token_signed_response_alg`, `audience` and `requested_audience_mode: implicit`), one group with an
-   `authorization_policy`, the client secret and its hash in SOPS via `init-secrets` `fill_missing`.
+2. **Authelia.** An `authelia_oidc_clients` entry in `inventories/prod/group_vars/all/main.yml`: `kind: web` (confidential,
+   `client_secret_basic` + PKCE; `redirect_uri` and `key`, the SOPS key of its pbkdf2 hash) or `kind: mcp` (public PKCE,
+   both Claude.ai callbacks; `audience` and `scopes`), with its `group`. Add that group to `sso_groups` (each group but
+   `sso_people` is an authorization policy of that name). For a confidential client also add its key to
+   `init_secrets.OIDC_CLIENT_KEYS` and run **init-secrets** with `fill_missing` on the branch (`docs/runbooks/commsgun.md` § 2,
+   step 3), which creates the secret and its `_pbkdf2` hash as a pair. Extend the client table in `scripts/authelia-config-test.py`.
 3. **Edge.** A `*.public` name, `extra_hosts: auth.public.<domain>:host-gateway` if it runs on the edge, `authelia_session`
-   stripped before it, Caddy login limits on its local-login POST (local login is off in steady state: `AUTH_MODE=oidc`),
-   query/`Referer`/token-path redaction if its URLs carry tokens, a Gatus probe, and its database in the edge backup if it
-   holds identities.
-4. **People.** Add the group name to the repo's lldap group list (the deploy creates it), add each person to it in lldap's
+   stripped before it (the `edge_sites` upstreams already do; a hand-written handle copies their `header_up Cookie` line),
+   Caddy login limits on its local-login POST (local login is off in steady state: `AUTH_MODE=oidc`), token-path redaction
+   if its URL paths carry tokens (the `*.public` and `*.private` logs already drop every query, `Referer` and `Location`), a
+   Gatus probe, and its database in the edge backup if it holds identities.
+4. **People.** The deploy creates the group in lldap (step 2's `sso_groups`); add each person to it in lldap's
    UI, and each person links in the app (`sso.md` § 5), with the app in `both` for that window.

@@ -1,9 +1,10 @@
 # SSO (Authelia): platform admin reference
 
-> **Status: design approved 2026-11-23, not deployed.** No `authelia` or `lldap` role, Caddy site or SOPS key exists yet.
-> The PR that adds them updates this page to match the code. Items marked `TODO(verify)` are settled by the spike on the
-> pinned release, not here. Decision record: `docs/decisions.md` § Design decisions, "SSO is Authelia"; full design and open
-> items: `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`.
+> **Status: P1 implemented (deploy pending the owner's go-ahead); no app wired.** Authelia, lldap, the nine OIDC clients,
+> their backups and probes are in the code; every app still runs its local login. Code: `roles/stack/templates/authelia-config.yml.j2`,
+> `compose.yml.j2` (`authelia`, `lldap`), `roles/stack/tasks/main.yml` (SSO block and sync), `scripts/sso_sync.py`. Decision
+> record: `docs/decisions.md` § Design decisions, "SSO is Authelia", and § Known traps, "SSO P1"; full design, spike record and
+> open items: `docs/superpowers/specs/2026-11-23-authelia-sso-respec.md`. Edge commands and operations: § 9.
 
 Authelia on the edge (`https://auth.public.<domain>`) is the one login (password + passkey or TOTP) and the one OAuth/OIDC
 token issuer for the homelab apps. It proves who a person is and gates which apps they may open; each app owns its users and
@@ -16,7 +17,7 @@ xstockstrat deployments never use SSO (`AUTH_MODE=local`).
 |---|---|---|---|
 | Person (username, display name, email, groups) | lldap only (never SOPS or this repo) | platform admin, in lldap's UI | One account per person. Nobody edits their own email. Every person is in `sso_people`. |
 | Password | lldap only (never SOPS) | the person | Set and reset with **Forgot password**; the link lasts 1 h. |
-| `sub` (UUID) | Authelia's SQLite and the person's `sso-sub` attribute in lldap | the deploy | Minted at first login; each deploy copies it to lldap, and restores either copy from the other, so links survive losing one database. |
+| `sub` (UUID) | Authelia's SQLite and the person's `sso-sub` attribute in lldap | the deploy | Minted by Authelia (`TODO(verify)`: at the first portal login or the first OIDC authorization; the P1 record settles it); each deploy copies it to lldap, and restores either copy from the other, so links survive losing one database (§ 9.4). |
 | Second factor (passkey / TOTP) | Authelia SQLite | the person | Any TOTP app (e.g. Authy) works. Another device needs an existing one; losing every device needs an admin. |
 | App access | the person's groups | platform admin | One group per app; a person holds any number. |
 | App account, role, link to the `sub` | each app's database | each app's admin | Never in Authelia. xstockstrat roles: `manage-users.py update-roles`. |
@@ -51,11 +52,11 @@ device login never uses SSO.
 ## 3. Add a person
 
 1. Decide the username (permanent, § 2.1), email and groups.
-2. In lldap's UI (`https://lldap.private.<domain>`, signed in as lldap's `admin`), create the user with that username,
+2. In lldap's UI (`https://lldap.private.<domain>`, signed in as lldap's `admin`: § 9.3), create the user with that username,
    display name and email, no password, and add them to `sso_people` and their app groups.
 3. At `https://auth.public.<domain>` they press **Forgot password**, set a password from the emailed link (valid 1 h), log
    in, and enrol a passkey or TOTP app with an emailed code. Until commsgun's SMTP listener ships, the file notifier holds
-   the link and the code; an admin reads them on the edge and passes them on. `TODO(verify)`: path and command. For a new
+   the link and the code; an admin reads them on the edge (§ 9.2) and passes them on. For a new
    account this first enrolment rests on the mailbox alone; enrol with the person to close that.
 4. In each app, link (§ 5).
 5. Deploy: it copies their new `sub` into lldap (until then it exists only in Authelia and its backup).
@@ -67,8 +68,8 @@ device login never uses SSO.
 | Grant an app | add the group in lldap's UI; the person links in that app (§ 5) | after linking |
 | Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp:** a group removal does not end it (refresh survives it, spike S4); remove `david_claude` from `sso_people` instead: access ends within 5 min (SSO spec § 4.11) |
 | Reset a password | the person uses **Forgot password** | at once; login still needs the second factor |
-| Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
-| Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
+| Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user> --all` (§ 9.1), then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
+| Unban after regulation | `authelia storage bans user revoke <user>` (§ 9.1) | at once; bans also expire after 5 min |
 | Change email | edit it in lldap's UI | at once for Authelia's emails; xstockstrat keeps its own copy, commsgun and happybabytracker store none; nothing syncs it |
 | Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); in every app disable them (xstockstrat, in each environment: deactivate them on `/config-ui/users`, then `manage-users.py unlink-sso <email>`; commsgun: `docker compose run --rm -T commsgun-admin admin disable <username>`; happybabytracker: the admin disables or unlinks the parent, which also deletes their push subscriptions and ntfy topic: until then medication reminders keep reaching their devices; if the person is happybabytracker's admin, `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>` and `admin reset-password <username>`, since the admin is never deleted; webhooks-mcp: nothing beyond the group); clear their `sso-sub` in lldap (or a later deploy re-applies it); their Authelia identifier stays: Authelia 4.39.28 has no identifier delete, and it is harmless (out of `sso_people`, ignored by the reconcile, usernames never reused; owner, 2026-11-27) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise (webhooks-mcp has none: access ends within 5 min, SSO spec § 4.11) |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | web: at the next access-JWT refresh, up to `jwt.access_ttl_seconds` (default 900 s); MCP: within ~60 s |
@@ -148,3 +149,121 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 | commsgun down | no reset or enrolment emails; logins unaffected | fix commsgun; meanwhile switch Authelia to the file notifier and relay by hand |
 
 headscale, SSH and the tailnet do not depend on Authelia; the break-glass path in `docs/runbooks/recovery.md` is unchanged.
+
+## 9. Edge operations
+
+Run these on the edge as `david_admin` over the tailnet. Identifiers, emails and secrets print to your terminal only:
+never paste them into a PR, an issue, a commit or a log (the repo is public).
+
+### 9.1 Authelia's CLI
+
+```sh
+C='sudo docker compose -f /opt/edge/compose.yml'
+$C exec -T authelia authelia storage user totp delete <user> --config /config/configuration.yml
+$C exec -T authelia authelia storage user webauthn delete <user> --all --config /config/configuration.yml
+$C exec -T authelia authelia storage bans user list --config /config/configuration.yml
+$C exec -T authelia authelia storage bans user revoke <user> --config /config/configuration.yml
+# every identifier (username, service, sector_id, identifier); the root filesystem is read-only, so the file goes under /data
+$C exec -T authelia sh -c 'rm -f /data/.admin-export.yml; authelia storage user identifiers export --file /data/.admin-export.yml --config /config/configuration.yml >/dev/null; cat /data/.admin-export.yml; rm -f /data/.admin-export.yml'
+```
+
+A person's `sub` is their row with `service: openid` and an empty `sector_id`; an empty store prints "no data to export"
+instead. With Authelia stopped, use `run --rm --no-deps -T authelia` in place of `exec -T authelia`. Never run
+`identifiers add` by hand: the deploy's reconcile is its only writer (§ 9.4). 4.39.28 has no identifier delete, and `add`
+refuses a username that already has a row.
+
+### 9.2 The file notifier (until P5)
+
+Authelia writes reset links and one-time codes to `/data/notification.txt` in its volume. After the person presses the
+button, read it and pass on only the link or the code, over a channel you trust:
+
+```sh
+sudo cat /var/lib/docker/volumes/edge_authelia-data/_data/notification.txt
+```
+
+The backup copies only `db.sqlite3`, never this file.
+
+### 9.3 lldap's `admin`
+
+Sign in at `https://lldap.private.<domain>` as `admin` with the SOPS value `lldap_admin_password`:
+
+```sh
+SOPS_AGE_SSH_PRIVATE_KEY_FILE=~/keys/sops_admin sops decrypt --extract '["lldap_admin_password"]' secrets/edge.sops.yaml
+```
+
+lldap reads that value only at its first start, and every deploy signs in with it. To change it, change it in lldap's UI
+and in SOPS together, then deploy; a mismatch stops the deploy at "Stop on a failed lldap ensure" (`lldap login failed`).
+`admin` is not in `sso_people`, so it never logs in at the portal.
+
+### 9.4 What each deploy does to lldap and Authelia
+
+In `roles/stack/tasks/main.yml` order, all before "Start the stack" unless noted:
+
+1. When an existing `authelia` or `lldap` container runs an image other than its pin: run `edge-backup.service`, then stop
+   Authelia (both migrate their databases on start; rollback is a restore). Otherwise Authelia keeps serving throughout.
+2. Create both containers and their volumes, and give each volume's `_data` to uid 10001 (`0700`).
+3. Start lldap. Authelia exits at start until its bind account exists, so it starts only in step 6.
+4. `edge-sso-sync ensure` (`scripts/sso_sync.py`): creates each missing group of `sso_groups`; creates `sso-sub` as a single,
+   hidden, not user-editable `STRING`, and refuses (exit 2) if one exists in any other shape; creates the bind account
+   `authelia` (`authelia@ldap.invalid`) if missing, adds it to `lldap_password_manager`, refuses if it is in any
+   `sso_groups` group, and sets its password from SOPS (`authelia_ldap_bind_password`).
+5. `edge-sso-sync reconcile`: `storage migrate up`, an export, then for each `sso_people` member (usernames case-insensitive):
+   a `sub` only in Authelia is copied to lldap (`copied_to_lldap`), one only in lldap is added to Authelia
+   (`added_to_authelia`), equal ones are left (`unchanged`). Two different values, an lldap value that is not a
+   version-4 UUID, or one `sub` for two usernames, are `mismatched`: nothing is written for anyone and the deploy stops (§ 9.5).
+6. "Start the stack" starts Authelia if it is not running.
+7. Authelia restarts when `configuration.yml` differs from the last applied one (portal sessions end, § 8); then the deploy
+   checks `/api/health` and the discovery issuer through Caddy on `auth.public.<domain>`.
+
+It never creates, changes or deletes any other person or membership, never deletes a group, attribute or identifier,
+and the reconcile ignores users outside `sso_people`. Its summaries print usernames and counts only.
+
+### 9.5 A failed reconcile (exit 2)
+
+"Sub reconcile summary" lists the usernames under `mismatched`; the deploy stops at "Stop on a failed sub reconcile". Compare
+the person's export row (§ 9.1) with their `sso-sub` in lldap's UI. The right value is the one the apps' links hold: that is
+Authelia's, which every token carried, unless Authelia's database was replaced and the person logged in before a deploy
+reconciled it (then lldap's is). A value that is not a version-4 UUID is always wrong. The reconcile also refuses, writing
+nothing, when one `sub` would belong to two usernames (Authelia's storage keeps each identifier unique): one of them holds
+it in lldap by mistake, so correct or clear that person's `sso-sub`.
+
+- lldap's is wrong: set their `sso-sub` in lldap's UI to the export's value, or clear it (the next deploy copies
+  Authelia's), then deploy.
+- Authelia's is wrong: 4.39.28 cannot delete or replace an identifier, so restore Authelia's database from an archive
+  older than the wrong row (`docs/runbooks/recovery.md` § Restore Authelia, lldap or commsgun), then deploy.
+
+### 9.6 The bind account
+
+`authelia` is the one user the deploy owns. Never add it to `sso_people` or an app group (the ensure refuses to continue) and
+never set its password in lldap's UI (each deploy sets it back from SOPS).
+
+### 9.7 Consent
+
+Every client has `consent_mode: explicit` (owner, 2026-11-27): every authorization, web logins included, shows Authelia's
+consent page. That is intended, not a misconfiguration.
+
+### 9.8 Rotate the JWKS key
+
+The config renders one RS256 key (`authelia_oidc_jwks_key`). The first RS256 key in `jwks` signs; any later one is only
+published, so earlier tokens still verify. Each step is a PR (template, `authelia.env` line, its assert and the tests) and a
+deploy, which restarts Authelia:
+
+1. **Add and publish:** a second SOPS key holding a new RSA 2048 PKCS#8 PEM (`openssl genpkey -algorithm RSA -pkeyopt
+   rsa_keygen_bits:2048`, as `init_secrets.py` makes it), rendered as the first `jwks` entry, the old key after it.
+2. **Wait 1 h** (the access-token lifetime): every token the old key signed has expired.
+3. **Retire:** remove the old entry and its SOPS key.
+
+`TODO(verify)` at each app's cutover: an app that caches the JWKS and does not refetch on an unknown `kid` refuses the new
+tokens until its cache expires.
+
+### 9.9 Rotate an OIDC client secret
+
+A planned outage per client: from the deploy that loads the new hash until the app holds the new plain value, that client's
+logins fail. In P1 no app holds a secret yet.
+
+1. On a branch, remove both halves: `sops unset secrets/edge.sops.yaml '["authelia_client_secret_<client>"]'` and the same
+   for `authelia_client_secret_<client>_pbkdf2`. Run **init-secrets** with `fill_missing` on that branch
+   (`docs/runbooks/commsgun.md` § 2, step 3): it creates the pair whole. Merge.
+2. Deploy: Authelia restarts with the new hash.
+3. Give the app the plain value: xstockstrat copies it into its config service (`ui/oidc.client_secret`, § 6 step 2);
+   commsgun and happybabytracker get it when they are wired (P5, P6).
