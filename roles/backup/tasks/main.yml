@@ -88,7 +88,7 @@
     - name: edge-backup.service
       content: |
         [Unit]
-        Description=Encrypted headscale and happybabytracker backup to the home backup host, then restore drill
+        Description=Encrypted headscale, happybabytracker, Authelia, lldap and commsgun backup to the home backup host, then restore drill
         Wants=network-online.target
         After=network-online.target docker.service tailscaled.service
         OnFailure=edge-notify@%n.service
@@ -106,7 +106,7 @@
     - name: edge-backup.timer
       content: |
         [Unit]
-        Description=Headscale and happybabytracker backup
+        Description=Headscale, happybabytracker, Authelia, lldap and commsgun backup
 
         [Timer]
         OnCalendar={{ backup_schedule }}

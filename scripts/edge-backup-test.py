@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Renders the backup scripts and units with the prod group_vars; runs the happybabytracker snapshot step against a tree
+"""Renders the backup scripts and units with the prod group_vars; runs the app-uid snapshot function against a tree
 that mimics Docker's modes while a writer commits (root only; EDGE_BACKUP_TEST_REQUIRE_ROOT=1 turns a skip into a failure)."""
 import os
 import re
@@ -19,7 +19,22 @@ APP_UID = 10001
 AS_APP = f"setpriv --reuid={APP_UID} --regid={APP_UID} --clear-groups"
 AS_APP_NO_GROUPS = AS_APP.split()
 AS_APP_GROUP_ZERO = ["setpriv", f"--reuid={APP_UID}", f"--regid={APP_UID}", "--groups=0"]
-SRC_DIR = "$vol_root/edge_happybabytracker-data/_data"
+SRC_DIR = "$vol_root/edge_$1/_data"
+# (volume, database file, archive dir): each snapshotted as uid 10001 by snapshot_as_app.
+DATABASES = [("happybabytracker-data", "happybabytracker.db", "happybabytracker"), ("authelia-data", "db.sqlite3", "authelia"),
+             ("lldap-data", "users.db", "lldap"), ("commsgun-data", "commsgun.db", "commsgun")]
+SNAPSHOT_FN = [
+    "snapshot_as_app() {",
+    f'local src_dir="{SRC_DIR}"',
+    'test -f "$src_dir/$2" || { echo "$3 database missing: $src_dir/$2" >&2; exit 1; }',
+    "# shellcheck disable=SC2016  # $1-$4 expand in the inner sh",
+    "unshare --mount --propagation private -- sh -c 'mount --bind \"$1\" \"$2\" && exec " + AS_APP
+    + " sqlite3 \"$2/$4\" \".backup '\\''$3/$4'\\''\"' sh \"$src_dir\" \"$mnt\" \"$snap\" \"$2\"",
+    "sqlite3 \"$snap/$2\" 'PRAGMA integrity_check;' | grep -qx ok",
+    'mkdir -p "$work/$3"',
+    'mv "$snap/$2" "$work/$3/"',
+    "}",
+]
 
 
 def load_vars():
@@ -58,14 +73,19 @@ def lines(text):
 
 
 def snapshot_sections():
-    """The rendered script's own lines: the temp-dir set-up (work=… through the chmod of $mnt) and the happybabytracker
-    snapshot (src_dir=… through the move into $work)."""
+    """The rendered script's own lines: the temp-dir set-up (work=… through the chmod of $mnt) and the snapshot_as_app
+    function (its definition through its closing brace)."""
     ls = BACKUP.splitlines()
     a0 = next(i for i, ln in enumerate(ls) if ln.startswith("work="))
     a1 = next(i for i, ln in enumerate(ls) if ln == 'chmod 0755 "$mnt"')
-    b0 = next(i for i, ln in enumerate(ls) if ln == f'src_dir="{SRC_DIR}"')
-    b1 = next(i for i, ln in enumerate(ls) if ln.startswith("mv ") and "$work/happybabytracker/" in ln)
+    b0 = next(i for i, ln in enumerate(ls) if ln == "snapshot_as_app() {")
+    b1 = next(i for i, ln in enumerate(ls) if i > b0 and ln == "}")
     return "\n".join(ls[a0:a1 + 1]), "\n".join(ls[b0:b1 + 1])
+
+
+def snapshot_fn():
+    _, b = snapshot_sections()
+    return lines(b)
 
 
 def hours(interval):
@@ -76,16 +96,16 @@ def hours(interval):
 class Structure(unittest.TestCase):
     def test_the_database_is_snapshotted_as_the_apps_uid(self):
         ls = lines(BACKUP)
-        self.assertIn(f'src_dir="{SRC_DIR}"', ls)
-        backup = [ln for ln in ls if ".backup" in ln and "happybabytracker" in ln]
-        self.assertEqual(backup, [
-            "unshare --mount --propagation private -- sh -c 'mount --bind \"$1\" \"$2\" && exec " + AS_APP
-            + " sqlite3 \"$2/happybabytracker.db\" \".backup '\\''$3/happybabytracker.db'\\''\"' sh \"$src_dir\" \"$mnt\" \"$snap\""])
-        guard = [i for i, ln in enumerate(ls) if ln.startswith('test -f "$src_dir/happybabytracker.db" ||') and "exit 1" in ln]
-        self.assertTrue(guard and guard[0] < ls.index(backup[0]), "test -f guard before the namespace")
-        for ln in ls:
-            if "sqlite3" in ln and ("$src_dir" in ln or "edge_happybabytracker-data" in ln):
-                self.assertIn(AS_APP + " sqlite3 ", ln)
+        self.assertEqual(snapshot_fn(), SNAPSHOT_FN)
+        calls = [ln for ln in ls if ln.startswith("snapshot_as_app ")]
+        self.assertEqual(calls, [f"snapshot_as_app {v} {f} {d}" for v, f, d in DATABASES])
+        self.assertGreater(ls.index(calls[0]), ls.index("}"), "called after the definition")
+        for vol, _, d in DATABASES:
+            with self.subTest(d):
+                for ln in ls:
+                    if re.search(r"(^| )sqlite3 ", ln) and ("$src_dir" in ln or f"edge_{vol}" in ln):
+                        self.assertIn(AS_APP + " sqlite3 ", ln)
+                self.assertNotIn("docker", " ".join(ln for ln in ls if d in ln and "vol_root" not in ln))
         for gone in ("--groups=0", "dac_read_search", "caps"):
             self.assertNotIn(gone, BACKUP)
         self.assertIn('mnt="$(mktemp -d /run/edge-backup.XXXXXX)"', ls)
@@ -96,30 +116,35 @@ class Structure(unittest.TestCase):
         self.assertFalse([ln for ln in ls if ln.startswith("snap=") and "$work" in ln])
         self.assertTrue([ln for ln in ls if ln.startswith("trap ") and '"$work"' in ln and "snap" in ln], "trap removes $snap")
         self.assertNotIn("docker exec", BACKUP)
-        self.assertNotIn("docker", " ".join(ln for ln in ls if "happybabytracker" in ln and "vol_root" not in ln))
 
     def test_the_copy_is_integrity_checked_and_manifested(self):
         ls = lines(BACKUP)
-        check = "sqlite3 \"$snap/happybabytracker.db\" 'PRAGMA integrity_check;' | grep -qx ok"
-        self.assertIn(check, ls)
-        move = next(ln for ln in ls if ln.startswith("mv ") and "$work/happybabytracker/" in ln)
-        self.assertLess(ls.index(check), ls.index(move))
+        fn = snapshot_fn()
+        check = "sqlite3 \"$snap/$2\" 'PRAGMA integrity_check;' | grep -qx ok"
+        self.assertLess(fn.index(check), fn.index('mv "$snap/$2" "$work/$3/"'))
         manifest = [ln for ln in ls if "MANIFEST.sha256" in ln]
         self.assertEqual(len(manifest), 1)
-        self.assertIn("find headscale happybabytracker -type f", manifest[0])
-        self.assertIn("happybabytracker", next(ln for ln in BACKUP_RAW.splitlines()[:4] if ln.startswith("# ") and "->" in ln))
+        self.assertIn("find headscale " + " ".join(d for _, _, d in DATABASES) + " -type f", manifest[0])
+        self.assertLess(ls.index(f"snapshot_as_app {' '.join(DATABASES[-1])}"), ls.index(manifest[0]))
+        header = next(ln for ln in BACKUP_RAW.splitlines()[:4] if ln.startswith("# ") and "->" in ln).lower()
+        for _, _, d in DATABASES:
+            self.assertIn(d, header)
         self.assertNotIn("Nightly", BACKUP_RAW)
+        self.assertNotIn("notification.txt", BACKUP)
+        self.assertNotIn("notification.txt", VERIFY)
 
     def test_the_drill_checks_the_restored_copy_and_prints_no_rows(self):
         ls = lines(VERIFY)
         sql = [ln for ln in ls if "sqlite3" in ln]
-        self.assertEqual(len(sql), 1, sql)
-        self.assertTrue(sql[0].startswith("sqlite3 \"$work/happybabytracker/happybabytracker.db\" 'PRAGMA integrity_check;' "
-                                          "| grep -qx ok || {"), sql[0])
-        self.assertIn("exit 1", sql[0])
+        self.assertEqual(len(sql), len(DATABASES), sql)
         manifest = next(i for i, ln in enumerate(ls) if "sha256sum -c MANIFEST.sha256" in ln)
-        self.assertLess(manifest, ls.index(sql[0]))
-        for ln in (ln for ln in ls if "happybabytracker" in ln or "sqlite3" in ln):
+        for (_, db, d), ln in zip(DATABASES, sql):
+            with self.subTest(d):
+                self.assertEqual(ln, f"sqlite3 \"$work/{d}/{db}\" 'PRAGMA integrity_check;' | grep -qx ok "
+                                     f"|| {{ echo \"FAIL {d} database integrity\"; exit 1; }}")
+                self.assertLess(manifest, ls.index(ln))
+                self.assertEqual(ls.count(f'echo "{d} database: integrity ok"'), 1)
+        for ln in (ln for ln in ls if "sqlite3" in ln or any(d in ln for _, _, d in DATABASES)):
             self.assertIsNone(re.search(r"select|\.dump|count|\.tables|\.schema", ln, re.I), ln)
         for needle in ("FAIL noise key differs", "persistent nodes missing", "restore drill OK"):
             self.assertIn(needle, VERIFY)
@@ -151,6 +176,13 @@ class Structure(unittest.TestCase):
         times = re.findall(r"(?:Next elapse|Iteration #\d+): \w+ \S+ (\d\d:\d\d:\d\d) UTC", r.stdout)
         self.assertEqual(sorted(set(times)), ["00:00:00", "12:00:00"], r.stdout)
         self.assertEqual(len(times), 4, r.stdout)
+
+    def test_the_units_describe_every_database(self):
+        for name, unit in UNITS.items():
+            desc = next(ln for ln in lines(unit) if ln.startswith("Description="))
+            for word in ["headscale"] + [d for _, _, d in DATABASES]:
+                self.assertIn(word, desc.lower(), name)
+            self.assertNotIn("nightly", desc.lower(), name)
 
     def test_changing_the_unit_restarts_the_timer(self):
         reg = UNITS_TASK.get("register")
@@ -275,6 +307,7 @@ class Snapshot(unittest.TestCase):
         script = "\n".join([
             "#!/usr/bin/env bash", "set -euo pipefail", "umask 077", f"vol_root={self.volumes}", a,
             f'stat -c "%u %g %a" "$snap" > {self.out}/snapdir', f'echo "$mnt" > {self.out}/mnt', b,
+            "snapshot_as_app " + " ".join(DATABASES[0]),
             f'cp -p "$work/happybabytracker/happybabytracker.db" {self.out}/', ""])
         (self.base / "snapshot.sh").write_text(script)
         r = subprocess.run(["bash", str(self.base / "snapshot.sh")], capture_output=True, text=True,
