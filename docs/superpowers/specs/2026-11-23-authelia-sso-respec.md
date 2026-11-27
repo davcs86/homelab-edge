@@ -83,7 +83,8 @@ full record. Open: § 12.
   `enableNonRepudiationChecks` so ID-token signatures are verified (its cache refetches at 300 s and fails closed).
 - **Linking:** "Link SSO" only for a signed-in local user, after local re-authentication, with `prompt=login` (S17) and a
   "you are linking <IdP user> to <account>" confirmation. Every link and every SSO invite redemption sends `prompt=login`
-  and `max_age=0`, and the relying party refuses unless the ID token's `auth_time` is at least the flow's start time
+  and `max_age=1` (not `0`: Authelia v4.39.28 then refuses consent even after re-authentication, spike S17; owner,
+  2026-11-27), and the relying party refuses unless the ID token's `auth_time` is at least the flow's start time
   minus a 30 s skew (owner, 2026-11-27); a missing `auth_time` is refused. happybabytracker invites are redeemable by SSO in `oidc`/`both`
   and by password in `local`/`both`; its reset links work only in `local`/`both` (owner, 2026-11-24). Unlinked logins:
   `not linked`.
@@ -311,7 +312,7 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
   per VM over a day. **S16** (P5, against commsgun's real listener; P0 checks only Authelia's side against a stand-in)
   STARTTLS submission with the edge-local CA, `AUTH PLAIN`, header `From` matching envelope `MAIL FROM`, and a
   `Message-ID` from Authelia's notifier (commsgun spec 12.8).
-- **S17** `prompt=login` with `max_age=0` forces re-authentication, and the new ID token carries a fresh `auth_time`,
+- **S17** `prompt=login` with `max_age=1` forces re-authentication, and the new ID token carries a fresh `auth_time`,
   `email` and `preferred_username` (the openid web client, § 4.6). **S18** an edge container reaches Caddy via `host-gateway` and gets the
   public issuer. **S19** `storage user identifiers add` on an existing identifier (repeat-safe, mismatch detectable).
   **S20** the pinned image's config-validation command.

@@ -94,7 +94,7 @@ reconnect each one afterwards (§ 6).
 
 Gates before the first `both` (xstockstrat 345 design § 6); each is a hard stop:
 - the login zones cover `POST /accounts/api/sso/confirm` (SSO spec § 4.3), pinned in `caddy-routing-test.sh`;
-- spike S17 shows a fresh `auth_time` on `prompt=login` + `max_age=0`;
+- spike S17 shows a fresh `auth_time` on `prompt=login` + `max_age=1`;
 - the web client is registered with `openid profile email` and the claims policy (SSO spec § 4.6);
 - the seeded admin row has the owner's password (step 1).
 
