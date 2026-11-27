@@ -64,7 +64,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     at `lldap.private.<domain>`, where admins add, change and offboard people; SOPS holds no people. Being the passwords' only
     writer is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from SOPS). The
     cost, accepted: no git audit trail for people, and no rebuild of people without a backup. The repo declares only the group
-    names Authelia's rules use and an `sso_sub` attribute; a deploy ensures they exist and never touches people or
+    names Authelia's rules use and an `sso-sub` attribute; a deploy ensures they exist and never touches people or
     memberships. Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the
     filter also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
   - Reset links last 1 h, to absorb Resend's rate limiting. Emails come from `auth@<domain>` (commsgun app `authelia`, 5 a
@@ -72,7 +72,7 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     support plaintext SMTP), on a network shared only with Authelia, so neither reaches the other's remaining ports.
     `require_second_factor` makes another device need an existing one; recovery after losing every device is an
     admin-present re-enrolment.
-  - Each person's `sub` lives in two places that restore each other: Authelia's storage and the `sso_sub` attribute on their
+  - Each person's `sub` lives in two places that restore each other: Authelia's storage and the `sso-sub` attribute on their
     lldap user. Before Authelia serves, a deploy copies a first-login `sub` into lldap, re-applies lldap's after an Authelia
     database loss, and fails on a mismatch, so once copied, losing either database never breaks links; usernames are never reused.
   - Sessions are in memory (no Redis): an Authelia restart signs everyone out of the portal; app sessions and OIDC refresh tokens
