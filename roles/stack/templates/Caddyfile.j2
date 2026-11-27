@@ -372,6 +372,11 @@
 		reverse_proxy 127.0.0.1:{{ happybabytracker_ui_port }}
 	}
 
+	@lldap_ui host {{ lldap_ui_private_hostname }}
+	handle @lldap_ui {
+		reverse_proxy 127.0.0.1:{{ lldap_ui_port }}
+	}
+
 	@status host {{ status_private_hostname }}
 	handle @status {
 		reverse_proxy 127.0.0.1:{{ gatus_port }}

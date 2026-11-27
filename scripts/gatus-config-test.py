@@ -143,6 +143,13 @@ class Gatus(unittest.TestCase):
             self.assertEqual(e["alerts"], [{"type": "ntfy"}], name)
         self.assertNotIn("happybabytracker_api_port", V)
 
+    def test_the_lldap_name_is_probed_over_the_tailnet(self):
+        e = ENDPOINTS["lldap-private"]
+        self.assertEqual((e["group"], e["url"], e["interval"]), ("edge", f"https://{V['lldap_ui_private_hostname']}/health", "1m"))
+        self.assertEqual(e["conditions"], ["[STATUS] == 200", "[CERTIFICATE_EXPIRATION] > 336h"])
+        self.assertEqual(e["client"]["dns-resolver"], "udp://100.100.100.100:53")
+        self.assertEqual(e["alerts"], [{"type": "ntfy"}])
+
     def test_no_probe_targets_healthz_reminders(self):
         # /healthz/reminders does not exist until the reminder worker ships.
         self.assertEqual([n for n, e in ENDPOINTS.items() if "/healthz/reminders" in e["url"]], [])
