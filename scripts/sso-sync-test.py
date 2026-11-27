@@ -33,6 +33,8 @@ FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_DOCKER_LOG"], "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\n")
+with open(os.environ["FAKE_DOCKER_LOG"] + ".env", "a") as f:
+    f.write(json.dumps(os.environ.get("LLDAP_USER_PASSWORD")) + "\n")
 args = sys.argv[1:]
 if "sh" in args and "-c" in args:
     text = os.environ.get("FAKE_EXPORT", "")
@@ -47,6 +49,8 @@ elif "identifiers" in args and "add" in args:
     if str(n) == os.environ.get("FAKE_ADD_FAIL_AT"):
         sys.stderr.write("Error: error inserting user opaque id: UNIQUE constraint failed\n")
         sys.exit(1)
+elif "lldap_set_password" in " ".join(args):
+    sys.exit(int(os.environ.get("FAKE_SET_PASSWORD_RC", "0")))
 elif "migrate" in args:
     sys.stderr.write("Error: schema already up to date\n")
     sys.exit(1)
@@ -71,7 +75,7 @@ class FakeLldap:
     """Answers the login and the GraphQL calls sso_sync.py makes; mutations change the state and are recorded."""
 
     def __init__(self, state):
-        self.state, self.mutations = state, []
+        self.state, self.mutations, self.events, self.revoked = state, [], [], False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -82,14 +86,25 @@ class FakeLldap:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if self.path == "/auth/simple/login":
                     ok = body == {"username": "admin", "password": ADMIN_PW}
-                    return self.reply({"token": "fake-jwt"} if ok else {}, 200 if ok else 401)
-                if self.headers.get("Authorization") != "Bearer fake-jwt":
+                    fake.revoked = fake.revoked and not ok  # a new session's token is valid
+                    return self.reply({"token": "fake-jwt"} if ok else {}, 200 if ok else 401,
+                                      cookies=["token=fake-jwt; HttpOnly", "refresh_token=fake-refresh+abc; HttpOnly"])
+                if self.headers.get("Authorization") != "Bearer fake-jwt" or fake.revoked:
                     return self.reply({}, 401)
                 self.reply(fake.graphql(body["query"], body.get("variables") or {}))
 
-            def reply(self, obj, code=200):
+            def do_GET(self):
+                if self.path == "/auth/logout" and "refresh_token=fake-refresh+abc" in self.headers.get("Cookie", ""):
+                    fake.revoked = True
+                    fake.events.append("logout")
+                    return self.reply({})
+                self.reply({}, 404)
+
+            def reply(self, obj, code=200, cookies=()):
                 data = json.dumps(obj).encode()
                 self.send_response(code)
+                for c in cookies:
+                    self.send_header("Set-Cookie", c)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -163,6 +178,10 @@ class Base(unittest.TestCase):
     def ensure(self, stdin=None):
         return self.run_sync("ensure", "--groups", *GROUPS, "--bind-user", BIND, "--bind-email", "authelia@ldap.invalid",
                              stdin=stdin)
+
+    def docker_env(self):
+        p = Path(str(self.log) + ".env")
+        return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
 
     def docker_calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -246,24 +265,37 @@ class Ensure(Base):
         r = self.ensure()
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.docker_calls()
-        self.assertEqual(calls, [["compose", "-f", "/srv/edge/compose.yml", "exec", "-T", "lldap", "/app/lldap_set_password",
-                                  "--base-url", "http://localhost:17170", "--admin-username", "admin",
-                                  f"--admin-password={ADMIN_PW}", "--username", BIND, f"--password={BIND_PW}"]])
+        self.assertEqual(calls, [["compose", "-f", "/srv/edge/compose.yml", "exec", "-T", "-e", "LLDAP_USER_PASSWORD", "lldap",
+                                  "/app/lldap_set_password", "--base-url", "http://localhost:17170", "--token=fake-jwt",
+                                  "--username", BIND]])
+        self.assertEqual(self.docker_env(), [BIND_PW])  # a dash-leading value is safe in env
+        self.assertEqual(self.lldap.events, ["logout"])
+        self.assertTrue(self.lldap.revoked)
         self.assertNoValues(r)
 
-    def test_a_secret_starting_with_a_dash_is_passed_as_opt_equals_value(self):
+    def test_no_password_is_in_the_exec_argv_and_its_token_is_revoked(self):
         self.serve(lldap_state())
         self.assertEqual(self.ensure().returncode, 0)
         argv = self.docker_calls()[0]
         self.assertTrue(ADMIN_PW.startswith("-") and BIND_PW.startswith("-"))
-        self.assertIn(f"--admin-password={ADMIN_PW}", argv)
-        self.assertIn(f"--password={BIND_PW}", argv)
-        self.assertNotIn(ADMIN_PW, argv)
-        self.assertNotIn(BIND_PW, argv)
+        for pw in (ADMIN_PW, BIND_PW):  # docker's exec events record argv
+            self.assertFalse([a for a in argv if pw in a], argv)
+        self.assertLess(argv.index("-e"), argv.index("lldap"))  # compose exec's option, not the tool's
+        self.assertIn("--token=fake-jwt", argv)
+        self.assertTrue(self.lldap.revoked)
+        self.lldap.close()
+        self.log.unlink()
+        Path(str(self.log) + ".env").unlink()
+        self.fake_env = {"FAKE_SET_PASSWORD_RC": "1"}
+        fake = self.serve(lldap_state())
+        r = self.ensure()
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(fake.events, ["logout"])  # revoked on failure too
+        self.assertNoValues(r)
 
     def test_the_secrets_come_on_stdin_only(self):
         src = SCRIPT.read_text()
-        self.assertNotIn("os.environ", src)
+        self.assertNotRegex(src, r"os\.environ(\[|\.get)")  # passed through to docker, never read
         self.assertNotIn("LLDAP_ADMIN_PASSWORD", src)
         fake = self.serve(lldap_state())
         for cmd, stdin, key in (("ensure", {"admin_password": ADMIN_PW}, "bind_password"),
@@ -331,7 +363,7 @@ class Reconcile(Base):
                                         "--service", "openid", "--config", "/config/configuration.yml"]])
         self.assertEqual(fake.mutations, [])
         migrate = ["compose", "-f", "/srv/edge/compose.yml", "run", "--rm", "--no-deps", "-T", "authelia",
-                   "authelia", "storage", "migrate", "up"]
+                   "authelia", "storage", "migrate", "up", "--config", "/config/configuration.yml"]
         self.assertEqual(self.docker_calls()[0], migrate)  # before the export, on the image the stack will run
 
     def test_reconcile_leaves_matching_subs_alone(self):

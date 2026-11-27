@@ -14,6 +14,7 @@ counts; deploy logs are public, so never a sub, an email, an attribute value or 
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import urllib.request
@@ -141,6 +142,7 @@ class Lldap:
     def __init__(self, url: str, admin_password: str):
         self.url = url.rstrip("/")
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.cookies = {}
         body = self._post("/auth/simple/login", {"username": ADMIN_USER, "password": admin_password}, "login")
         self.token = body["token"]
 
@@ -151,9 +153,22 @@ class Lldap:
         req = urllib.request.Request(self.url + path, data=json.dumps(payload).encode(), headers=headers, method="POST")
         try:
             with self.opener.open(req, timeout=30) as r:
+                for c in r.headers.get_all("Set-Cookie") or []:
+                    name, _, value = c.split(";", 1)[0].partition("=")
+                    self.cookies[name.strip()] = value
                 return json.load(r)
         except Exception as e:
             raise SyncError(f"lldap {what} failed ({type(e).__name__})") from None
+
+    def logout(self):
+        """Revokes this session's token: it is in docker's exec events."""
+        cookie = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        req = urllib.request.Request(self.url + "/auth/logout", headers={"Cookie": cookie})
+        try:
+            with self.opener.open(req, timeout=30):
+                pass
+        except Exception as e:
+            raise SyncError(f"lldap logout failed ({type(e).__name__})") from None
 
     def gql(self, query, variables=None, what="query"):
         body = self._post("/api/graphql", {"query": query, "variables": variables or {}}, what, self.token)
@@ -165,9 +180,10 @@ class Lldap:
         return self.gql(STATE_QUERY, what="state")
 
 
-def compose(compose_file, *args):
-    """Never raises with argv (it can hold a secret); the caller names the step."""
-    return subprocess.run(["docker", "compose", "-f", compose_file, *args], capture_output=True, text=True, timeout=300)
+def compose(compose_file, *args, env=None):
+    """Never raises; the caller names the step."""
+    return subprocess.run(["docker", "compose", "-f", compose_file, *args], capture_output=True, text=True, timeout=300,
+                          env=env)
 
 
 def authelia_run(compose_file, *args):
@@ -205,10 +221,13 @@ def ensure(args, admin_password, bind_password) -> dict:
             raise SyncError(f"lldap has no {PASSWORD_MANAGER_GROUP} group")
         ld.gql("mutation($user: String!, $group: Int!) { addUserToGroup(userId: $user, groupId: $group) { ok } }",
                {"user": args.bind_user, "group": gid}, "addUserToGroup")
-    # --opt=value: a token_urlsafe secret can start with '-' and would otherwise be read as an option.
-    r = compose(args.compose, "exec", "-T", "lldap", "/app/lldap_set_password", "--base-url", "http://localhost:17170",
-                "--admin-username", ADMIN_USER, f"--admin-password={admin_password}",
-                "--username", args.bind_user, f"--password={bind_password}")
+    # Docker's exec events record argv, not env: the password goes by env, and the token is revoked after.
+    try:
+        r = compose(args.compose, "exec", "-T", "-e", "LLDAP_USER_PASSWORD", "lldap", "/app/lldap_set_password",
+                    "--base-url", "http://localhost:17170", f"--token={ld.token}", "--username", args.bind_user,
+                    env={**os.environ, "LLDAP_USER_PASSWORD": bind_password})
+    finally:
+        ld.logout()
     if r.returncode != 0:
         raise SyncError(f"lldap_set_password for {args.bind_user} exited {r.returncode}")
     return {"created_groups": plan.create_groups, "created_attribute": plan.create_attribute,
@@ -231,7 +250,7 @@ def reconcile(args, admin_password) -> tuple:
     users = ld.state()["users"]
     ids = {u["id"].lower(): u["id"] for u in users}
     in_lldap = lldap_subs(users)
-    r = authelia_run(args.compose, "authelia", "storage", "migrate", "up")
+    r = authelia_run(args.compose, "authelia", "storage", "migrate", "up", "--config", AUTHELIA_CONFIG)
     if r.returncode != 0 and "schema already up to date" not in r.stdout + r.stderr:
         raise SyncError(f"Authelia's storage migration exited {r.returncode}")
     plan = reconcile_plan(authelia_export(args.compose), in_lldap)

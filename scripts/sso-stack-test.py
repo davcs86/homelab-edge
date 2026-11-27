@@ -7,6 +7,7 @@ import base64
 import importlib.util
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -168,7 +169,16 @@ class HardenedStart(unittest.TestCase):
         stdin = {"admin_password": cls.secrets["lldap_admin_password"]}
         if cmd == "ensure":
             stdin["bind_password"] = cls.secrets["authelia_ldap_bind_password"]
-        return subprocess.run(args, capture_output=True, text=True, input=json.dumps(stdin), timeout=600)
+        since = time.time()
+        r = subprocess.run(args, capture_output=True, text=True, input=json.dumps(stdin), timeout=600)
+        if cmd == "ensure":  # what docker recorded of this run's execs
+            time.sleep(1)
+            cls.ensure_events = subprocess.run(
+                ["docker", "events", "--since", f"{since - 1:.0f}", "--until", f"{time.time() + 1:.0f}", "--format", "{{json .}}"],
+                capture_output=True, text=True, timeout=60).stdout
+            cls.ensure_events = "".join(line + "\n" for line in cls.ensure_events.splitlines()
+                                        if json.loads(line)["timeNano"] >= since * 1e9)
+        return r
 
     @classmethod
     def lldap(cls):
@@ -255,8 +265,11 @@ class HardenedStart(unittest.TestCase):
         return password
 
     def set_password(self, uid, password):
-        self.compose("exec", "-T", "lldap", "/app/lldap_set_password", "--base-url", "http://localhost:17170", "--admin-username",
-                     "admin", f"--admin-password={self.secrets['lldap_admin_password']}", "--username", uid, f"--password={password}")
+        ld = self.lldap()
+        subprocess.run(["docker", "compose", "-f", str(self.dir / "compose.yml"), "exec", "-T", "-e", "LLDAP_USER_PASSWORD", "lldap",
+                        "/app/lldap_set_password", "--base-url", "http://localhost:17170", f"--token={ld.token}", "--username", uid],
+                       env={**os.environ, "LLDAP_USER_PASSWORD": password}, capture_output=True, check=True, timeout=60)
+        ld.logout()
 
     def sub_in_lldap(self, uid):
         u = next(u for u in self.lldap().state()["users"] if u["id"] == uid)
@@ -300,6 +313,21 @@ class HardenedStart(unittest.TestCase):
         self.assertSummary(self.sync("ensure"), {"created_groups": [], "created_attribute": False, "created_bind_user": False})
         self.assertEqual(self.people_state(), before)
         print("\nensure twice: second run changed nothing", file=sys.stderr)
+
+        execs = [e for e in map(json.loads, self.ensure_events.splitlines()) if e.get("Action", "").startswith("exec_")
+                 and "lldap_set_password" in e["Action"]]
+        self.assertTrue(execs, "no exec event recorded for lldap_set_password")
+        for name in ("lldap_admin_password", "authelia_ldap_bind_password"):
+            self.assertFalse(self.secrets[name] in self.ensure_events, name)  # no value in the failure message
+        tokens = set(re.findall(r"--token=([A-Za-z0-9._-]+)", self.ensure_events))
+        self.assertTrue(tokens)
+        for token in tokens:  # revoked before ensure exits
+            req = urllib.request.Request(f"{LLDAP_URL}/api/graphql", method="POST", data=b'{"query":"{ groups { id } }"}',
+                                         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                NO_PROXY.open(req, timeout=10)
+            self.assertEqual(e.exception.code, 401)
+        print(f"docker events: {len(execs)} exec events, no lldap password in them, their token rejected (401)", file=sys.stderr)
 
         refused = {u: self.first_factor(u, pw) for u, pw in (
             ("t6outsider", outsider_pw), ("admin", self.secrets["lldap_admin_password"]),
