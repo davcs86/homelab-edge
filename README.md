@@ -140,7 +140,9 @@ the VPS waits for approval on the `production` environment.
 Rebuilding onto a new droplet: delete the old droplet in DO, run `provision` (re-attaches the same reserved IP, so no
 DNS change), delete the `edge-sfo3-01` line from `known_hosts`, replace the deSEC token (the new droplet has new
 egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)), run `bootstrap`, then
-[restore headscale](docs/runbooks/recovery.md) so existing nodes keep working.
+[restore headscale](docs/runbooks/recovery.md) so existing nodes keep working, and restore Authelia, lldap and commsgun
+([`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) § Restore Authelia, lldap or commsgun) before anyone logs in at
+the portal: a login before the restore mints a new `sub`, which the next deploy's reconcile refuses as a mismatch.
 
 ## Documentation
 

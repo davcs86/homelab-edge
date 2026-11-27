@@ -206,7 +206,9 @@ In `roles/stack/tasks/main.yml` order, all before "Start the stack" unless noted
 4. `edge-sso-sync ensure` (`scripts/sso_sync.py`): creates each missing group of `sso_groups`; creates `sso-sub` as a single,
    hidden, not user-editable `STRING`, and refuses (exit 2) if one exists in any other shape; creates the bind account
    `authelia` (`authelia@ldap.invalid`) if missing, adds it to `lldap_password_manager`, refuses if it is in any
-   `sso_groups` group, and sets its password from SOPS (`authelia_ldap_bind_password`).
+   `sso_groups` group, and sets its password from SOPS (`authelia_ldap_bind_password`) with `lldap_set_password`: the
+   password in that exec's environment, the admin side as the script's session token, which it then revokes by logging out
+   (Docker's exec events record argv, not env). The logout ends every lldap UI session of `admin` open at that moment.
 5. `edge-sso-sync reconcile`: `storage migrate up`, an export, then for each `sso_people` member (usernames case-insensitive):
    a `sub` only in Authelia is copied to lldap (`copied_to_lldap`), one only in lldap is added to Authelia
    (`added_to_authelia`), equal ones are left (`unchanged`). Two different values, an lldap value that is not a

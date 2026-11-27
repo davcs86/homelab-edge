@@ -204,8 +204,11 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     command line for both `script` and `command` (seen on ansible-core 2.22.0 with `-vvv`), and under `become` that is sudo's
     argv, which the journal logs. So the script is copied to `/usr/local/sbin/edge-sso-sync` and run with `command`. Each sync
     task has `no_log: true` and `failed_when: false`, then a `debug` prints its summary (usernames and counts) and a `fail` stops
-    on `rc != 0`, since `no_log` censors a failing task completely (happybabytracker entry above). `lldap_set_password` still
-    takes both passwords as `--opt=value` (a value can start with `-`): briefly visible to root's `ps`, never logged.
+    on `rc != 0`, since `no_log` censors a failing task completely (happybabytracker entry above). `lldap_set_password` gets
+    no password in its argv: Docker's `exec_create`/`exec_start` events record an exec's full argv (and `/proc/*/cmdline` is
+    world-readable), so the bind password goes through `compose exec -e LLDAP_USER_PASSWORD`, which the events do not carry,
+    and the admin login is the script's own session token (`--token=`), revoked by `/auth/logout` once the tool has run
+    (seen: a `docker events` canary showed `--password=`, `--admin-password=` and `--token=` values, never the env value).
   - `ensure` refuses an `sso-sub` attribute that is not a single, hidden, not user-editable `STRING`: an editable one would let a
     person set someone else's `sub` and inherit their links at the next restore. A non-v4 UUID in lldap, or one `sub` for two
     usernames (Authelia keeps identifiers unique), fails the reconcile with nothing written (4.39.28 accepts only v4).
