@@ -219,13 +219,16 @@ Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the r
 ### 4.11 Revocation of MCP access (owner, 2026-11-27)
 Access tokens are JWTs checked offline until they expire, and a refresh survives a group removal (S4), so without a live
 check removing a person or a group does not end MCP access. S27 decides between:
-- **A (if S27 passes, P0 and P1):** Caddy's `forward_auth` on webhooks-mcp's `/mcp`, in `oauth` only, to Authelia's
+- **A (if S27 passes for the JWT variant, P0, and its Claude.ai side passes in P1):** Caddy's `forward_auth` on webhooks-mcp's `/mcp`, in `oauth` only, to Authelia's
   `/api/authz/forward-auth` with the `HeaderAuthorization` `Bearer` strategy; Authelia re-reads the person from lldap on
   every request, so a group or `sso_people` removal takes effect at once. Authelia's rules for this require the client to
   use PAR, `form_post` and explicit consent and to hold `authelia.bearer.authz`; Authelia down means `/mcp` down (fails
-  closed, like the § 3 signing-key rule). The decision 4 exception covers this path only.
+  closed, like the § 3 signing-key rule). The decision 4 exception covers this path only. A needs the JWT variant:
+  webhooks-mcp verifies JWT access tokens itself; if only opaque tokens pass, that is a design change for the owner.
 - **C (otherwise):** the webhooks-mcp client's access-token lifespan drops to 5 min; offboarding through `sso_people`
-  (S24) then ends access within 5 min; removing only the `webhooks-mcp` group still does not.
+  (S24) then ends access within 5 min; removing only the `webhooks-mcp` group still does not. C's bound rests on S24: if a
+  refresh also survives leaving `sso_people`, nothing on the issuer side ends access, and the owner decides then (for
+  example, no `offline_access` for that client, so the connector re-authorizes when its access token expires).
 
 xstockstrat's MCP is out of scope here: it accepts its built-in server's tokens in `local`/`both`, so an Authelia check
 cannot sit in front of it, and disabling the user in the app already refuses its tokens within ~60 s (345 @AC-14: the MCP resolve cache lives 60 s).
@@ -264,11 +267,9 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 - **Lost every device:** the admin deletes the registrations (`authelia storage user totp delete`, `… webauthn delete`) and
   re-enrolment happens with the admin present (once no device is registered, the emailed code alone would suffice).
 - **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user
-  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp needs nothing beyond the group (an issued access token lasts
-  ≤ 1 h; refresh per S24); delete the Authelia identifier and clear
-  `sso-sub`. S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
-  webhooks-mcp has no app-side refusal (decision 16 as amended): S24 is its only stop, and removing just the
-  `webhooks-mcp` group does not end a connector's access (S4, below).
+  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp has no app account (decision 16 as amended), so § 4.11 decides
+  how fast its access ends: at once under A, within 5 min under C; delete the Authelia identifier and clear `sso-sub`.
+  S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
   happybabytracker's disable (and an admin unlink) also deletes the parent's push subscriptions and ntfy topic; until the
   admin does it, medication reminders keep reaching the person's devices (owner, 2026-11-24).
 - **Authelia DB lost:** restore from the edge backup before anyone logs in. Without a backup, the `sso-sub` attributes are

@@ -51,7 +51,8 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     `static+oauth` | `oauth`), so the OSS repos run without an identity provider. The homelab runs `oidc`; `both` is switched on
     only to link accounts or for break-glass. Local logins, when on, are public behind Caddy's login limits: public names have
     no split-horizon, so a tailnet client arrives from its WAN IP and a tailnet-only rule would lock everyone out. No
-    `forward_auth` for our own apps; allowed only for third-party software without OIDC.
+    `forward_auth` for our own apps; allowed only for third-party software without OIDC, and, conditionally on spike S27,
+    on webhooks-mcp's `/mcp` to make revocation immediate (SSO spec § 4.11).
   - Apps own users and roles; Authelia proves identity and gates which app a person opens (one group per app, `default_policy:
     deny`, `two_factor`). Linking is explicit ("Link SSO" from a signed-in local account, or an invite redeemed by SSO), keyed on
     `(issuer, subject)`; unlinked logins and MCP tokens are refused; no email matching, no group-to-role mapping, no just-in-time
