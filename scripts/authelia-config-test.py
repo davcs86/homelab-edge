@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-"""Renders Authelia's configuration from the prod group_vars plus fake secrets and checks it against the SSO spec (§ 4.4–4.6)."""
+"""Renders Authelia's configuration, the SSO env files, their pre-write assertions and the compose services from the prod
+group_vars plus fake secrets, and checks them against the SSO spec (§ 4.1, § 4.4–4.6, § 4.8, § 4.10)."""
 import base64
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -50,6 +56,7 @@ V = load_vars()
 # trim_blocks as Ansible's template module; b64encode as Ansible's filter.
 ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
 ENV.filters["b64encode"] = lambda s: base64.b64encode(s.encode()).decode()
+ENV.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None  # Ansible's `match` test
 CLIENT_KEYS = [c["key"] for c in V["authelia_oidc_clients"] if "key" in c]
 
 
@@ -217,6 +224,254 @@ class Secrets(unittest.TestCase):
         self.assertNotIn("smtp", TEXT)
         self.assertEqual(C["storage"]["local"], {"path": "/data/db.sqlite3"})
         self.assertEqual(set(C["storage"]), {"encryption_key", "local"})
+
+
+# ---------- compose services, env files, volume ownership (Task 5) ----------
+PLAIN_KEYS = ["authelia_session_secret", "authelia_storage_encryption_key", "authelia_reset_password_jwt_secret",
+              "authelia_oidc_hmac_secret", "authelia_ldap_bind_password", "lldap_jwt_secret", "lldap_key_seed", "lldap_admin_password"]
+FAKE_PEM = "-----BEGIN PRIVATE KEY-----\nZmFrZS1qd2tzLWtleQ==\n-----END PRIVATE KEY-----\n"
+BLOCK_NAME = "SSO secrets and configuration"
+AUTHELIA_ENV_TASK, LLDAP_ENV_TASK, CONFIG_TASK = "Authelia environment", "Lldap environment", "Authelia configuration"
+CREATE_TASK, OWNER_TASK = "Create the SSO containers and their volumes", "SSO volumes belong to uid 10001"
+PINS = {"authelia_image": "authelia/authelia:4.39.28@sha256:bd97cff4fcbf715b5ff1f9ae286afbe6033afce385302520b0368122d43a6f54",
+        "lldap_image": "lldap/lldap:v0.6.3-alpine-rootless@sha256:ba2c50930ea998eefd5454aa678a7977448019248b1827da87d330df0b71c284"}
+
+
+def stack_secrets(**over):
+    s = fake_secrets() | {k: f"fake-{k}-".ljust(64, "x") for k in PLAIN_KEYS} | {"authelia_oidc_jwks_key": FAKE_PEM}
+    s |= over
+    return {k: v for k, v in s.items() if v is not None}
+
+
+def find_task(tasks, name):
+    for t in tasks:
+        if t.get("name") == name:
+            return t
+        found = find_task(t.get("block", []), name)
+        if found:
+            return found
+    return None
+
+
+TASKS = yaml.safe_load((ROOT / "roles/stack/tasks/main.yml").read_text())
+BLOCK = find_task(TASKS, BLOCK_NAME) or {}
+COMPOSE_TEXT = (ROOT / "roles/stack/templates/compose.yml.j2").read_text()
+COMPOSE = yaml.safe_load(ENV.from_string(COMPOSE_TEXT).render(**V, ansible_managed="test"))  # resolves `<<: *hardening`
+S = COMPOSE["services"]
+
+
+def render_env(task_name, s):
+    return ENV.from_string(find_task(TASKS, task_name)["ansible.builtin.copy"]["content"]).render(**V, edge_secrets=s)
+
+
+def parse_env(text):
+    """Every line is NAME='value' with no quote or line break inside: Compose takes a single-quoted value verbatim."""
+    out = {}
+    for line in text.splitlines():
+        m = re.fullmatch(r"([A-Z][A-Z0-9_]*)='([^'\n]*)'", line)
+        if not m:
+            raise ValueError(f"not a single-quoted env line: {line.split('=')[0]}")
+        out[m.group(1)] = m.group(2)
+    return out
+
+
+def first_failure(s):
+    """Evaluates the block's assert tasks the way Ansible does: per loop item, conditions in order.
+    Returns the rendered fail_msg of the first failing assertion, or None."""
+    ctx = {**V, "edge_secrets": s}
+    for t in BLOCK["block"]:
+        a = t.get("ansible.builtin.assert")
+        if a is None:
+            continue
+        items = t.get("loop", [None])
+        if isinstance(items, str):
+            items = ENV.compile_expression(items.strip()[2:-2])(**ctx)
+        that = a["that"] if isinstance(a["that"], list) else [a["that"]]
+        for item in items:
+            for cond in that:
+                if not ENV.compile_expression(cond)(**ctx, item=item):
+                    return ENV.from_string(a["fail_msg"]).render(**ctx, item=item)
+    return None
+
+
+class Stack(unittest.TestCase):
+    def test_services_are_hardened_read_only_and_loopback_only(self):
+        hardening = COMPOSE["x-hardening"]
+        self.assertEqual((hardening["cap_drop"], hardening["security_opt"]), (["ALL"], ["no-new-privileges:true"]))
+        for name, image, env_file, volume in (("authelia", V["authelia_image"], "./authelia/authelia.env", "authelia-data:/data"),
+                                              ("lldap", V["lldap_image"], "./lldap/lldap.env", "lldap-data:/data")):
+            svc = S[name]
+            self.assertEqual({k: svc[k] for k in hardening}, hardening, name)
+            self.assertEqual((svc["user"], svc["read_only"], svc["mem_limit"]), ("10001:10001", True, "128m"), name)
+            self.assertEqual((svc["image"], svc["env_file"], svc["networks"]), (image, [env_file], ["authelia"]), name)
+            self.assertIn(volume, svc["volumes"], name)
+            self.assertNotIn("environment", svc, name)
+        self.assertEqual((V["authelia_port"], V["lldap_ui_port"]), (9091, 17170))
+        self.assertEqual(S["authelia"]["ports"], ["127.0.0.1:9091:9091"])
+        self.assertEqual(S["lldap"]["ports"], ["127.0.0.1:17170:17170"])
+        self.assertIn('ports: ["127.0.0.1:{{ authelia_port }}:9091"]', COMPOSE_TEXT)
+        self.assertIn('ports: ["127.0.0.1:{{ lldap_ui_port }}:17170"]', COMPOSE_TEXT)
+        published = [str(p) for svc in S.values() for p in svc.get("ports", [])]
+        self.assertFalse([p for p in published if "3890" in p], published)
+        self.assertEqual(S["authelia"]["volumes"], ["./authelia/config:/config:ro", "authelia-data:/data"])
+        self.assertEqual(S["lldap"]["volumes"], ["lldap-data:/data"])
+        self.assertEqual(S["authelia"]["command"], ["authelia", "--config", "/config/configuration.yml"])
+        self.assertEqual(S["authelia"]["depends_on"], {"lldap": {"condition": "service_healthy"}})
+        self.assertEqual(COMPOSE["networks"]["authelia"], {})  # not internal: Authelia's startup NTP check goes out
+        for name, svc in S.items():
+            if name not in ("authelia", "lldap"):
+                self.assertNotIn("authelia", svc.get("networks", []), name)
+        self.assertIn("authelia-data", COMPOSE["volumes"])
+        self.assertIn("lldap-data", COMPOSE["volumes"])
+
+    def test_authelia_has_its_own_health_probe(self):
+        ntfy = S["ntfy"]["healthcheck"]
+        self.assertEqual(S["authelia"]["healthcheck"], {
+            "test": ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9091/api/health"],
+            "interval": ntfy["interval"], "timeout": ntfy["timeout"], "retries": ntfy["retries"]})  # S3
+        self.assertEqual(S["lldap"]["healthcheck"], {
+            "test": ["CMD", "wget", "-qO-", "http://127.0.0.1:17170/health"],
+            "interval": ntfy["interval"], "timeout": ntfy["timeout"], "retries": ntfy["retries"]})
+        self.assertIs(C["server"]["disable_healthcheck"], True)
+
+    def test_compose_holds_no_secret(self):
+        for k, value in stack_secrets().items():
+            self.assertNotIn(value, json.dumps(COMPOSE), k)
+        self.assertNotIn("edge_secrets", COMPOSE_TEXT)
+
+    def test_pins_keep_the_quoted_digest_shape_and_have_a_versions_row(self):
+        versions = (VARS_DIR / "versions.yml").read_text()
+        docs = (ROOT / "docs/versions.md").read_text()
+        for var, pin in PINS.items():
+            lines = re.findall(rf"^{var}:.*$", versions, re.M)
+            self.assertEqual(lines, [f'{var}: "{pin}"'], var)  # EDGE-01: double quotes, no trailing comment
+            self.assertRegex(lines[0], rf'^{var}: ".*@sha256:[0-9a-f]{{64}}"$')
+            self.assertEqual(V[var], pin)
+            self.assertEqual(len([r for r in docs.splitlines() if r.startswith("|") and f"`{var}`" in r]), 1, var)
+
+
+class StackAssertions(unittest.TestCase):
+    def test_assertions_run_before_any_file_is_written(self):
+        self.assertTrue(BLOCK, f"no task named {BLOCK_NAME!r}")
+        self.assertIs(BLOCK.get("no_log"), True)
+        kinds = [next(iter(set(t) & {"ansible.builtin.assert", "ansible.builtin.copy", "ansible.builtin.template"}))
+                 for t in BLOCK["block"]]
+        writes = [k for k in kinds if k != "ansible.builtin.assert"]
+        self.assertEqual(kinds, ["ansible.builtin.assert"] * (len(kinds) - len(writes)) + writes, kinds)
+        self.assertEqual(sorted(writes), ["ansible.builtin.copy"] * 2 + ["ansible.builtin.template"])
+        names = [t.get("name") for t in TASKS]
+        self.assertLess(names.index("Happybabytracker secrets and configuration"), names.index(BLOCK_NAME))
+        self.assertLess(names.index(BLOCK_NAME), names.index("Compose file"))
+        dirs = find_task(TASKS, "Stack directories")["loop"]
+        for d in ({"path": "{{ edge_root }}/authelia", "mode": "0750"}, {"path": "{{ edge_root }}/authelia/config", "mode": "0755"},
+                  {"path": "{{ edge_root }}/lldap", "mode": "0750"}):
+            self.assertIn(d, dirs)
+        self.assertIsNone(first_failure(stack_secrets()))
+
+    def test_each_secret_is_present_a_string_and_free_of_quote_backslash_cr_lf(self):
+        for key in PLAIN_KEYS + CLIENT_KEYS:
+            good = stack_secrets()[key]
+            for bad in (None, "", 7, ["x" * 40], good[:2] + "'" + good[2:], good + "\\", good + "\r", good + "\n", "a\nb" + good):
+                msg = first_failure(stack_secrets(**{key: bad}))
+                self.assertIsNotNone(msg, (key, repr(bad)))
+                self.assertIn(key, msg)
+                if isinstance(bad, str) and bad:
+                    self.assertNotIn(bad.strip(), msg)
+
+    def test_the_jwks_key_must_be_a_pkcs8_pem(self):
+        key = "authelia_oidc_jwks_key"
+        for bad in (None, 7, "", "fake-key", "-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n-----END RSA PRIVATE KEY-----\n"):
+            msg = first_failure(stack_secrets(**{key: bad}))
+            self.assertIsNotNone(msg, repr(bad))
+            self.assertIn(key, msg)
+            self.assertNotIn("ZmFrZQ", msg)
+
+    def test_failure_messages_name_keys_only(self):
+        for t in BLOCK["block"]:
+            msg = t.get("ansible.builtin.assert", {}).get("fail_msg", "")
+            for ref in re.findall(r"\{\{(.*?)\}\}", msg):
+                self.assertEqual(ref.strip(), "item.key", msg)
+        text = yaml.safe_dump(BLOCK)
+        for ref in re.findall(r"edge_secrets(\.[a-z_0-9]+|\[[^\]]*\])", text):  # EDGE-08: literal reads or `key:` loops
+            self.assertTrue(ref[1:] in PLAIN_KEYS + ["authelia_oidc_jwks_key"] or ref == "[item.key]", ref)
+        loop_keys = {i["key"] for t in BLOCK["block"] if isinstance(t.get("loop"), list) for i in t["loop"]}
+        self.assertEqual(loop_keys, set(PLAIN_KEYS))
+        self.assertTrue(set(PLAIN_KEYS) | {"authelia_oidc_jwks_key"} <= secret_keys.used_keys())
+
+
+class StackEnvFiles(unittest.TestCase):
+    def test_env_files_hold_exactly_the_contracted_variables(self):
+        s = stack_secrets()
+        authelia_env = render_env(AUTHELIA_ENV_TASK, s)
+        self.assertEqual(authelia_env.splitlines()[0], "X_AUTHELIA_CONFIG_FILTERS='template'")  # B1
+        self.assertNotIn("X_AUTHELIA_CFG_FILTERS", authelia_env)
+        self.assertEqual(parse_env(authelia_env), {
+            "X_AUTHELIA_CONFIG_FILTERS": "template",
+            "EDGE_SESSION_SECRET": s["authelia_session_secret"],
+            "EDGE_STORAGE_ENCRYPTION_KEY": s["authelia_storage_encryption_key"],
+            "EDGE_RESET_PASSWORD_JWT_SECRET": s["authelia_reset_password_jwt_secret"],
+            "EDGE_OIDC_HMAC_SECRET": s["authelia_oidc_hmac_secret"],
+            "EDGE_LDAP_BIND_PASSWORD": s["authelia_ldap_bind_password"],
+            "EDGE_OIDC_JWKS_KEY_B64": base64.b64encode(FAKE_PEM.encode()).decode()})
+        self.assertEqual(set(parse_env(authelia_env)) - {"X_AUTHELIA_CONFIG_FILTERS"}, set(ENV_NAMES + ["EDGE_OIDC_JWKS_KEY_B64"]))
+        self.assertEqual(parse_env(render_env(LLDAP_ENV_TASK, s)), {
+            "LLDAP_JWT_SECRET": s["lldap_jwt_secret"], "LLDAP_KEY_SEED": s["lldap_key_seed"],
+            "LLDAP_LDAP_USER_PASS": s["lldap_admin_password"], "LLDAP_LDAP_BASE_DN": V["lldap_base_dn"],
+            "LLDAP_DATABASE_URL": "sqlite:///data/users.db?mode=rwc"})
+        self.assertIs(BLOCK.get("no_log"), True)
+        self.assertNotIn("notify", BLOCK)
+        for name, dest in ((AUTHELIA_ENV_TASK, "authelia/authelia.env"), (LLDAP_ENV_TASK, "lldap/lldap.env")):
+            task = find_task(TASKS, name)
+            copy = task["ansible.builtin.copy"]
+            self.assertEqual((copy["dest"], copy["mode"]), ("{{ edge_root }}/" + dest, "0600"))
+            self.assertNotIn("notify", task, name)  # EDGE-04: env_file changes recreate the container
+        config = find_task(TASKS, CONFIG_TASK)
+        self.assertEqual(config["ansible.builtin.template"], {
+            "src": "authelia-config.yml.j2", "dest": "{{ edge_root }}/authelia/config/configuration.yml", "mode": "0644"})
+        self.assertNotIn("notify", config)  # § 4.8: the hash-compare restart, never a handler
+
+    def test_volume_ownership_is_set_before_lldap_starts(self):
+        names = [t.get("name") for t in TASKS]
+        self.assertLess(names.index("Compose file"), names.index(CREATE_TASK))
+        self.assertLess(names.index(CREATE_TASK), names.index(OWNER_TASK))
+        self.assertLess(names.index(OWNER_TASK), names.index("Start the stack"))
+        create = find_task(TASKS, CREATE_TASK)
+        self.assertEqual(create["ansible.builtin.command"],
+                         "docker compose -f {{ edge_root }}/compose.yml create --no-recreate lldap authelia")
+        self.assertIs(create["changed_when"], True)  # EDGE-03
+        owner = find_task(TASKS, OWNER_TASK)
+        self.assertEqual(owner["ansible.builtin.file"], {
+            "path": "/var/lib/docker/volumes/edge_{{ item }}/_data", "state": "directory",
+            "owner": "10001", "group": "10001", "mode": "0700"})
+        self.assertEqual(owner["loop"], ["authelia-data", "lldap-data"])
+
+    @unittest.skipUnless(shutil.which("docker") or os.environ.get("SSO_STACK_TEST_REQUIRE_DOCKER"), "docker is required")
+    def test_docker_compose_config_reads_back(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            s = stack_secrets()
+            for sub in ("authelia", "lldap"):
+                (d / sub).mkdir()
+            (d / "authelia/authelia.env").write_text(render_env(AUTHELIA_ENV_TASK, s))
+            (d / "lldap/lldap.env").write_text(render_env(LLDAP_ENV_TASK, s))
+            mini = {"name": "edge", "services": {"authelia": S["authelia"], "lldap": S["lldap"]},
+                    "networks": {"authelia": COMPOSE["networks"]["authelia"]},
+                    "volumes": {v: COMPOSE["volumes"][v] for v in ("authelia-data", "lldap-data")}}
+            (d / "compose.yml").write_text(yaml.safe_dump(mini))
+            r = subprocess.run(["docker", "compose", "-f", str(d / "compose.yml"), "config", "--format", "json"],
+                               capture_output=True, text=True, check=True, env={**os.environ, "HOME": os.environ.get("HOME", "/")})
+            cfg = json.loads(r.stdout)
+            svc = cfg["services"]
+            self.assertEqual(svc["authelia"]["environment"], parse_env(render_env(AUTHELIA_ENV_TASK, s)))
+            self.assertEqual(svc["lldap"]["environment"], parse_env(render_env(LLDAP_ENV_TASK, s)))
+            self.assertEqual(base64.b64decode(svc["authelia"]["environment"]["EDGE_OIDC_JWKS_KEY_B64"]).decode(), FAKE_PEM)
+            self.assertEqual([(p["host_ip"], p["published"], p["target"]) for p in svc["authelia"]["ports"]], [("127.0.0.1", "9091", 9091)])
+            self.assertEqual([(p["host_ip"], p["published"], p["target"]) for p in svc["lldap"]["ports"]], [("127.0.0.1", "17170", 17170)])
+            self.assertEqual(cfg["volumes"]["authelia-data"]["name"], "edge_authelia-data")
+            self.assertEqual(cfg["volumes"]["lldap-data"]["name"], "edge_lldap-data")
+            self.assertEqual(cfg["networks"]["authelia"].get("internal", False), False)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

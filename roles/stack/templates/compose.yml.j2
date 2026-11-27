@@ -154,9 +154,50 @@ services:
       timeout: 5s
       retries: 3
 
+  # Never publish LDAP 3890: only Authelia, on this network, may bind to it.
+  lldap:
+    <<: *hardening
+    image: {{ lldap_image }}
+    user: "10001:10001"
+    read_only: true
+    ports: ["127.0.0.1:{{ lldap_ui_port }}:17170"]
+    env_file: [./lldap/lldap.env]
+    volumes:
+      - lldap-data:/data
+    networks: [authelia]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:17170/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # The image's healthcheck.sh passes before Authelia listens under read_only; probe /api/health instead.
+  authelia:
+    <<: *hardening
+    image: {{ authelia_image }}
+    command: ["authelia", "--config", "/config/configuration.yml"]
+    user: "10001:10001"
+    read_only: true
+    ports: ["127.0.0.1:{{ authelia_port }}:9091"]
+    env_file: [./authelia/authelia.env]
+    volumes:
+      - ./authelia/config:/config:ro
+      - authelia-data:/data
+    networks: [authelia]
+    depends_on:
+      lldap: {condition: service_healthy}
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9091/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   commsgun: {}
   happybabytracker: {}
+  authelia: {}
 
 volumes:
   headscale-data:
@@ -168,3 +209,5 @@ volumes:
   webhooks-data:
   commsgun-data:
   happybabytracker-data:
+  authelia-data:
+  lldap-data:

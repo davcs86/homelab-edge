@@ -20,6 +20,8 @@ commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:3ceb1f8954eb63123ac61dc
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:485e18777bdafe6273519b37c2a1d6b6ea26a3f3dd793828d7b4503d751558f3"
 happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:ae8099cb1ad0b078d8e6ec85d109851e2dcd899f774778f619df31f819e2a0c8"
 happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:7c1325fb6d53a479ef6e107878cdfe59be10ca3b4ac11d53f43e3f63c54cfbbd"
+authelia_image: "authelia/authelia:4.39.28@sha256:bd97cff4fcbf715b5ff1f9ae286afbe6033afce385302520b0368122d43a6f54"
+lldap_image: "lldap/lldap:v0.6.3-alpine-rootless@sha256:ba2c50930ea998eefd5454aa678a7977448019248b1827da87d330df0b71c284"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
 db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 

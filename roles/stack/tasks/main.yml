@@ -14,6 +14,9 @@
     - {path: "{{ edge_root }}/webhooks-mcp", mode: "0750"}
     - {path: "{{ edge_root }}/commsgun", mode: "0750"}
     - {path: "{{ edge_root }}/happybabytracker", mode: "0750"}
+    - {path: "{{ edge_root }}/authelia", mode: "0750"}
+    - {path: "{{ edge_root }}/authelia/config", mode: "0755"}
+    - {path: "{{ edge_root }}/lldap", mode: "0750"}
     - {path: /var/log/caddy, mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
@@ -282,6 +285,89 @@
           ORIGIN='https://{{ happybabytracker_ui_private_hostname }}'
         mode: "0600"
 
+# ---------- SSO (Authelia, lldap) ----------
+# fail_msg may name a key, never a value.
+- name: SSO secrets and configuration
+  no_log: true
+  block:
+    - name: SSO secrets are present and fit a single-quoted env line
+      ansible.builtin.assert:
+        that:
+          - edge_secrets[item.key] is defined
+          - edge_secrets[item.key] is string
+          - edge_secrets[item.key] | length > 0
+          - "\"'\" not in edge_secrets[item.key]"
+          - "'\\\\' not in edge_secrets[item.key]"
+          - "'\\r' not in edge_secrets[item.key]"
+          - "'\\n' not in edge_secrets[item.key]"
+        fail_msg: "secrets/edge.sops.yaml: {{ item.key }} is missing, empty, or holds a quote, backslash or line break"
+        quiet: true
+      loop:
+        - {key: authelia_session_secret}
+        - {key: authelia_storage_encryption_key}
+        - {key: authelia_reset_password_jwt_secret}
+        - {key: authelia_oidc_hmac_secret}
+        - {key: authelia_ldap_bind_password}
+        - {key: lldap_jwt_secret}
+        - {key: lldap_key_seed}
+        - {key: lldap_admin_password}
+
+    # Each hash sits inside a single-quoted YAML scalar of configuration.yml.
+    - name: OIDC client hashes are present and fit a single-quoted line
+      ansible.builtin.assert:
+        that:
+          - edge_secrets[item.key] is defined
+          - edge_secrets[item.key] is string
+          - edge_secrets[item.key] | length > 0
+          - "\"'\" not in edge_secrets[item.key]"
+          - "'\\\\' not in edge_secrets[item.key]"
+          - "'\\r' not in edge_secrets[item.key]"
+          - "'\\n' not in edge_secrets[item.key]"
+        fail_msg: "secrets/edge.sops.yaml: {{ item.key }} is missing, empty, or holds a quote, backslash or line break"
+        quiet: true
+      loop: "{{ authelia_oidc_clients | selectattr('key', 'defined') | list }}"
+
+    - name: Authelia's JWKS key is a PKCS#8 PEM
+      ansible.builtin.assert:
+        that:
+          - edge_secrets.authelia_oidc_jwks_key is defined
+          - edge_secrets.authelia_oidc_jwks_key is string
+          - edge_secrets.authelia_oidc_jwks_key is match('-----BEGIN PRIVATE KEY-----\n')
+        fail_msg: "secrets/edge.sops.yaml: authelia_oidc_jwks_key is missing or not a PKCS#8 PEM private key"
+        quiet: true
+
+    # 4.39.28 reads only the X_AUTHELIA_CONFIG_FILTERS name; with any other every env template stays literal.
+    - name: Authelia environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/authelia/authelia.env"
+        content: |
+          X_AUTHELIA_CONFIG_FILTERS='template'
+          EDGE_SESSION_SECRET='{{ edge_secrets.authelia_session_secret }}'
+          EDGE_STORAGE_ENCRYPTION_KEY='{{ edge_secrets.authelia_storage_encryption_key }}'
+          EDGE_RESET_PASSWORD_JWT_SECRET='{{ edge_secrets.authelia_reset_password_jwt_secret }}'
+          EDGE_OIDC_HMAC_SECRET='{{ edge_secrets.authelia_oidc_hmac_secret }}'
+          EDGE_LDAP_BIND_PASSWORD='{{ edge_secrets.authelia_ldap_bind_password }}'
+          EDGE_OIDC_JWKS_KEY_B64='{{ edge_secrets.authelia_oidc_jwks_key | b64encode }}'
+        mode: "0600"
+
+    # The backup reads the database at this path.
+    - name: Lldap environment
+      ansible.builtin.copy:
+        dest: "{{ edge_root }}/lldap/lldap.env"
+        content: |
+          LLDAP_JWT_SECRET='{{ edge_secrets.lldap_jwt_secret }}'
+          LLDAP_KEY_SEED='{{ edge_secrets.lldap_key_seed }}'
+          LLDAP_LDAP_USER_PASS='{{ edge_secrets.lldap_admin_password }}'
+          LLDAP_LDAP_BASE_DN='{{ lldap_base_dn }}'
+          LLDAP_DATABASE_URL='sqlite:///data/users.db?mode=rwc'
+        mode: "0600"
+
+    - name: Authelia configuration
+      ansible.builtin.template:
+        src: authelia-config.yml.j2
+        dest: "{{ edge_root }}/authelia/config/configuration.yml"
+        mode: "0644"
+
 - name: Compose file
   ansible.builtin.template:
     src: compose.yml.j2
@@ -329,6 +415,20 @@
     state: absent
 
 # ---------- Compose ----------
+# A fresh named volume is root-owned; Authelia and lldap run as uid 10001 on a read-only root.
+- name: Create the SSO containers and their volumes
+  ansible.builtin.command: docker compose -f {{ edge_root }}/compose.yml create --no-recreate lldap authelia
+  changed_when: true
+
+- name: SSO volumes belong to uid 10001
+  ansible.builtin.file:
+    path: "/var/lib/docker/volumes/edge_{{ item }}/_data"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0700"
+  loop: [authelia-data, lldap-data]
+
 - name: Start the stack
   community.docker.docker_compose_v2:
     project_src: "{{ edge_root }}"
