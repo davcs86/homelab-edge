@@ -381,7 +381,7 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 | Repo | Work | Must honour |
 |---|---|---|
-| homelab-edge | P0 spike; P1 (§ 4, § 6); per-app edge wiring (§ 5); `sso.md`, `recovery.md`, `alerts.md`, `onboard-service.md`, `secrets/README.md`, `versions.md`; `commsgun.md` and `happybabytracker.md` change **before the bump PR that brings each app's first SSO-capable image is merged**: that image imports the env admin on first start, so SOPS rotation of the admin password stops working and moves to `admin reset-password`, and commsgun's session-secret rotation (`commsgun.md`) no longer signs everyone out | Rules 1–8, EDGE-01…14 |
+| homelab-edge | P0 spike; P1 (§ 4, § 6); per-app edge wiring (§ 5); `sso.md`, `recovery.md`, `alerts.md`, `onboard-service.md`, `secrets/README.md`, `versions.md`; `commsgun.md` and `happybabytracker.md` change **before the bump PR that brings each app's first SSO-capable image is merged**: that image imports the env admin on first start, so SOPS rotation of the admin password stops working and moves to `admin reset-password`, commsgun's session-secret rotation (`commsgun.md`) no longer signs everyone out, and rotating happybabytracker's `INTERNAL_API_TOKEN` no longer ends admin sessions (`happybabytracker.md` § 4 step 3; the admin fingerprint is gone) | Rules 1–8, EDGE-01…14 |
 | xstockstrat | Amend 345 per § 5, re-run `/sdd-review`, then `/sdd-execute` | 345 `design.md`, `debate.md` (D-6, D-73, D-74, D-96, D-97), `merge-order.md` |
 | webhooks-mcp | § 5 row; spec § 6 amendment | `docs/contracts.md` C1, C4, C8; WM-08 |
 | commsgun | § 3 contract, § 5 row (incl. the SMTP listener) | K1–K7, U1–U4, CG-01…09 |
