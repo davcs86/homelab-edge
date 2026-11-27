@@ -186,7 +186,8 @@ done
 for target in "ui|$app_host|$u/echo-headers|GET" "agent|$app_host|$u/agent|POST" "wmcp|$wmcp_host|$w/mcp|POST"; do
   IFS='|' read -r up host url method <<<"$target"
   for c in "authelia_session=SECRET|" "authelia_session=SECRET; a=1; b=2|a=1; b=2" "a=1; authelia_session=SECRET; b=2|a=1; b=2" \
-    "a=1; b=2; authelia_session=SECRET|a=1; b=2"; do
+    "a=1; b=2; authelia_session=SECRET|a=1; b=2" "authelia_session=DECOY; authelia_session=SECRET; a=1|a=1" \
+    "xauthelia_session=keep; authelia_session=SECRET; authelia_session_x=keep|xauthelia_session=keep; authelia_session_x=keep"; do
     expect "$up drops authelia_session from '${c%%|*}'" "200 $up cookie=[${c#*|}]" \
       "$(ck "$host" -X "$method" -H 'X-Echo-Headers: 1' -H "Cookie: ${c%%|*}" "$url")"
   done
@@ -194,6 +195,8 @@ for target in "ui|$app_host|$u/echo-headers|GET" "agent|$app_host|$u/agent|POST"
     "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: a=1' -H 'Cookie: authelia_session=SECRET; b=2' "$url")"
   expect "$up drops authelia_session from a first HTTP/2 cookie field" "200 $up cookie=[a=1; b=2]" \
     "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: authelia_session=SECRET' -H 'Cookie: a=1; b=2' "$url")"
+  expect "$up drops a decoy and authelia_session across HTTP/2 cookie fields" "200 $up cookie=[b=2]" \
+    "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: authelia_session=DECOY' -H 'Cookie: authelia_session=SECRET; b=2' "$url")"
 done
 
 # commsgun: the dashboard and the enqueue API are tailnet-only *.private names; each reaches only its own upstream.

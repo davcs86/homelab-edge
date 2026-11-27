@@ -16,7 +16,7 @@
 		level INFO
 		exclude http.log.error.private_zone http.log.error.public_zone http.handlers.reverse_proxy
 	}
-	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
+	# These log the full request, whose query and Referer carry recipient addresses and reset tokens; reverse_proxy is not per host.
 	log redacted_requests {
 		output stderr
 		format filter {
@@ -92,7 +92,7 @@
 # The portal's session cookie covers all of {{ public_zone }}; no app upstream may receive it, in any position.
 (app_ui) {
 	reverse_proxy {args[0]}:{{ app_ui_port }} {
-		header_up Cookie "^\s*authelia_session=[^;]*(;\s*|$)|;\s*authelia_session=[^;]*" ""
+		header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 		transport http {
 			resolvers 100.100.100.100
 		}
@@ -103,7 +103,7 @@
 (agent) {
 	uri strip_prefix /agent
 	reverse_proxy {args[0]}:{{ app_agent_port }} {
-		header_up Cookie "^\s*authelia_session=[^;]*(;\s*|$)|;\s*authelia_session=[^;]*" ""
+		header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 		flush_interval -1
 		transport http {
 			resolvers 100.100.100.100
@@ -308,7 +308,7 @@
 			max_size {{ body_limits[site.limits] }}
 		}
 		reverse_proxy 127.0.0.1:{{ site.port }} {
-			header_up Cookie "^\s*authelia_session=[^;]*(;\s*|$)|;\s*authelia_session=[^;]*" ""
+			header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 			flush_interval -1
 		}
 	}
