@@ -70,7 +70,7 @@ device login never uses SSO.
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
 | Change email | edit it in lldap's UI | at once for Authelia's emails; xstockstrat keeps its own copy, commsgun and happybabytracker store none; nothing syncs it |
-| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); in every app disable them (xstockstrat, in each environment: deactivate them on `/config-ui/users`, then `manage-users.py unlink-sso <email>`; commsgun: `docker compose run --rm -T commsgun-admin admin disable <username>`; happybabytracker: the admin disables or unlinks the parent, which also deletes their push subscriptions and ntfy topic: until then medication reminders keep reaching their devices; if the person is happybabytracker's admin, `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>` and `admin reset-password <username>`, since the admin is never deleted; webhooks-mcp: nothing beyond the group); delete their Authelia identifier and clear their `sso-sub` in lldap (or a later deploy re-applies it) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise (webhooks-mcp has none: access ends within 5 min, SSO spec § 4.11) |
+| Remove a person | remove `sso_people` and their app groups in lldap's UI (no login, no reset); in every app disable them (xstockstrat, in each environment: deactivate them on `/config-ui/users`, then `manage-users.py unlink-sso <email>`; commsgun: `docker compose run --rm -T commsgun-admin admin disable <username>`; happybabytracker: the admin disables or unlinks the parent, which also deletes their push subscriptions and ntfy topic: until then medication reminders keep reaching their devices; if the person is happybabytracker's admin, `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>` and `admin reset-password <username>`, since the admin is never deleted; webhooks-mcp: nothing beyond the group); clear their `sso-sub` in lldap (or a later deploy re-applies it); their Authelia identifier stays: Authelia 4.39.28 has no identifier delete, and it is harmless (out of `sso_people`, ignored by the reconcile, usernames never reused; owner, 2026-11-27) | at once for new logins; refresh tokens per spike S24, app-side refusal otherwise (webhooks-mcp has none: access ends within 5 min, SSO spec § 4.11) |
 | Change an xstockstrat role | `manage-users.py update-roles <email> --roles …` against that environment | web: at the next access-JWT refresh, up to `jwt.access_ttl_seconds` (default 900 s); MCP: within ~60 s |
 
 ## 5. Linking app accounts
@@ -134,7 +134,7 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
    commsgun `docker compose run --rm -T commsgun-admin admin unlink <username>`; happybabytracker parents through the
    admin's unlink, its admin through `docker compose run --rm -T happybabytracker-api admin unlink-sso <username>`;
    webhooks-mcp nothing to unlink (give the new person group `webhooks-mcp`).
-3. Remove the old person (§ 4), including their Authelia identifier; the old username is never reused.
+3. Remove the old person (§ 4: `sso-sub` cleared, Authelia identifier left); the old username is never reused.
 
 ## 8. Outages and recovery
 

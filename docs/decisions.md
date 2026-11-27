@@ -66,8 +66,9 @@ Durable reasoning that the code cannot show. One entry per item; add one when a 
     writer is what makes self-service reset possible (Authelia's file backend would rewrite a file rendered from SOPS). The
     cost, accepted: no git audit trail for people, and no rebuild of people without a backup. The repo declares only the group
     names Authelia's rules use and an `sso-sub` attribute; a deploy ensures they exist and never touches people or
-    memberships. Login requires lldap group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the
-    filter also keeps lldap's `admin` and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
+    memberships, except Authelia's bind account, which it creates and owns (owner, 2026-11-27). Login requires lldap
+    group `sso_people`, and offboarding removes it, since lldap cannot disable a user; the filter also keeps lldap's `admin`
+    and Authelia's bind account off the portal. lldap's `key_seed` never rotates.
   - Reset links last 1 h, to absorb Resend's rate limiting. Emails come from `auth@<domain>` (commsgun app `authelia`, 5 a
     minute and 30 a day) through an SMTP listener inside commsgun-api: STARTTLS with an edge-local CA (Authelia does not
     support plaintext SMTP), on a network shared only with Authelia, so neither reaches the other's remaining ports.
