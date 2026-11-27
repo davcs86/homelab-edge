@@ -112,6 +112,16 @@ endpoints:
       - "[CERTIFICATE_EXPIRATION] > 336h"
     alerts: [{type: ntfy}]
 
+  - name: lldap-private
+    group: edge
+    url: https://{{ lldap_ui_private_hostname }}/health
+    interval: 1m
+    <<: *tailnet
+    conditions:
+      - "[STATUS] == 200"
+      - "[CERTIFICATE_EXPIRATION] > 336h"
+    alerts: [{type: ntfy}]
+
   - name: happybabytracker-ui-private
     group: edge
     url: https://{{ happybabytracker_ui_private_hostname }}/healthz
