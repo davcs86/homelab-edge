@@ -117,7 +117,7 @@ class Portal(unittest.TestCase):
         self.assertEqual(C["regulation"], {"modes": ["user"], "max_retries": 3, "find_time": "2m", "ban_time": "5m"})
 
     def test_password_reset_and_elevated_session(self):
-        self.assertEqual(C["authentication_backend"]["password_reset"], {"disable": False})
+        self.assertNotIn("password_reset", C["authentication_backend"])  # 4.39.28 default: reset on
         self.assertEqual(C["identity_validation"], {
             "reset_password": {"jwt_lifespan": "1h", "jwt_secret": "ENV:EDGE_RESET_PASSWORD_JWT_SECRET"},
             "elevated_session": {"require_second_factor": True}})
@@ -156,7 +156,7 @@ class Clients(unittest.TestCase):
         self.assertEqual(list(CLIENTS), [c["client_id"] for c in OIDC["clients"]])  # no duplicate id
         self.assertEqual(set(CLIENTS), set(web) | set(mcp))
         self.assertEqual(len(CLIENTS), 9)
-        common = {"consent_mode": "explicit", "require_pkce": True, "pkce_challenge_method": "S256", "response_types": ["code"]}
+        common = {"consent_mode": "explicit", "require_pkce": True, "pkce_challenge_method": "S256"}
         hashes = fake_secrets()
         for cid, (group, redirect) in web.items():
             key = f"authelia_client_secret_{cid.replace('-', '_')}_pbkdf2"
@@ -170,7 +170,7 @@ class Clients(unittest.TestCase):
                                             "token_endpoint_auth_method": "none", "redirect_uris": CLAUDE_CALLBACKS,
                                             "scopes": scopes, "audience": [audience], "requested_audience_mode": "implicit",
                                             "access_token_signed_response_alg": "RS256",
-                                            "grant_types": ["authorization_code", "refresh_token"], **extra}, cid)
+                                            "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], **extra}, cid)
         self.assertEqual(OIDC["claims_policies"], {"web": {"id_token": ["email", "preferred_username"]}})
         self.assertNotIn("client_credentials", TEXT)
         self.assertFalse(re.search(r"localhost|127\.0\.0\.1|\[::1\]|http://", TEXT.split("clients:", 1)[1]))
@@ -210,7 +210,7 @@ class Secrets(unittest.TestCase):
         self.assertNotIn("AUTHELIA_", TEXT.replace("X_AUTHELIA_CONFIG_FILTERS", ""))  # AUTHELIA_* names map to config keys
         self.assertEqual(OIDC["hmac_secret"], "ENV:EDGE_OIDC_HMAC_SECRET")
         self.assertEqual(C["storage"]["encryption_key"], "ENV:EDGE_STORAGE_ENCRYPTION_KEY")
-        self.assertEqual(OIDC["jwks"], [{"algorithm": "RS256", "use": "sig", "key": "ENV:EDGE_OIDC_JWKS_KEY_B64"}])
+        self.assertEqual(OIDC["jwks"], [{"algorithm": "RS256", "key": "ENV:EDGE_OIDC_JWKS_KEY_B64"}])
 
     def test_the_notifier_is_the_file_notifier_until_p5(self):
         self.assertEqual(C["notifier"], {"filesystem": {"filename": "/data/notification.txt"}})

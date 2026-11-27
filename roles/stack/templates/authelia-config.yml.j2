@@ -20,8 +20,6 @@ identity_validation:
     require_second_factor: true
 
 authentication_backend:
-  password_reset:
-    disable: false
   ldap:
     implementation: lldap
     address: 'ldap://lldap:3890'
@@ -67,9 +65,7 @@ identity_providers:
     hmac_secret: '{% raw %}{{ env "EDGE_OIDC_HMAC_SECRET" }}{% endraw %}'
     jwks:
       - algorithm: RS256
-        use: sig
-        key: {% raw %}{{ env "EDGE_OIDC_JWKS_KEY_B64" | b64dec | mindent 10 "|" | msquote }}{% endraw %}
-
+        key: {{ '{{ env "EDGE_OIDC_JWKS_KEY_B64" | b64dec | mindent 10 "|" | msquote }}' }}
     lifespans:
       access_token: 1h
       refresh_token: 720h
@@ -95,7 +91,6 @@ identity_providers:
         consent_mode: explicit
         require_pkce: true
         pkce_challenge_method: S256
-        response_types: [code]
 {% if client.kind == 'web' %}
         public: false
         client_secret: '{{ edge_secrets[client.key] }}'
@@ -113,6 +108,7 @@ identity_providers:
         requested_audience_mode: implicit
         access_token_signed_response_alg: RS256
         grant_types: [authorization_code, refresh_token]
+        response_types: [code]   # offline_access without it is deprecated in 4.39.28 (a future error)
 {% if client.lifespan is defined %}
         lifespan: '{{ client.lifespan }}'
 {% endif %}
