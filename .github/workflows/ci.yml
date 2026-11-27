@@ -54,6 +54,8 @@ jobs:
         run: python3 scripts/happybabytracker-config-test.py
       - name: Authelia configuration renders to the SSO spec (portal, limits, LDAP, the nine OIDC clients)
         run: python3 scripts/authelia-config-test.py
+      - name: SSO sync - lldap ensure and sub reconcile (fake lldap GraphQL, fake docker)
+        run: python3 scripts/sso-sync-test.py
       - name: Backup scripts and units; the happybabytracker snapshot under writes, as root in a Docker-like tree
         env:
           EDGE_BACKUP_TEST_REQUIRE_ROOT: "1"
