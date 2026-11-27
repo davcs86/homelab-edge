@@ -254,8 +254,7 @@ measure both services under N parallel logins.
 
 Measured 2026-11-27 (P0; `docker stats` snapshots, not true peaks): the droplet used 743 MiB with 1221 MiB available;
 Authelia 60 MiB idle and 68 MiB after 20 parallel logins; lldap 3 MiB idle and 54 MiB while hashing those logins.
-Proposed limits `authelia` 128m and `lldap` 128m (about twice the observed peak): `TODO(provide)`, the owner confirms
-them in the P1 plan.
+Limits `authelia` 128m and `lldap` 128m (about twice the observed peak; owner, 2026-11-27).
 
 ## 7. People
 
@@ -360,7 +359,7 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 | S25 | `Alice`/`ALICE`/`alice` share one counter; ban listed as `alice` for 5 min; `bans user revoke` works | `sso.md` § 4 unban as written |
 | S27 | JWT access token: authz 401 always; opaque: 200, 403 at once after the group removal, 401 at once after `sso_people`, 401 after revocation, ~185 ms per check; introspection `active` stays true until revocation | § 4.11: A rejected, C |
 | S19 | first add exit 0; the same pair again: exit 1 (`UNIQUE … identifier`); another UUID for the same user: exit 1 (`UNIQUE … username`), nothing overwritten; export lists every pinned `sub` | § 4.7: read the export first |
-| S8 / S23 | Authelia 60 → 68 MiB, lldap 3 → 54 MiB under 20 parallel logins (6.2 s, all 200) | § 6 limits proposed |
+| S8 / S23 | Authelia 60 → 68 MiB, lldap 3 → 54 MiB under 20 parallel logins (6.2 s, all 200) | § 6: 128m each (owner) |
 | Guardrails | `guard`: no production restart (before and after teardown); `down -v`: 0 containers, 0 volumes left; available memory 1221 → 1200 MiB | — |
 
 **Where the spike runs (owner, 2026-11-23): the edge droplet itself.** It is production, so:
