@@ -24,7 +24,7 @@ xstockstrat deployments never use SSO (`AUTH_MODE=local`).
 | Group | Opens |
 |---|---|
 | `sso_people` | the portal itself (everyone; removing it is how a person is disabled) |
-| `xstockstrat` | xstockstrat (prod) web + MCP (Claude.ai and Claude Code) |
+| `xstockstrat` | xstockstrat (prod) web + MCP (the Claude.ai connector) |
 | `xstockstrat-staging` | xstockstrat-staging web + MCP |
 | `webhooks-mcp` | webhooks-mcp `/mcp` (only this group's clients get the `webhooks-mcp` scope the app checks) |
 | `commsgun` | commsgun dashboard |
@@ -65,7 +65,7 @@ device login never uses SSO.
 | Change | Steps | Takes effect |
 |---|---|---|
 | Grant an app | add the group in lldap's UI; the person links in that app (§ 5) | after linking |
-| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp: not ended** (refresh survives a group removal, spike S4; removing the person from `sso_people` should, per spike S24; owner call in SSO spec § 12) |
+| Revoke an app | remove the group in lldap's UI; disable the user in that app (webhooks-mcp has none) | new logins at once; app sessions end when disabled in the app; **webhooks-mcp:** per SSO spec § 4.11: at once with A, or not at all with C (refresh survives a group removal, spike S4; under C, removing the person from `sso_people` ends it within 5 min) |
 | Reset a password | the person uses **Forgot password** | at once; login still needs the second factor |
 | Lost every device | `authelia storage user totp delete <user>` / `authelia storage user webauthn delete <user>`, then re-enrol **with the admin present** (with no device left, the emailed code alone would suffice) | next login |
 | Unban after regulation | `authelia storage bans user revoke <user>` | at once; bans also expire after 5 min |
@@ -107,8 +107,9 @@ Gates before the first `both` (xstockstrat 345 design § 6); each is a hard stop
    connectors use the built-in OAuth server.
 3. Sign in with the password, **Link SSO**, sign out, sign in with SSO. Stop Authelia briefly: the password login still works.
 4. `set-auth-mode oidc`. Until then MCP stays on xstockstrat's built-in OAuth server (in `local` and `both`).
-5. Connect the Claude.ai and Claude Code connectors to Authelia with the pre-registered client IDs (xstockstrat
-   `docs/runbooks/mcp-tools.md`, 345 FR-13); they sign in as the same person.
+5. Connect the Claude.ai connector to Authelia with the pre-registered client IDs (xstockstrat
+   `docs/runbooks/mcp-tools.md`, 345 FR-13); it signs in as the same person. Leave the four
+   `ui/oidc.mcp_client_id_claude_code*` keys empty: the edge registers no Claude Code client (SSO spec § 4.6).
 
 Rollback at any point: `manage-users.py set-auth-mode local --environment … --reason …`, run over the tailnet without
 a login. The built-in server registers clients dynamically: clear each
@@ -119,10 +120,10 @@ connector's pre-registered client ID, then reconnect; paste it back when returni
 1. Deploy with `AUTH_MODE=static+oauth`, `OAUTH_ISSUER=https://auth.public.<domain>` (no trailing slash) and
    `OAUTH_RESOURCE=https://webhooks-mcp.public.<domain>/mcp` (path exactly `/mcp`); the three are set and removed
    together (webhooks-mcp contract C4). Both the static key and Authelia tokens work.
-2. Move every `MCP_AUTH_KEY` consumer: the Claude.ai and Claude Code connectors sign in as `david_claude`; the headless
-   consumer (`TODO(provide)`: which) uses `webhooks-mcp-automation`, whose plaintext secret lives in the edge's SOPS
-   (SSO spec § 4.7) and is copied to that consumer by hand.
-3. Set `AUTH_MODE=oauth` and retire `MCP_AUTH_KEY`. Rollback: back to `static+oauth` (or `static`), the key still in SOPS
+2. Move every `MCP_AUTH_KEY` consumer: the Claude.ai connector signs in as `david_claude` (the only consumer in the
+   access logs; manual `curl` tests use the static key only in this window).
+3. Set `AUTH_MODE=oauth` and retire `MCP_AUTH_KEY`; with SSO spec § 4.11 A, Caddy's Authelia check on `/mcp` goes on in
+   this step, not before (the static key would fail it). Rollback: back to `static+oauth` (or `static`), the key still in SOPS
    until this step is proven.
 
 `SEED_USER_ID` (the `user_id` that owns seeded and legacy rows) is unaffected: linking keeps every `user_id`.
