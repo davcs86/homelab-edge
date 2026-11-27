@@ -12,7 +12,7 @@ full record. Open: § 12.
 | 1 | Authelia **v4.39.28** (latest, 2026-09-17), digest-pinned. **lldap** as the user store (LDAP backend), SQLite storage, in-memory sessions (no Redis), `default_policy: deny`, `two_factor` everywhere |
 | 2 | Scope: **homelab only**. xstockstrat prod and staging (web + MCP), webhooks-mcp, the commsgun dashboard, happybabytracker. DigitalOcean deployments stay `AUTH_MODE=local`. Gatus and Proxmox later; headscale never |
 | 3 | Portal **`auth.public.<domain>`** under the existing `*.public` wildcard (Rule 8). No second name: v4.39 derives the issuer from the request host (§ 4.2) |
-| 4 | Every app is a **provider-neutral OIDC client** (OSS: forks must not depend on Authelia). webhooks-mcp is an OAuth 2.1 resource server. **No `forward_auth` for our own apps**; allowed only for third-party software without OIDC. *Conditional exception (owner, 2026-11-27): webhooks-mcp's `/mcp` in `oauth`, if S27 passes (§ 4.11)* |
+| 4 | Every app is a **provider-neutral OIDC client** (OSS: forks must not depend on Authelia). webhooks-mcp is an OAuth 2.1 resource server. **No `forward_auth` for our own apps**; allowed only for third-party software without OIDC |
 | 5 | **`AUTH_MODE`** per app: `local` (default) \| `oidc` \| `both`; webhooks-mcp: `static` \| `static+oauth` (transition) \| `oauth`. The homelab's steady state is **`oidc`**; `both` is switched on only to link accounts or for break-glass (§ 3) |
 | 6 | **Apps own users and roles** in their database. Authelia proves identity and gates which app a person may open (one group per app). No group→role mapping |
 | 7 | **Explicit linking** everywhere: a signed-in local user presses "Link SSO"; or an invite is redeemed by SSO (happybabytracker). Unlinked SSO logins and MCP tokens are refused. Just-in-time provisioning only behind a flag, default off. *Amended 2026-11-24 (owner): no app implements the flag (§ 3); webhooks-mcp has no accounts and authorizes by scope (decision 16)* |
@@ -154,7 +154,7 @@ Every MCP client: `access_token_signed_response_alg: RS256`, an explicit `audien
 | `xstockstrat[-staging]-web` | confidential, `client_secret_basic` + PKCE | `xstockstrat[-staging]` | `openid profile email` | `${APP_URL}/api/auth/sso/callback` | — |
 | `xstockstrat[-staging]-mcp-claude` | public PKCE | same | `xstockstrat.*`, `offline_access` | `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback` | `${APP_URL}/agent` |
 | `xstockstrat[-staging]-mcp-claude-ro` | public PKCE | same | `xstockstrat.read`, `offline_access` | same | same |
-| `webhooks-mcp-claude` | public PKCE | `webhooks-mcp` | `webhooks-mcp`, `offline_access` | Claude callbacks | `https://webhooks-mcp.public.<domain>/mcp` |
+| `webhooks-mcp-claude` | public PKCE, access tokens 5 min (§ 4.11) | `webhooks-mcp` | `webhooks-mcp`, `offline_access` | Claude callbacks | `https://webhooks-mcp.public.<domain>/mcp` |
 | `commsgun` | confidential | `commsgun` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
 | `happybabytracker` | confidential | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
 
@@ -217,19 +217,18 @@ Authelia's `{{ env }}` template syntax is escaped from Jinja; CI validates the r
 - Accepted residual: a brand-new account's first password and first second factor both come from emailed codes; an admin
   can enrol with the person to close it.
 
-### 4.11 Revocation of MCP access (owner, 2026-11-27)
-Access tokens are JWTs checked offline until they expire, and a refresh survives a group removal (S4), so without a live
-check removing a person or a group does not end MCP access. S27 decides between:
-- **A (if S27 passes for the JWT variant, P0, and its Claude.ai side passes in P1):** Caddy's `forward_auth` on webhooks-mcp's `/mcp`, in `oauth` only, to Authelia's
-  `/api/authz/forward-auth` with the `HeaderAuthorization` `Bearer` strategy; Authelia re-reads the person from lldap on
-  every request, so a group or `sso_people` removal takes effect at once. Authelia's rules for this require the client to
-  use PAR, `form_post` and explicit consent and to hold `authelia.bearer.authz`; Authelia down means `/mcp` down (fails
-  closed, like the § 3 signing-key rule). The decision 4 exception covers this path only. A needs the JWT variant:
-  webhooks-mcp verifies JWT access tokens itself; if only opaque tokens pass, that is a design change for the owner.
-- **C (otherwise):** the webhooks-mcp client's access-token lifespan drops to 5 min; offboarding through `sso_people`
-  (S24) then ends access within 5 min; removing only the `webhooks-mcp` group still does not. C's bound rests on S24: if a
-  refresh also survives leaving `sso_people`, nothing on the issuer side ends access, and the owner decides then (for
-  example, no `offline_access` for that client, so the connector re-authorizes when its access token expires).
+### 4.11 Revocation of MCP access (owner, 2026-11-27: C, after S27)
+Access tokens are JWTs that webhooks-mcp checks offline until they expire, and a refresh survives a group removal (S4).
+Decided: **C**. The `webhooks-mcp-claude` client's access tokens live **5 min** (an Authelia custom lifespan for that
+client only); revoking webhooks-mcp means removing `david_claude` from `sso_people`, which stops its refresh (S24), so
+access ends within 5 min. `david_claude` holds only the `webhooks-mcp` group, so that removal revokes nothing else.
+Removing only the `webhooks-mcp` group does not end access and is not the procedure.
+
+Rejected, A (S27, 2026-11-27): Authelia's bearer check (`/api/authz/forward-auth`) refuses a removed person at once, but
+only for opaque `authelia_at_` access tokens; it never accepts the JWT access tokens webhooks-mcp verifies. A would have
+meant redesigning webhooks-mcp to introspect opaque tokens at Authelia, ~185 ms and an lldap lookup on every MCP call,
+`/mcp` down whenever Authelia or lldap is, a decision 4 exception, and a Claude.ai connector that supports PAR,
+`form_post` and explicit consent (unverified). Introspection does not reflect group or `sso_people` removal either.
 
 xstockstrat's MCP is out of scope here: it accepts its built-in server's tokens in `local`/`both`, so an Authelia check
 cannot sit in front of it, and disabling the user in the app already refuses its tokens within ~60 s (345 @AC-14: the MCP resolve cache lives 60 s).
@@ -268,8 +267,8 @@ The admin creates them in lldap's UI during P1, each with a unique email; nothin
 - **Lost every device:** the admin deletes the registrations (`authelia storage user totp delete`, `… webauthn delete`) and
   re-enrolment happens with the admin present (once no device is registered, the emailed code alone would suffice).
 - **Offboard:** remove `sso_people` and the app groups in lldap's UI (no login, no reset); in each app disable the user
-  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp has no app account (decision 16 as amended), so § 4.11 decides
-  how fast its access ends: at once under A, within 5 min under C; delete the Authelia identifier and clear `sso-sub`.
+  (ends sessions) and refuse that `(iss, sub)`; webhooks-mcp has no app account (decision 16 as amended), so its access ends
+  within 5 min of the `sso_people` removal (§ 4.11); delete the Authelia identifier and clear `sso-sub`.
   S24 shows whether a removed person's refresh token fails; if not, the app-side refusal is what stops them.
   happybabytracker's disable (and an admin unlink) also deletes the parent's push subscriptions and ntfy topic; until the
   admin does it, medication reminders keep reaching the person's devices (owner, 2026-11-24).
@@ -299,14 +298,14 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 | P1 edge infra | P0 | Memory check (§ 6); `ci` green incl. routing cases (§ 4.3) and config validation; deploy; verify; the P1 Gatus probes (§ 4.9) green; backup + drill include `authelia-data`, `lldap-data`, `commsgun-data`; a person created in lldap's UI resets their password and logs in, and the next deploy copies their `sub` into lldap; a `sub` survives an Authelia DB wipe and redeploy (restored from lldap), and a mismatched one fails the deploy; S1, S5, S7, S15 and S18 recorded against the deployed portal |
 | P2 xstockstrat-staging | 345 amended + shipped; people created in lldap (P1); before `both`, 345's design § 6 gates: the § 4.3 confirm zone, S17 (fresh `auth_time`), the web client's scopes and claims policy (§ 4.6), the seed row's password | In `both`: `david` signs in with password, links, then by SSO; with Authelia stopped, password login still works. Then `oidc`: the Claude.ai connector connects, lists tools, and still work after > 2 h idle; an unlinked SSO user is refused on web and MCP; switching to `local` without a login rehearsed |
 | P3 xstockstrat prod | P2 | Same checks on prod |
-| P4 webhooks-mcp | C1/C4 amended + shipped | In `static+oauth` both kinds of client work; then `oauth`: unauthenticated `POST /mcp` → 401 with `resource_metadata`; wrong audience → 401; a token without the `webhooks-mcp` scope → 403; per § 4.11, A: a removed person is refused on the next call, or C: within 5 min |
+| P4 webhooks-mcp | C1/C4 amended + shipped | In `static+oauth` both kinds of client work; then `oauth`: unauthenticated `POST /mcp` → 401 with `resource_metadata`; wrong audience → 401; a token without the `webhooks-mcp` scope → 403; a person removed from `sso_people` is refused within 5 min (§ 4.11) |
 | P5 commsgun | change shipped; threat-model pass; § 4.3 login zones deployed | S16 against the real listener; the P5 Gatus probes green; a reset email arrives through the SMTP listener over STARTTLS; SSO login completes; a person outside `commsgun` refused; in `both` with Authelia stopped the local login works; disabling a user ends their session; old private name 404 |
 | P6 happybabytracker | change shipped; threat-model pass; § 4.3 login zones deployed | the P6 Gatus probes green; `natalia` redeems an invite by SSO and lands on her kids; `david` links his parent row; `david_admin` reaches the admin area by SSO; in `both` with Authelia stopped the local admin login works; an outsider is refused |
 
 ## 11. Spike items
 - **S1** `resource` parameter accepted. **S2** JWT access tokens with scopes (`scp` array on v4.39.28, 345 spike (b)) and `aud`. **S3** custom scopes. **S4** group re-check on
   refresh. Already observed on v4.39.28 (xstockstrat 345 spike (d), D-98): refresh still succeeds after removal from the
-  group; P0 re-checks it with lldap. Consequence for scope-only webhooks-mcp: § 4.11. **S5** pre-registered Claude.ai clients.
+  group; P0 re-checks it with lldap. Consequence for webhooks-mcp: § 4.11. **S5** pre-registered Claude.ai clients.
 - **S7** regulation keys on Caddy's single overwritten XFF entry. **S8** Authelia RSS idle and under N parallel logins.
 - **S10** issuer follows `Host`. **S12** compose recreates on `configs.content` change. **S15** back-channel request rate
   per VM over a day. **S16** (P5, against commsgun's real listener; P0 checks only Authelia's side against a stand-in)
@@ -346,7 +345,6 @@ existing logins unaffected. Sender `auth@<domain>` (a `commsgun_senders` entry);
 
 ## 12. Open
 
-- Revocation of MCP access: A or C per S27 (§ 4.11).
 - The admin creates the four people in lldap's UI during P1.
 
 ## 13. Handoff: work per repo
