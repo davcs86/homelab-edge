@@ -158,8 +158,8 @@ Every MCP client: `access_token_signed_response_alg: RS256`, an explicit `audien
 | `xstockstrat[-staging]-mcp-claude` | public PKCE | same | `xstockstrat.*`, `offline_access` | `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback` | `${APP_URL}/agent` |
 | `xstockstrat[-staging]-mcp-claude-ro` | public PKCE | same | `xstockstrat.read`, `offline_access` | same | same |
 | `webhooks-mcp-claude` | public PKCE, access tokens 5 min (§ 4.11) | `webhooks-mcp` | `webhooks-mcp`, `offline_access` | Claude callbacks | `https://webhooks-mcp.public.<domain>/mcp` |
-| `commsgun` | confidential | `commsgun` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
-| `happybabytracker` | confidential | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
+| `commsgun` | confidential, `client_secret_basic` + PKCE | `commsgun` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
+| `happybabytracker` | confidential, `client_secret_basic` + PKCE (owner, 2026-11-27) | `happybabytracker` | `openid profile email` | `${ORIGIN}/auth/callback` | — |
 
 No Claude Code (loopback) or client-credentials client (owner, 2026-11-27): 30 days of edge access logs show only
 Claude.ai's connector (`Claude-User`, Anthropic's egress) and Gatus on `/agent` and `/mcp`. xstockstrat's
