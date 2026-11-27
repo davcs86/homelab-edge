@@ -109,7 +109,7 @@ full record. Open: § 12.
 - `authelia_public_hostname: "auth.{{ public_zone }}"`; a dedicated `@authelia host` handle in `*.{{ public_zone }}` before
   the `edge_sites` loop; `reverse_proxy 127.0.0.1:{{ authelia_port }}`; no `trusted_proxies` (EDGE-02; S7).
 - Compose: `<<: *hardening`, `127.0.0.1:{{ authelia_port }}:9091`, named volume `authelia-data`, uid 10001, `read_only`,
-  `mem_limit` from S8 (EDGE-05). Digest in `versions.yml` + `docs/versions.md` row (Rule 4, EDGE-01). Its networks keep
+  `mem_limit` 128m (§ 6, S8; EDGE-05). Digest in `versions.yml` + `docs/versions.md` row (Rule 4, EDGE-01). Its networks keep
   outbound access for the startup NTP check (or `ntp.address` is set deliberately).
 - Password reset on; `identity_validation.reset_password.jwt_lifespan: 1h`;
   `identity_validation.elevated_session.require_second_factor: true`.
@@ -167,7 +167,8 @@ Claude.ai's connector (`Claude-User`, Anthropic's egress) and Gatus on `/agent` 
 
 The three web clients (xstockstrat, commsgun, happybabytracker) share a `claims_policy` whose `id_token` list holds `email`
 and `preferred_username`: 345's Link confirmation and commsgun's read them from the ID token. 345 also needs `auth_time`
-in it (D-111): S17 records whether Authelia always includes it or the policy must list it. Scopes amended 2026-11-24 (owner):
+in it (D-111): S17 showed Authelia includes it without the policy listing it (the spike's policy listed only `email`
+and `preferred_username`). Scopes amended 2026-11-24 (owner):
 the xstockstrat web client gains `profile`.
 
 ### 4.7 Identity, secrets and data
@@ -207,7 +208,7 @@ scope (`xstockstrat.*`, `webhooks-mcp`), so CI passes on exit 0 and does not fai
 
 ### 4.10 lldap (user store)
 - Compose service `lldap` from a pinned **`*-rootless`** image with `user: "10001:10001"`, `<<: *hardening`, named volume
-  `lldap-data` (SQLite), `read_only`, `mem_limit` from S23. LDAP (container port 3890) on the `authelia` network only.
+  `lldap-data` (SQLite), `read_only`, `mem_limit` 128m (§ 6, S23). LDAP (container port 3890) on the `authelia` network only.
 - **Admin UI at `lldap.private.<domain>`** (owner, 2026-11-23): `lldap_ui_private_hostname`, container port 17170 published
   as `127.0.0.1:{{ lldap_ui_port }}` (EDGE-05), wired in the four EDGE-07 places (hostname var, a `host` matcher under
   `*.{{ private_zone }}` after `import deny_staging_vm`, the split-horizon `_names`, the Gatus probe). The deploy steps use
@@ -242,7 +243,7 @@ cannot sit in front of it, and disabling the user in the app already refuses its
 
 | App | Edge | App repo |
 |---|---|---|
-| xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` and `both` (DigitalOcean, the linking window, break-glass and rollback); the password login routes and `/accounts/api/sso/confirm` sit behind the login zones (§ 4.3); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED`; unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude.ai clients only (Claude Code keys left empty); D-74 → path-scoped zones; D-96 without access-token `email`; migration renumbered (056 at `6ce536f`) |
+| xstockstrat | Legacy `/agent/oauth/*` and register routes stay for `local` and `both` (DigitalOcean, the linking window, break-glass and rollback); the password login routes and `/accounts/api/sso/confirm` sit behind the login zones (§ 4.3); VMs back-channel per § 4.2 | 345 amended: `auth.mode` (`local`/`oidc`/`both`); explicit "Link SSO"; no email linking, no SSO-created users, no `LINKED_BY_EMAIL`/`CREATED`; unlinked MCP tokens → 403 `not linked`; issuer `https://auth.public.<domain>`; Claude.ai clients only (Claude Code keys left empty); D-74 → path-scoped zones; D-96 without access-token `email`; config migration takes the next free number at execute (060 on main-dev today) |
 | webhooks-mcp | `bearer_mcp` also proxies `/.well-known/oauth-protected-resource/mcp`; `extra_hosts`; Gatus still expects 401; `AUTH_MODE`, `OAUTH_ISSUER` (no trailing slash) and `OAUTH_RESOURCE` (path exactly `/mcp`) set and removed together (C4) | `AUTH_MODE` `static`/`static+oauth`/`oauth`; JWKS `TokenVerifier` + `AuthSettings`; issuer + audience + required `webhooks-mcp` scope, no allowlist (decision 16 as amended); C1/C4 amended; CI against a stub issuer. Every `MCP_AUTH_KEY` consumer moves during `static+oauth`: Claude.ai's connector is the only one (`sso.md` § 6b) |
 | commsgun | `commsgun.public.<domain>`; EDGE-07 undone for the private name, `ORIGIN` follows (EDGE-11); redaction moves; `extra_hosts`; a network `authelia-smtp` holding only `authelia` and `commsgun-api`; `commsgun_senders` and `commsgun_apps` gain `authelia` (`smtp_submission: true`, `send_window_seconds: 3600`); fixed IPv4 subnets (owner, 2026-11-27; outside Docker's default pools, free on the droplet): `commsgun` `172.16.200.0/28` (`ip_range` `172.16.200.0/29`, commsgun-api `172.16.200.10`) and `authelia-smtp` `172.16.200.16/28` (`ip_range` `172.16.200.16/29`, commsgun-api `172.16.200.26`); pinning the existing `commsgun` network's subnet recreates it, a short planned commsgun outage at P5 (Compose 5.5.1 recreates the network in place non-interactively, S26b: commsgun-api and commsgun-ui are stopped and recreated, bounded by the API's 30 s `stop_grace_period`); API env `ENQUEUE_ADDR`/`ADMIN_ADDR` (the `commsgun` address, 9200/9201), `SMTP_ADDR` (the `authelia-smtp` address, 9203), `SMTP_TLS_CERT_FILE`/`SMTP_TLS_KEY_FILE`, `AUTH_MODE`; UI env `OIDC_*` (never `OIDC_AUTO_PROVISION`); the CLI runs as a `commsgun-admin` service with `network_mode: none` (a plain `compose run` of the API would clash with its fixed addresses); login zones on `/login` and `/account` | § 3 contract; users table + role (`admin`); revocable sessions (U4 amended); SMTP submission listener with STARTTLS, reachable by Authelia and by host-network processes on the droplet, never published (listeners bound per network, § 9; STARTTLS and the app key are the control), app `authelia`; its messages expire with the reset link (1 h); anti-goal and single-admin non-goal amended; threat-model pass before P5 |
 | happybabytracker | `happybaby.public.<domain>`; EDGE-07 undone, `ORIGIN`/`PUBLIC_ORIGIN` follow; token paths and the callback query redacted; `extra_hosts`; API env `AUTH_MODE`; UI env `OIDC_*` and `SESSION_SEAL_KEY` (never `OIDC_AUTO_PROVISION`); login zones on its six password routes (§ 4.3) | § 3 contract; admin principal table + identities; invites redeemable by SSO (password redemption refused in `oidc`); non-goal (`:54`) and anti-goal (`:69`) amended; threat-model pass before P6 |
