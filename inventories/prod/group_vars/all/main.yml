@@ -64,6 +64,8 @@ ratelimit:
   mcp: {events: 120, window: 1m}
   webhooks_mcp: {events: 120, window: 1m}
   general: {events: 3000, window: 1m}
+  authelia_login: {events: 10, window: 1m}
+  authelia_backchannel: {events: 600, window: 1m}
 body_limits:
   mcp: 1MB
   webhooks_mcp: 1MB
@@ -127,6 +129,12 @@ heartbeat_pve_interval: 3m          # Proxmox pushes every 60 s
 heartbeat_backup_interval: 14h      # twice-daily backup + drill pushes on success
 heartbeat_pgbackrest_interval: 26h  # the edge pushes after each daily full/differential
 heartbeat_db_interval: 11m          # DB host pushes every 5 min
+
+# ---------- SSO ----------
+lldap_ui_private_hostname: "lldap.{{ private_zone }}"
+lldap_ui_port: 17170
+authelia_public_hostname: "auth.{{ public_zone }}"
+authelia_port: 9091
 
 # ---------- Backups ----------
 backup_schedule: "*-*-* 00,12:00:00 UTC"

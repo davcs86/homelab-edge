@@ -44,6 +44,8 @@ class PortalZones(unittest.TestCase):
         self.assertEqual(V["commsgun_ui_private_hostname"], f"commsgun.private.{d}")
         self.assertEqual(V["commsgun_enqueue_private_hostname"], f"comms.private.{d}")
         self.assertEqual(V["happybabytracker_ui_private_hostname"], f"happybaby.private.{d}")
+        self.assertEqual(V["lldap_ui_private_hostname"], f"lldap.private.{d}")
+        self.assertEqual(V["authelia_public_hostname"], f"auth.public.{d}")
         self.assertEqual(V["status_private_hostname"], f"status.private.{d}")
         self.assertEqual(V["ntfy_private_hostname"], f"ntfy.private.{d}")
         self.assertEqual(V["webhooks_ingest_private_hostname"], f"webhooks.private.{d}")
@@ -100,6 +102,7 @@ class PortalZones(unittest.TestCase):
     def test_public_zone_names_get_no_split_horizon_record(self):
         names = re.search(r"_names: >-\n(.*?)\n    _records", (ROOT / "roles/tailscale/tasks/main.yml").read_text(), re.S).group(1)
         self.assertNotIn("edge_sites", names)
+        self.assertNotIn("authelia_public_hostname", names)
 
     def test_existing_names_are_unchanged(self):
         d = V["domain"]
@@ -135,6 +138,7 @@ class PortalZones(unittest.TestCase):
         self.assertIn("commsgun_ui_private_hostname", names)
         self.assertIn("commsgun_enqueue_private_hostname", names)
         self.assertIn("happybabytracker_ui_private_hostname", names)
+        self.assertIn("lldap_ui_private_hostname", names)
         self.assertIn("status_private_hostname", names)
         self.assertIn("ntfy_private_hostname", names)
         self.assertIn("webhooks_ingest_private_hostname", names)

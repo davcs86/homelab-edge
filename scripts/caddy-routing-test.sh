@@ -25,14 +25,14 @@ trap cleanup EXIT
   -e "{\"staging_vm_ips\": [\"$staging_vm_ip\"]}" >/dev/null)
 
 printf '%s
-' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'staging_host={{ staging_public_hostname }}' 'wmcp_host={{ webhooks_mcp_public_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'hbpriv_host={{ happybabytracker_ui_private_hostname }}' >"$work/hosts.j2"
+' 'app_host={{ public_app_hostname }}' 'hs_host={{ headscale_hostname }}' 'staging_host={{ staging_public_hostname }}' 'wmcp_host={{ webhooks_mcp_public_hostname }}' 'cgpriv_host={{ commsgun_ui_private_hostname }}' 'cmpriv_host={{ commsgun_enqueue_private_hostname }}' 'stpriv_host={{ status_private_hostname }}' 'ntpriv_host={{ ntfy_private_hostname }}' 'whpriv_host={{ webhooks_ingest_private_hostname }}' 'hbpriv_host={{ happybabytracker_ui_private_hostname }}' 'llpriv_host={{ lldap_ui_private_hostname }}' 'auth_host={{ authelia_public_hostname }}' >"$work/hosts.j2"
 (cd "$repo_root" && ansible localhost -c local -m ansible.builtin.template -a "src=$work/hosts.j2 dest=$work/hosts.env" >/dev/null)
-app_host="" hs_host="" staging_host="" wmcp_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntpriv_host="" whpriv_host="" hbpriv_host=""
+app_host="" hs_host="" staging_host="" wmcp_host="" cgpriv_host="" cmpriv_host="" stpriv_host="" ntpriv_host="" whpriv_host="" hbpriv_host="" llpriv_host="" auth_host=""
 # shellcheck disable=SC1091
 . "$work/hosts.env"
 
 # Mock upstreams echo "<name> <method> <path>" so routing and prefix stripping are observable;
-# Test hooks: /echo-headers, /reset; commsgun-ui also sends Location.
+# Test hooks: /echo-headers (or an X-Echo-Headers request header), /reset; commsgun-ui and authelia also send Location.
 cat >"$work/mock.py" <<'EOF'
 import http.server, socket, struct, sys
 name, port = sys.argv[1], int(sys.argv[2])
@@ -41,17 +41,18 @@ class H(http.server.BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n: self.rfile.read(n)
-            if self.path.startswith("/reset"):
+            if self.path.split("?")[0] == "/reset":
                 self.send_response(200); self.send_header("Content-Length", "100000"); self.end_headers()
                 self.wfile.write(b"x" * 1000); self.wfile.flush()
                 self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                 self.connection.close(); return
             body = f"{name} {self.command} {self.path}"
-            if self.path.startswith("/echo-headers"):
-                body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For")))
+            if self.path.startswith("/echo-headers") or self.headers.get("X-Echo-Headers"):
+                body += "".join(f" {k}=[{self.headers.get(h, '')}]" for k, h in (("xfp", "X-Forwarded-Proto"), ("xfh", "X-Forwarded-Host"), ("xff", "X-Forwarded-For"), ("host", "Host")))
+                body += f" cookie=[{'; '.join(self.headers.get_all('Cookie') or [])}]"
             body = body.encode()
             self.send_response(200); self.send_header("Content-Length", str(len(body)))
-            if name == "commsgun-ui": self.send_header("Location", self.path)
+            if name in ("commsgun-ui", "authelia"): self.send_header("Location", self.path)
             self.end_headers(); self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -59,9 +60,10 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 EOF
-for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 happybabytracker-ui:9212 gatus:8081 ntfy:2586; do
+for spec in ui:3000 agent:9000 headscale:8080 wmcp:9100 ingest:9101 commsgun-api:9200 commsgun-ui:9202 happybabytracker-ui:9212 lldap:17170 authelia:9091 gatus:8081 ntfy:2586; do
   python3 "$work/mock.py" "${spec%%:*}" "${spec##*:}" & pids+=($!)
   if [[ "$spec" == commsgun-ui:* ]]; then cgui_pid=$!; fi
+  if [[ "$spec" == authelia:* ]]; then auth_pid=$!; fi
 done
 
 sudo ip addr replace "$tailnet_ip/32" dev lo
@@ -88,6 +90,10 @@ req2() { # same as req, but as a different client (source 127.0.0.3) so rate-lim
   code="$(curl -sk --noproxy "*" --max-time 5 --interface 127.0.0.3 --resolve "$host:443:127.0.0.1" -o "$work/body" -w '%{http_code}' "$@")" || code="000"
   printf '%s' "$code"
   printf ' %s' "$(cat "$work/body" 2>/dev/null)"; : >"$work/body"
+}
+ck() { # same as req -> "<status> <upstream> cookie=[...]"
+  local r; r="$(req "$@")"
+  printf '%s %s' "$(cut -d' ' -f1-2 <<<"$r")" "$(grep -o ' cookie=\[.*\]$' <<<"$r" | cut -c2-)"
 }
 expect() { # <description> <expected-prefix> <actual>
   if [[ "$3" == "$2"* ]]; then echo "PASS  $1 -> $3"; else echo "FAIL  $1: expected '$2', got '$3'"; fail=1; fi
@@ -148,6 +154,51 @@ expect "webhooks MCP from the tailnet"         "200 wmcp POST /mcp"             
 expect "webhooks MCP prefix lookalike /mcpx"   "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcpx")"
 expect "webhooks MCP sub-path /mcp/x"          "404"                              "$(req "$wmcp_host" -X POST -d '{}' "$w/mcp/x")"
 
+# The portal: one upstream, Host and Cookie passed through; per-IP zones on the password and back-channel paths.
+a="https://$auth_host"
+mixed_auth="A${auth_host#a}"
+expect "portal health"                         "200 authelia GET /api/health"     "$(req "$auth_host" "$a/api/health")"
+expect "portal discovery"                      "200 authelia GET /.well-known/openid-configuration" "$(req "$auth_host" "$a/.well-known/openid-configuration")"
+expect "portal gets Host unchanged and the client as the only X-Forwarded-For" \
+  "200 authelia GET /echo-headers xfp=[https] xfh=[$auth_host] xff=[127.0.0.1] host=[$auth_host]" \
+  "$(req "$auth_host" -H 'X-Forwarded-For: 1.2.3.4' "$a/echo-headers")"
+expect "portal gets a mixed-case Host as sent" "200 authelia GET /echo-headers xfp=[https] xfh=[$mixed_auth] xff=[127.0.0.1] host=[$mixed_auth]" \
+  "$(req "$mixed_auth" "https://$mixed_auth/echo-headers")"
+expect "authelia_session reaches the portal"   "200 authelia cookie=[a=1; authelia_session=SECRET]" \
+  "$(ck "$auth_host" -H 'Cookie: a=1; authelia_session=SECRET' "$a/echo-headers")"
+expect "staging VM reaches the portal"         "200 authelia GET /api/health"     "$(req "$auth_host" --interface "$staging_vm_ip" "$a/api/health")"
+codes=""
+for _ in $(seq 1 11); do codes+="$(req "$auth_host" -X POST -d '{}' "$a/api/firstfactor" | cut -c1-3) "; done
+expect "portal login limit (10/min) triggers 429" "200 200 200 200 200 200 200 200 200 200 429" "$codes"
+expect "portal health is outside the login zone" "200 authelia GET /api/health"   "$(req "$auth_host" "$a/api/health")"
+codes=""
+for _ in $(seq 1 11); do codes+="$(req "$auth_host" -X POST -d '{}' "$a/api/oidc/token" | cut -c1-3) "; done
+expect "portal token endpoint is outside the login zone" "200 200 200 200 200 200 200 200 200 200 200" "$codes"
+n=20
+for path in /api/firstfactor/reauthenticate /api/secondfactor/totp /api/reset-password /api/reset-password/identity/start \
+  /api/user/session/elevation /api/user/session/elevation/abc; do
+  n=$((n + 1))
+  for _ in $(seq 1 10); do req "$auth_host" --interface "127.0.0.$n" -X POST -d '{}' "$a/api/firstfactor" >/dev/null; done
+  expect "portal POST $path shares the login zone" "429" "$(req "$auth_host" --interface "127.0.0.$n" -X POST -d '{}' "$a$path")"
+done
+
+# authelia_session is scoped to the whole public zone: no app upstream may receive it, wherever it sits in the header.
+for target in "ui|$app_host|$u/echo-headers|GET" "agent|$app_host|$u/agent|POST" "wmcp|$wmcp_host|$w/mcp|POST"; do
+  IFS='|' read -r up host url method <<<"$target"
+  for c in "authelia_session=SECRET|" "authelia_session=SECRET; a=1; b=2|a=1; b=2" "a=1; authelia_session=SECRET; b=2|a=1; b=2" \
+    "a=1; b=2; authelia_session=SECRET|a=1; b=2" "authelia_session=DECOY; authelia_session=SECRET; a=1|a=1" \
+    "xauthelia_session=keep; authelia_session=SECRET; authelia_session_x=keep|xauthelia_session=keep; authelia_session_x=keep"; do
+    expect "$up drops authelia_session from '${c%%|*}'" "200 $up cookie=[${c#*|}]" \
+      "$(ck "$host" -X "$method" -H 'X-Echo-Headers: 1' -H "Cookie: ${c%%|*}" "$url")"
+  done
+  expect "$up drops authelia_session from a second HTTP/2 cookie field" "200 $up cookie=[a=1; b=2]" \
+    "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: a=1' -H 'Cookie: authelia_session=SECRET; b=2' "$url")"
+  expect "$up drops authelia_session from a first HTTP/2 cookie field" "200 $up cookie=[a=1; b=2]" \
+    "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: authelia_session=SECRET' -H 'Cookie: a=1; b=2' "$url")"
+  expect "$up drops a decoy and authelia_session across HTTP/2 cookie fields" "200 $up cookie=[b=2]" \
+    "$(ck "$host" --http2 -X "$method" -H 'X-Echo-Headers: 1' -H 'Cookie: authelia_session=DECOY' -H 'Cookie: authelia_session=SECRET; b=2' "$url")"
+done
+
 # commsgun: the dashboard and the enqueue API are tailnet-only *.private names; each reaches only its own upstream.
 v="https://$cgpriv_host"
 expect "private dashboard aborts publicly"     "000"                              "$(req "$cgpriv_host" "$v/login")"
@@ -170,6 +221,11 @@ expect "happybaby gets Caddy's X-Forwarded-*, not the client's" \
   "200 happybabytracker-ui GET /echo-headers xfp=[https] xfh=[$hbpriv_host] xff=[$tailnet_ip]" \
   "$(req "$hbpriv_host" --interface "$tailnet_ip" -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Forwarded-Host: evil.example' -H 'X-Forwarded-Proto: http' "$hb/echo-headers")"
 expect "happybaby name reaches only its UI"    "200 happybabytracker-ui POST /v1/messages" "$(req "$hbpriv_host" --interface "$tailnet_ip" -X POST -d '{}' "$hb/v1/messages")"
+# lldap's web UI: a tailnet-only *.private name; LDAP itself is never behind Caddy.
+ll="https://$llpriv_host"
+expect "lldap UI aborts publicly"              "000"                              "$(req "$llpriv_host" "$ll/health")"
+expect "lldap UI from the tailnet"             "200 lldap GET /health"            "$(req "$llpriv_host" --interface "$tailnet_ip" "$ll/health")"
+expect "staging VM denied on the lldap UI"     "000"                              "$(req "$llpriv_host" --interface "$staging_vm_ip" "$ll/health")"
 # The enqueue API: its own body cap, the same isolation, its own upstream.
 e="https://$cmpriv_host"
 expect "private enqueue aborts publicly"       "000"                              "$(req "$cmpriv_host" -X POST -d '{}' "$e/v1/messages")"
@@ -268,6 +324,17 @@ wait_for_line "\"host\":\"$cgpriv_host\",\"uri\":\"/upstream-down\"" access_logs
 expect "dashboard upstream down, mixed-case host" "502" "$(req "$mixed" --interface "$tailnet_ip" -H "$canary_hdr" "https://$mixed/upstream-down?recipient=canary@example.test")"
 wait_for_line "\"host\":\"$mixed\",\"uri\":\"/upstream-down" access_logs || true
 wait_for_line 'http.log.error.private_zone.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
+# The portal's reset links carry a token in the query; the *.public logger drops it, Referer and Location for every host.
+auth_canary='Referer: https://x/?token=canaryreferer'
+expect "portal reset link"                     "200 authelia GET /reset-password/step2?token=canarytoken" \
+  "$(req "$auth_host" -H "$auth_canary" "$a/reset-password/step2?token=canarytoken")"
+expect "portal reset link, mixed-case host"    "200 authelia GET /reset-password/step2?token=canarytoken" \
+  "$(req "$mixed_auth" -H "$auth_canary" "https://$mixed_auth/reset-password/step2?token=canarytoken")"
+kill "$auth_pid"; wait "$auth_pid" 2>/dev/null || true
+expect "portal upstream down"                  "502" "$(req "$auth_host" -H "$auth_canary" "$a/upstream-down?token=canarytoken")"
+expect "portal upstream down, mixed-case host" "502" "$(req "$mixed_auth" -H "$auth_canary" "https://$mixed_auth/upstream-down?token=canarytoken")"
+wait_for_line "\"host\":\"$mixed_auth\",\"uri\":\"/upstream-down" access_logs || true
+wait_for_line 'http.log.error.public_zone.*"uri":"/upstream-down"' docker logs caddy-routing-test || true
 if ! docker logs caddy-routing-test >"$work/caddy.stderr" 2>&1 || [[ ! -s "$work/caddy.stderr" ]]; then
   echo "FAIL  cannot read Caddy's stderr"; fail=1; : >"$work/caddy.stderr"
 fi
@@ -283,12 +350,26 @@ if read_log '*.access.log'; then
     echo "PASS  *.private requests logged without query, Referer or Location (incl. reset and 502)"
   fi
 fi
+if read_log 'public.access.log'; then
+  missing=""
+  for want in "\"host\":\"$auth_host\",\"uri\":\"/reset-password/step2\"" "\"host\":\"$mixed_auth\",\"uri\":\"/reset-password/step2\"" \
+    "\"host\":\"$auth_host\",\"uri\":\"/upstream-down\"" "\"host\":\"$mixed_auth\",\"uri\":\"/upstream-down\""; do
+    grep -qF "$want" "$work/log" || missing+=" $want"
+  done
+  if [[ -n "$missing" ]]; then
+    echo "FAIL  the portal's requests were not logged:$missing"; fail=1
+  elif grep -q canary "$work/log"; then
+    echo "FAIL  public access log leaks a query, Referer or Location: $(grep -o '"[^"]*canary[^"]*"' "$work/log" | sort -u | tr '\n' ' ')"; fail=1
+  else
+    echo "PASS  *.public requests logged without query, Referer or Location (incl. mixed case and 502)"
+  fi
+fi
 if grep -q canary "$work/caddy.stderr"; then
   echo "FAIL  Caddy's stderr leaks a query or Referer: $(grep -o '"logger":"[^"]*"' <(grep canary "$work/caddy.stderr") | sort -u | tr '\n' ' ')"; fail=1
 else
-  echo "PASS  Caddy's stderr carries no query or Referer from *.private"
+  echo "PASS  Caddy's stderr carries no query or Referer from *.private or *.public"
 fi
-for want in 'http.log.error.private_zone.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgpriv_host\",\"uri\":\"/reset\""; do
+for want in 'http.log.error.private_zone.*"uri":"/upstream-down"' 'http.log.error.public_zone.*"uri":"/upstream-down"' "http.handlers.reverse_proxy.*\"host\":\"$cgpriv_host\",\"uri\":\"/reset\""; do
   if grep -qE "$want" "$work/caddy.stderr"; then echo "PASS  stderr has a query-less line: $want"; else echo "FAIL  stderr lacks: $want"; fail=1; fi
 done
 # Zone names are global in caddy-ratelimit: a second site with the same `limits` must still get its own counters.

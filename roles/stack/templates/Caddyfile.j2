@@ -14,9 +14,9 @@
 		output stderr
 		format json
 		level INFO
-		exclude http.log.error.private_zone http.handlers.reverse_proxy
+		exclude http.log.error.private_zone http.log.error.public_zone http.handlers.reverse_proxy
 	}
-	# These log the full request, and the dashboard's query and Referer carry recipient addresses; reverse_proxy is not per host.
+	# These log the full request, whose query and Referer carry recipient addresses and reset tokens; reverse_proxy is not per host.
 	log redacted_requests {
 		output stderr
 		format filter {
@@ -25,7 +25,7 @@
 			wrap json
 		}
 		level INFO
-		include http.log.error.private_zone http.handlers.reverse_proxy
+		include http.log.error.private_zone http.log.error.public_zone http.handlers.reverse_proxy
 	}
 }
 
@@ -89,8 +89,10 @@
 {% endif %}
 }
 
+# The portal's session cookie covers all of {{ public_zone }}; no app upstream may receive it, in any position.
 (app_ui) {
 	reverse_proxy {args[0]}:{{ app_ui_port }} {
+		header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 		transport http {
 			resolvers 100.100.100.100
 		}
@@ -101,6 +103,7 @@
 (agent) {
 	uri strip_prefix /agent
 	reverse_proxy {args[0]}:{{ app_agent_port }} {
+		header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 		flush_interval -1
 		transport http {
 			resolvers 100.100.100.100
@@ -305,6 +308,7 @@
 			max_size {{ body_limits[site.limits] }}
 		}
 		reverse_proxy 127.0.0.1:{{ site.port }} {
+			header_up Cookie "^(\s*authelia_session=[^;]*(;\s*|$))+|;\s*authelia_session=[^;]*" ""
 			flush_interval -1
 		}
 	}
@@ -316,7 +320,55 @@
 # One certificate for every `zone: public` entry of edge_sites; any other name under the zone is 404.
 *.{{ public_zone }} {
 	import acme public.{{ acme_zone }}
-	import access_log public
+
+	# The portal's reset links and the apps' OAuth flows carry credentials in the query (and so do Referer and redirects).
+	# Per-host loggers match the exact lowercase name only, so the whole zone drops all three.
+	log public_zone {
+		output file /var/log/caddy/public.access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri regexp \?.* ""
+			request>headers>Referer delete
+			resp_headers>Location delete
+			wrap json
+		}
+	}
+
+	# Keep Host unchanged (Authelia answers 400 for any other) and admit the staging VM: it is an OIDC client of the portal.
+	@authelia host {{ authelia_public_hostname }}
+	handle @authelia {
+		rate_limit {
+			zone authelia_login {
+				match {
+					method POST
+					path /api/firstfactor /api/firstfactor/* /api/secondfactor/* /api/reset-password /api/reset-password/* /api/user/session/elevation /api/user/session/elevation/*
+				}
+				key {remote_host}
+				window {{ ratelimit.authelia_login.window }}
+				events {{ ratelimit.authelia_login.events }}
+				ipv6_prefix 64
+			}
+			zone authelia_backchannel {
+				match {
+					path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/token /api/oidc/revocation
+				}
+				key {remote_host}
+				window {{ ratelimit.authelia_backchannel.window }}
+				events {{ ratelimit.authelia_backchannel.events }}
+				ipv6_prefix 64
+			}
+			zone authelia_general {
+				key {remote_host}
+				window {{ ratelimit.general.window }}
+				events {{ ratelimit.general.events }}
+				ipv6_prefix 64
+			}
+		}
+		reverse_proxy 127.0.0.1:{{ authelia_port }}
+	}
 
 {% for site in edge_sites if site.zone | default('') == 'public' %}
 	@site_{{ site.name | replace('-', '_') }} host {{ site.hostname }}
@@ -370,6 +422,11 @@
 	@happybabytracker_ui host {{ happybabytracker_ui_private_hostname }}
 	handle @happybabytracker_ui {
 		reverse_proxy 127.0.0.1:{{ happybabytracker_ui_port }}
+	}
+
+	@lldap_ui host {{ lldap_ui_private_hostname }}
+	handle @lldap_ui {
+		reverse_proxy 127.0.0.1:{{ lldap_ui_port }}
 	}
 
 	@status host {{ status_private_hostname }}
