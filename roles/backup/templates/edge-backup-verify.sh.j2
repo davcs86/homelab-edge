@@ -14,6 +14,9 @@ trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 age -d -i /etc/edge-backup/restore-test.agekey "$archive" | tar -C "$work" -xf -
 ( cd "$work" && sha256sum -c MANIFEST.sha256 >/dev/null )
 sqlite3 "$work/happybabytracker/happybabytracker.db" 'PRAGMA integrity_check;' | grep -qx ok || { echo "FAIL happybabytracker database integrity"; exit 1; }
+sqlite3 "$work/authelia/db.sqlite3" 'PRAGMA integrity_check;' | grep -qx ok || { echo "FAIL authelia database integrity"; exit 1; }
+sqlite3 "$work/lldap/users.db" 'PRAGMA integrity_check;' | grep -qx ok || { echo "FAIL lldap database integrity"; exit 1; }
+sqlite3 "$work/commsgun/commsgun.db" 'PRAGMA integrity_check;' | grep -qx ok || { echo "FAIL commsgun database integrity"; exit 1; }
 
 mkdir -p "$work/etc" "$work/lib" "$work/run"
 cp "$work/headscale/config.yaml" "$work/headscale/policy.hujson" "$work/headscale/extra-records.json" "$work/etc/"
@@ -38,6 +41,9 @@ echo "live nodes:     $live"
 [ "$key_restored" = "$key_live" ] || { echo "FAIL noise key differs"; exit 1; }
 echo "noise key:      matches production"
 echo "happybabytracker database: integrity ok"
+echo "authelia database: integrity ok"
+echo "lldap database: integrity ok"
+echo "commsgun database: integrity ok"
 # Ephemeral nodes may come and go between backup and drill; persistent nodes must all be present.
 missing="$(comm -13 <(tr , '\n' <<<"$restored" | sort) <(docker compose -f {{ edge_root }}/compose.yml exec -T headscale headscale nodes list -o json | jq -r '.[] | select(.pre_auth_key.ephemeral != true) | .given_name' | sort))"
 [ -z "$missing" ] || { echo "FAIL persistent nodes missing from backup: $missing"; exit 1; }

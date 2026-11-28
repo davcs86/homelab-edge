@@ -27,6 +27,8 @@ flowchart LR
     ntfy["ntfy"]
     commsgun["commsgun<br/>API :9200, dashboard :9202"]
     happybaby["happybabytracker<br/>UI :9212, API (unpublished)"]
+    authelia["Authelia (SSO portal)<br/>:9091"]
+    lldap["lldap: people, passwords<br/>UI :17170, LDAP (unpublished)"]
     repo["pgBackRest repo :8432"]
     backupjob["twice-daily age backup"]
   end
@@ -43,18 +45,21 @@ flowchart LR
   joining -. "STUN 3478/udp" .-> headscale
   hs --> headscale
 
-  clients -- "xstockstrat.public<br/>xstockstrat-staging.public<br/>webhooks-mcp.public" --> pub
+  clients -- "xstockstrat.public<br/>xstockstrat-staging.public<br/>webhooks-mcp.public<br/>auth.public" --> pub
   pub -- "/mcp, bearer key" --> wmcp
   pub --> app
   pub --> staging
+  pub -- "auth" --> authelia
+  authelia -- "LDAP" --> lldap
 
-  members -- "status, ntfy, commsgun,<br/>comms, happybaby, webhooks" --> priv
+  members -- "status, ntfy, commsgun,<br/>comms, happybaby, webhooks, lldap" --> priv
   pushers -- "status.private<br/>webhooks.private" --> priv
   priv -- "ingest" --> wmcp
   priv --> gatus
   priv --> ntfy
   priv --> commsgun
   priv --> happybaby
+  priv --> lldap
   gatus -- "alerts" --> ntfy
 
   app --> db
@@ -69,7 +74,7 @@ Public exposure is exactly **80/tcp, 443/tcp, 3478/udp** (DO Cloud Firewall). SS
 behind per-IP rate limits, one view for every client (no tailnet bypass); other `/agent` paths, the unauthenticated tool catalog among
 them, are 404. Their former names `xstockstrat.<domain>` and `xstockstrat-staging.<domain>` are not served. Every 443 hostname is an entry in `edge_sites`.
 Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by headscale; Caddy serves nothing there), `<service>.private.<domain>` is a tailnet-only service
-(status, ntfy, commsgun, happybaby, the webhooks ingest) and `<service>.public.<domain>` an internet service, both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
+(status, ntfy, commsgun, happybaby, the webhooks ingest, lldap's admin UI) and `<service>.public.<domain>` an internet service (the apps, webhooks-mcp, the SSO portal `auth`), both served by the edge's Caddy wherever the service runs. A new portal under either zone needs no DNS or token registration; see [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) § 4.
 
 ## Repository map
 
@@ -85,9 +90,9 @@ Each zone holds one kind of name: `*.ts.<domain>` is machines only (named by hea
 | `playbooks/diag-boot.yml` | read-only boot and container diagnosis after a reboot (node-admin → `diagnose-boot`) |
 | `playbooks/db.yml` | database host: PostgreSQL + TimescaleDB, PgBouncer, pgBackRest (`docs/runbooks/db-host.md`) |
 | `playbooks/app.yml` | Compose app VMs: users, Tailscale, pinned Docker, the app-deploy gate (`docs/runbooks/deploy-compose-app.md`) |
-| `scripts/` | offline tests (`policy-test.sh`, `caddy-routing-test.sh`), `stun-probe.py`, `tls-check.py`, `runner-tailnet.sh`, `init_secrets.py` |
+| `scripts/` | offline tests (`policy-test.sh`, `caddy-routing-test.sh`, `authelia-config-test.py`, `sso-sync-test.py`, `sso-stack-test.py`), `stun-probe.py`, `tls-check.py`, `runner-tailnet.sh`, `init_secrets.py`, `sso_sync.py` (lldap ensure and `sub` reconcile, run by the deploy) |
 | `policy/policy.hujson` | headscale grants + `tests` (tests run in CI only; see `docs/decisions.md`) |
-| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, Gatus `config.yaml`, commsgun config, `compose.yml` |
+| `roles/stack/templates/` | `Caddyfile`, headscale `config.yaml`, ntfy `server.yml`, Gatus `config.yaml`, commsgun config, Authelia `configuration.yml`, `compose.yml` |
 | `inventories/prod/group_vars/all/` | `main.yml` (settings), `versions.yml` (every pin; rationale in `docs/versions.md`), `generated.yml` (reserved IP) |
 | `secrets/` | SOPS files only (`secrets/README.md`) |
 | `.github/workflows/` | `ci`, `deploy`, `verify`, `init-secrets`, `node-admin`, `app-host`, `db-host`, `bump-webhooks-mcp`, `bump-commsgun`, `bump-happybabytracker` |
@@ -135,7 +140,9 @@ the VPS waits for approval on the `production` environment.
 Rebuilding onto a new droplet: delete the old droplet in DO, run `provision` (re-attaches the same reserved IP, so no
 DNS change), delete the `edge-sfo3-01` line from `known_hosts`, replace the deSEC token (the new droplet has new
 egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md)), run `bootstrap`, then
-[restore headscale](docs/runbooks/recovery.md) so existing nodes keep working.
+[restore headscale](docs/runbooks/recovery.md) so existing nodes keep working, and restore Authelia, lldap and commsgun
+([`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) § Restore Authelia, lldap or commsgun) before anyone logs in at
+the portal: a login before the restore mints a new `sub`, which the next deploy's reconcile refuses as a mismatch.
 
 ## Documentation
 
@@ -143,14 +150,14 @@ egress addresses, see [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.m
 |---|---|
 | Add, tag or revoke a device; CI pre-auth keys | [`docs/runbooks/tailnet-devices.md`](docs/runbooks/tailnet-devices.md) |
 | Rotate the deSEC ACME token; let it issue for a new public hostname | [`docs/runbooks/acme-token.md`](docs/runbooks/acme-token.md) |
-| Restore headscale; break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
+| Restore headscale or an app's database (happybabytracker, Authelia, lldap, commsgun); break glass; stack down after reboot | [`docs/runbooks/recovery.md`](docs/runbooks/recovery.md) |
 | Set up alerts (email + phone) | [`docs/runbooks/alerts.md`](docs/runbooks/alerts.md) |
 | Backup host, Proxmox, app VM, DB host | [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md) |
 | Build or change the DB host (PostgreSQL, TimescaleDB, PgBouncer, pgBackRest) | [`docs/runbooks/db-host.md`](docs/runbooks/db-host.md) |
 | Add a workload (tag, grants, shared Postgres, staging route) | [`docs/runbooks/onboard-service.md`](docs/runbooks/onboard-service.md) |
 | Deploy, configure or operate commsgun (email/SMS hub) | [`docs/runbooks/commsgun.md`](docs/runbooks/commsgun.md) |
 | Deploy, configure or operate happybabytracker (family tracker): admin, parents, rotation, restore | [`docs/runbooks/happybabytracker.md`](docs/runbooks/happybabytracker.md) |
-| SSO (Authelia) admin reference: people, groups, linking app accounts (design, not deployed) | [`docs/runbooks/sso.md`](docs/runbooks/sso.md) |
+| SSO (Authelia, lldap): people, groups, linking app accounts, edge operations (P1 implemented, deploy pending; no app wired) | [`docs/runbooks/sso.md`](docs/runbooks/sso.md) |
 | Deploy a Compose app to the homelab | [`docs/runbooks/deploy-compose-app.md`](docs/runbooks/deploy-compose-app.md) |
 | A workflow fails to push to `main` (GH013); the commit-back token | [`docs/runbooks/github-push-token.md`](docs/runbooks/github-push-token.md) |
 | Grants and tags (test with `scripts/policy-test.sh`) | [`policy/policy.hujson`](policy/policy.hujson) |

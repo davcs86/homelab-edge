@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # {{ ansible_managed }}
-# Consistent headscale and happybabytracker snapshots -> tar -> age -> local + rsync to the home backup host.
+# Consistent headscale, happybabytracker, Authelia, lldap and commsgun snapshots -> tar -> age -> local + rsync to the home backup host.
 set -euo pipefail
 umask 077
 
@@ -24,17 +24,23 @@ cp "$vol_root/edge_headscale-data/_data/noise_private.key" "$work/headscale/"
 cp "$vol_root/edge_headscale-data/_data/derp_server_private.key" "$work/headscale/"
 cp {{ edge_root }}/headscale/config.yaml {{ edge_root }}/headscale/policy.hujson {{ edge_root }}/headscale/extra-records.json "$work/headscale/"
 
-# As the app's uid with no capabilities: a root sqlite3 would create -wal/-shm the API (uid 10001) cannot open.
+# As the app's uid with no capabilities: a root sqlite3 would create -wal/-shm the app (uid 10001) cannot open.
 # uid 10001 cannot traverse Docker's 0710/0701 dirs, so it reaches _data through a private bind mount.
-src_dir="$vol_root/edge_happybabytracker-data/_data"
-test -f "$src_dir/happybabytracker.db" || { echo "happybabytracker database missing: $src_dir/happybabytracker.db" >&2; exit 1; }
-# shellcheck disable=SC2016  # $1-$3 expand in the inner sh
-unshare --mount --propagation private -- sh -c 'mount --bind "$1" "$2" && exec setpriv --reuid=10001 --regid=10001 --clear-groups sqlite3 "$2/happybabytracker.db" ".backup '\''$3/happybabytracker.db'\''"' sh "$src_dir" "$mnt" "$snap"
-sqlite3 "$snap/happybabytracker.db" 'PRAGMA integrity_check;' | grep -qx ok
-mkdir -p "$work/happybabytracker"
-mv "$snap/happybabytracker.db" "$work/happybabytracker/"
+snapshot_as_app() {
+  local src_dir="$vol_root/edge_$1/_data"
+  test -f "$src_dir/$2" || { echo "$3 database missing: $src_dir/$2" >&2; exit 1; }
+  # shellcheck disable=SC2016  # $1-$4 expand in the inner sh
+  unshare --mount --propagation private -- sh -c 'mount --bind "$1" "$2" && exec setpriv --reuid=10001 --regid=10001 --clear-groups sqlite3 "$2/$4" ".backup '\''$3/$4'\''"' sh "$src_dir" "$mnt" "$snap" "$2"
+  sqlite3 "$snap/$2" 'PRAGMA integrity_check;' | grep -qx ok
+  mkdir -p "$work/$3"
+  mv "$snap/$2" "$work/$3/"
+}
+snapshot_as_app happybabytracker-data happybabytracker.db happybabytracker
+snapshot_as_app authelia-data db.sqlite3 authelia
+snapshot_as_app lldap-data users.db lldap
+snapshot_as_app commsgun-data commsgun.db commsgun
 
-( cd "$work" && find headscale happybabytracker -type f -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256 )
+( cd "$work" && find headscale happybabytracker authelia lldap commsgun -type f -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256 )
 tar -C "$work" -cf - . | age -R /etc/edge-backup/recipients.txt -o "$archive.partial"
 mv "$archive.partial" "$archive"
 sha256sum "$archive" | sed "s#$out_dir/##" > "$archive.sha256"

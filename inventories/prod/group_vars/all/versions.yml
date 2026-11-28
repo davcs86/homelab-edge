@@ -20,6 +20,8 @@ commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:fd2f7ac344138c365220ee0
 commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:cad7166889c750198dc50b6362dad9aed467e3098ec3603c81d7f0298b027db6"
 happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:2e55d861141788d9c67a1f3147127e6ced1bc7c22803a53897df9d98757f1ded"
 happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:7dedc54a892b06c5bb92668cf640675c0b9c6688aba47b6003f2ca02a4de7e32"
+authelia_image: "authelia/authelia:4.39.28@sha256:bd97cff4fcbf715b5ff1f9ae286afbe6033afce385302520b0368122d43a6f54"
+lldap_image: "lldap/lldap:v0.6.3-alpine-rootless@sha256:ba2c50930ea998eefd5454aa678a7977448019248b1827da87d330df0b71c284"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
 db_probe_image: "postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
@@ -44,6 +46,9 @@ tailscale_tgz_amd64_sha256: 52490ce0832b245857e2afef7426d6ae5a4b49fb391412833cc9
 
 # Must equal the pgBackRest version on the database host.
 pgbackrest_package_version: "2.59.2-1.pgdg26.04+1"
+
+# Ubuntu archive build for the edge's release (resolute); PyYAML for the SSO sync.
+python3_yaml_package_version: "6.0.3-1build1"
 
 # Database host (Debian 13 LXC). The edge is Ubuntu, hence its own pgBackRest suffix; both are upstream 2.59.2.
 db_postgresql_package_version: "18.6-1.pgdg13+2"

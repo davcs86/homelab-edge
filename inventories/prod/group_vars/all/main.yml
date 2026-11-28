@@ -135,6 +135,31 @@ lldap_ui_private_hostname: "lldap.{{ private_zone }}"
 lldap_ui_port: 17170
 authelia_public_hostname: "auth.{{ public_zone }}"
 authelia_port: 9091
+lldap_base_dn: "dc=natanddavehouse,dc=com"   # renaming it rewrites every DN Authelia uses
+authelia_ldap_bind_user: authelia
+authelia_ldap_bind_email: authelia@ldap.invalid
+# Each name except sso_people is an Authelia authorization policy; a client's `group` must be one of them.
+sso_groups: [sso_people, xstockstrat, xstockstrat-staging, webhooks-mcp, commsgun, happybabytracker]
+# `key` names the SOPS key holding the web client's pbkdf2 hash (init_secrets.OIDC_CLIENT_KEYS + _pbkdf2).
+authelia_oidc_clients:
+  - {id: xstockstrat-web, kind: web, group: xstockstrat, redirect_uri: "https://{{ public_app_hostname }}/api/auth/sso/callback",
+     key: authelia_client_secret_xstockstrat_web_pbkdf2}
+  - {id: xstockstrat-staging-web, kind: web, group: xstockstrat-staging, redirect_uri: "https://{{ staging_public_hostname }}/api/auth/sso/callback",
+     key: authelia_client_secret_xstockstrat_staging_web_pbkdf2}
+  - {id: commsgun, kind: web, group: commsgun, redirect_uri: "https://commsgun.{{ public_zone }}/auth/callback",
+     key: authelia_client_secret_commsgun_pbkdf2}
+  - {id: happybabytracker, kind: web, group: happybabytracker, redirect_uri: "https://happybaby.{{ public_zone }}/auth/callback",
+     key: authelia_client_secret_happybabytracker_pbkdf2}
+  - {id: xstockstrat-mcp-claude, kind: mcp, group: xstockstrat, audience: "https://{{ public_app_hostname }}/agent",
+     scopes: [xstockstrat.read, xstockstrat.write, xstockstrat.admin, xstockstrat.trade, offline_access]}
+  - {id: xstockstrat-staging-mcp-claude, kind: mcp, group: xstockstrat-staging, audience: "https://{{ staging_public_hostname }}/agent",
+     scopes: [xstockstrat.read, xstockstrat.write, xstockstrat.admin, xstockstrat.trade, offline_access]}
+  - {id: xstockstrat-mcp-claude-ro, kind: mcp, group: xstockstrat, audience: "https://{{ public_app_hostname }}/agent",
+     scopes: [xstockstrat.read, offline_access]}
+  - {id: xstockstrat-staging-mcp-claude-ro, kind: mcp, group: xstockstrat-staging, audience: "https://{{ staging_public_hostname }}/agent",
+     scopes: [xstockstrat.read, offline_access]}
+  - {id: webhooks-mcp-claude, kind: mcp, group: webhooks-mcp, audience: "https://{{ webhooks_mcp_public_hostname }}/mcp",
+     scopes: [webhooks-mcp, offline_access], lifespan: webhooks-mcp}
 
 # ---------- Backups ----------
 backup_schedule: "*-*-* 00,12:00:00 UTC"

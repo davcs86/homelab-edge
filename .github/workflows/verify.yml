@@ -32,6 +32,8 @@ jobs:
             echo "app=xstockstrat.public.$d"
             echo "staging=xstockstrat-staging.public.$d"
             echo "other=other.$d"
+            echo "auth=auth.public.$d"
+            echo "lldap=lldap.private.$d"
           } >> "$GITHUB_OUTPUT"
       - run: sudo apt-get install -y -q nmap
 
@@ -98,6 +100,22 @@ jobs:
           echo "7x POST /api/auth/login -> $codes"
           grep -q 429 <<<"$codes" || fail=1
           [ "$fail" = 0 ]
+
+      - name: SSO portal - health, exact issuer, JWKS, login limit; lldap not public
+        run: |
+          u="https://${{ steps.t.outputs.auth }}"
+          code() { curl -s --max-time 15 -o /dev/null -w '%{http_code}' "$@" || true; }
+          c="$(code "$u/api/health")"; echo "GET /api/health -> $c"; [ "$c" = 200 ]
+          iss="$(curl -fsS --max-time 15 "$u/.well-known/openid-configuration" | jq -r .issuer)"; echo "issuer: $iss"
+          [ "$iss" = "$u" ]
+          k="$(curl -fsS --max-time 15 "$u/jwks.json" | jq '.keys | length')"; echo "JWKS keys: $k"
+          [ "$k" -ge 1 ]
+          codes=""; for _ in $(seq 1 11); do codes+="$(code -X POST -H 'content-type: application/json' -d '{}' "$u/api/firstfactor") "; done
+          echo "11x POST /api/firstfactor -> $codes"
+          grep -q 429 <<<"$codes"
+          h="${{ steps.t.outputs.lldap }}"
+          c="$(code --resolve "$h:443:${{ steps.t.outputs.ip }}" "https://$h/health")"
+          echo "lldap from outside -> $c"; [ "$c" = 000 ]
 
   tailnet:
     runs-on: ubuntu-24.04

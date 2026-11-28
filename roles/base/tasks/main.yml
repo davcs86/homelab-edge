@@ -60,7 +60,7 @@
       };
       Unattended-Upgrade::Package-Blacklist {
         "docker-ce"; "docker-ce-cli"; "containerd.io"; "docker-buildx-plugin"; "docker-compose-plugin";
-        "tailscale"; "pgbackrest";
+        "tailscale"; "pgbackrest"; "python3-yaml";
       };
       Unattended-Upgrade::Remove-Unused-Dependencies "true";
       # Reboots come from edge-reboot.timer: Automatic-Reboot-Time follows the host clock (UTC), not Pacific DST.
