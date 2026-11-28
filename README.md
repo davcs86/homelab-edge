@@ -135,6 +135,7 @@ the VPS waits for approval on the `production` environment.
    `inventories/prod/known_hosts`, configures everything, mints the `tag:deploy` key, then **closes 22/tcp and proves
    it from the runner** (also on failure). From here on use mode `tailnet`.
 7. **Actions → verify**. External scan + HTTPS/routing/rate-limit checks, then the tailnet test node and a backup drill.
+   The xstockstrat UI health check (`/trader/api/health`) is temporarily non-fatal: it warns while the app is offline.
 8. **Home side**: see [`docs/runbooks/home-side.md`](docs/runbooks/home-side.md).
 
 Rebuilding onto a new droplet: delete the old droplet in DO, run `provision` (re-attaches the same reserved IP, so no
