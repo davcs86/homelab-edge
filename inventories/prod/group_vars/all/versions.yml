@@ -16,8 +16,8 @@ caddy_ratelimit_commit: 5625512f24f6f59d6f64fb3aafe5eecff0b286db
 gatus_image: "twinproduction/gatus:v5.38.0@sha256:085ed63da963728965d00a3c78aa6167e3bf135218485b893201758e079e8415"
 ntfy_image: "binwiederhier/ntfy:v2.38.1@sha256:038da2be5e668fee6d36a62884eea48975e1b71c29a56964e5298c1b9165a573"
 webhooks_mcp_image: "ghcr.io/davcs86/webhooks-mcp@sha256:919c35d14adfaf7961b2f41f329889db667ef63cd8e7a0ab54f0df7fe2c69a10"
-commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:9e9d0e0291c9196daab3ed31e0db11ab105b62e7b8b61512de40e84b50fc8540"
-commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:a90ad5fea759e49c79870d7f1e27bcfed2cdaaf55a767db59e0b9499e6dccd2e"
+commsgun_api_image: "ghcr.io/davcs86/commsgun-api@sha256:fd2f7ac344138c365220ee05a739bc5fc5a35c93e498b09d0dd9d18aa9ee726e"
+commsgun_ui_image: "ghcr.io/davcs86/commsgun-ui@sha256:cad7166889c750198dc50b6362dad9aed467e3098ec3603c81d7f0298b027db6"
 happybabytracker_api_image: "ghcr.io/davcs86/happybabytracker-api@sha256:2e55d861141788d9c67a1f3147127e6ced1bc7c22803a53897df9d98757f1ded"
 happybabytracker_ui_image: "ghcr.io/davcs86/happybabytracker-ui@sha256:7dedc54a892b06c5bb92668cf640675c0b9c6688aba47b6003f2ca02a4de7e32"
 # Runbook-only: the app VM DB probe (deploy-compose-app.md §4.1); major must match the DB host.
