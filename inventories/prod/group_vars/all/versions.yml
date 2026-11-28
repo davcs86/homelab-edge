@@ -47,6 +47,9 @@ tailscale_tgz_amd64_sha256: 52490ce0832b245857e2afef7426d6ae5a4b49fb391412833cc9
 # Must equal the pgBackRest version on the database host.
 pgbackrest_package_version: "2.59.2-1.pgdg26.04+1"
 
+# Ubuntu archive build for the edge's release (resolute); PyYAML for the SSO sync.
+python3_yaml_package_version: "6.0.3-1build1"
+
 # Database host (Debian 13 LXC). The edge is Ubuntu, hence its own pgBackRest suffix; both are upstream 2.59.2.
 db_postgresql_package_version: "18.6-1.pgdg13+2"
 db_pgbouncer_package_version: "1.26.0-4.pgdg13+1"

@@ -454,10 +454,15 @@
     mode: "0700"
   loop: [authelia-data, lldap-data]
 
-- name: PyYAML for the SSO sync (Ubuntu archive)
+- name: PyYAML for the SSO sync (pinned)
   ansible.builtin.apt:
+    name: "python3-yaml={{ python3_yaml_package_version }}"
+    allow_downgrade: true
+
+- name: Hold PyYAML
+  ansible.builtin.dpkg_selections:
     name: python3-yaml
-    state: present
+    selection: hold
 
 # Authelia exits at start until its bind account exists.
 - name: Start lldap first

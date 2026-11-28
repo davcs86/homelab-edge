@@ -35,7 +35,7 @@ All pins were at least two weeks old on 2026-10-14 (except the Caddy, Gatus and 
 | collections | general 13.4.0, docker 5.3.0, posix 2.2.2, sops 2.4.0, crypto 3.4.0 | newest ≥ 2 weeks |
 | sops | 3.13.3 | SSH-key age recipients need ≥ 3.10 |
 | age (on edge) | Ubuntu archive 1.2.1 | supports ssh-ed25519 recipients |
-| python3-yaml (on edge) | Ubuntu archive 6.0.3 | PyYAML for `scripts/sso_sync.py`, which the deploy runs on the edge |
+| python3-yaml (on edge) | 6.0.3-1build1 (Ubuntu archive, resolute) | the candidate on the droplet (`apt-cache policy`, 2026-11-28); held and in the unattended-upgrades blacklist (EDGE-09); PyYAML for `scripts/sso_sync.py`, which the deploy runs on the edge |
 | typer (`tools/pve-setup.py`) | 0.28.0 | released 2026-11-06, newest ≥ 2 weeks; transitive pins in `tools/pve-setup.requirements.txt` |
 | tailscale in `templates/app-deploy/deploy.yml` | 1.98.10 | same pin and checksum as the edge; update both together |
 | 1password/load-secrets-action (`templates/app-deploy`) | v5.0.1, commit `70062d7a876d3eb6334754fa26efd2fbd90c32f2` | released 2026-08-18; v5 is newer than the v4 in 1Password's docs examples. Its Workload Identity mode is public preview and needs a GitHub secret too, so service accounts are used. |

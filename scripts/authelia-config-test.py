@@ -485,7 +485,7 @@ def flat(tasks):
 
 FLAT = list(flat(TASKS))
 ORDER = [t.get("name") for t in FLAT]
-YAML_TASK, IMAGES_TASK = "PyYAML for the SSO sync (Ubuntu archive)", "Images of the existing SSO containers"
+YAML_TASK, IMAGES_TASK = "PyYAML for the SSO sync (pinned)", "Images of the existing SSO containers"
 DIGEST_BLOCK = "Back up, then stop Authelia, before an Authelia or lldap digest change"
 BACKUP_TASK, STOP_TASK = "Back up before the digest change", "Stop Authelia before the digest change"
 LLDAP_UP_TASK = "Start lldap first"
@@ -510,11 +510,13 @@ def when_holds(task, **facts):
 class DeployOrder(unittest.TestCase):
     def test_python3_yaml_is_installed_before_the_sync(self):
         apt = find_task(TASKS, YAML_TASK)["ansible.builtin.apt"]
-        self.assertEqual(apt, {"name": "python3-yaml", "state": "present"})  # the Ubuntu archive, as age (N4)
+        self.assertEqual(apt, {"name": "python3-yaml={{ python3_yaml_package_version }}", "allow_downgrade": True})
+        self.assertEqual(find_task(TASKS, "Hold PyYAML")["ansible.builtin.dpkg_selections"], {"name": "python3-yaml", "selection": "hold"})
+        self.assertIn('"python3-yaml";', (ROOT / "roles/base/tasks/main.yml").read_text())  # EDGE-09 blacklist
         self.assertTrue(before(YAML_TASK, SYNC["ensure"][0]))
         rows = [r for r in (ROOT / "docs/versions.md").read_text().splitlines() if r.startswith("| python3-yaml (on edge)")]
         self.assertEqual(len(rows), 1)
-        self.assertIn("Ubuntu archive", rows[0])
+        self.assertIn(V["python3_yaml_package_version"], rows[0])
 
     def test_a_digest_change_backs_up_then_stops_authelia_before_the_sync(self):
         images = find_task(TASKS, IMAGES_TASK)
