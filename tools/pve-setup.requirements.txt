@@ -1,6 +1,6 @@
 # Pins for tools/pve-setup.py. typer 0.28.0 was released 2026-11-06; python >= 3.10 (PVE 8 ships 3.11, PVE 9 ships 3.13).
 annotated-doc==0.0.5
-markdown-it-py==4.2.0
+markdown-it-py==4.3.0
 mdurl==0.1.2
 Pygments==2.21.0
 rich==15.0.0
